@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Interview Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 AI Interview Assistant</h1>
+            <p>Practice your technical interview skills with AI-powered questions</p>
+        </header>
+
+        <main>
+            <!-- Step 1: Get Context & Topic -->
+            <section class="form-section">
+                <h2>Step 1: Interview Setup</h2>
+                <form id="setupForm" class="form">
+                    <div class="form-group">
+                        <label for="context">
+                            <strong>Your Context / Resume Snippet</strong>
+                            <span class="hint">Share your background, experience, or relevant info</span>
+                        </label>
+                        <textarea 
+                            id="context" 
+                            name="context" 
+                            rows="5"
+                            placeholder="E.g., I have 5 years of backend development experience using Python, FastAPI, and PostgreSQL. Recently worked on microservices architecture..."
+                            required></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="topic">
+                            <strong>Interview Topic</strong>
+                            <span class="hint">What subject should the interviewer focus on?</span>
+                        </label>
+                        <input 
+                            type="text" 
+                            id="topic" 
+                            name="topic"
+                            placeholder="E.g., System Design, API Development, Database Optimization"
+                            required>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">Generate Question</button>
+                </form>
+            </section>
+
+            <!-- Step 2: Display Generated Question -->
+            <section class="question-section" id="questionSection" style="display: none;">
+                <h2>Step 2: Interview Question</h2>
+                <div class="question-box">
+                    <p id="generatedQuestion" class="question-text"></p>
+                    <button class="btn btn-secondary" onclick="generateNewQuestion()">Ask Different Question</button>
+                </div>
+            </section>
+
+            <!-- Step 3: Write Response / Custom Prompt -->
+            <section class="prompt-section" id="promptSection" style="display: none;">
+                <h2>Step 3: Your Response</h2>
+                
+                <div class="tabs">
+                    <button class="tab-btn active" onclick="switchTab('answer')">My Answer</button>
+                    <button class="tab-btn" onclick="switchTab('custom')">Custom Prompt</button>
+                </div>
+
+                <div id="answerTab" class="tab-content active">
+                    <form id="answerForm" class="form">
+                        <div class="form-group">
+                            <label for="answer">
+                                <strong>Write Your Answer</strong>
+                                <span class="hint">Provide your detailed response to the question</span>
+                            </label>
+                            <textarea 
+                                id="answer" 
+                                name="answer" 
+                                rows="8"
+                                placeholder="Type your detailed answer here..."
+                                required></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Submit Answer</button>
+                    </form>
+                </div>
+
+                <div id="customTab" class="tab-content">
+                    <form id="customPromptForm" class="form">
+                        <div class="form-group">
+                            <label for="customPrompt">
+                                <strong>Write Custom Prompt for Model</strong>
+                                <span class="hint">Ask the model anything related to your interview prep</span>
+                            </label>
+                            <textarea 
+                                id="customPrompt" 
+                                name="customPrompt" 
+                                rows="8"
+                                placeholder="E.g., How would I design a cache-invalidation strategy for a distributed system?"
+                                required></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Ask Model</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Loading Indicator -->
+            <div id="loadingIndicator" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <p>Generating response...</p>
+            </div>
+
+            <!-- Response Display -->
+            <section class="response-section" id="responseSection" style="display: none;">
+                <h2>Model Response</h2>
+                <div class="response-box">
+                    <p id="modelResponse"></p>
+                </div>
+                <button class="btn btn-secondary" onclick="reset()">Start New Interview</button>
+            </section>
+
+            <!-- Error Display -->
+            <div id="errorMessage" class="error-message" style="display: none;"></div>
+        </main>
+
+        <footer>
+            <p>💡 Practice makes perfect! Keep practicing your technical interviews.</p>
+        </footer>
+    </div>
+
+    <script>
+        // Switch between tabs
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById(tab + 'Tab').classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // Show error message
+        function showError(message) {
+            const errorEl = document.getElementById('errorMessage');
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+            setTimeout(() => {
+                errorEl.style.display = 'none';
+            }, 5000);
+        }
+
+        // Setup form submission
+        document.getElementById('setupForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const context = document.getElementById('context').value;
+            const topic = document.getElementById('topic').value;
+
+            if (!context.trim() || !topic.trim()) {
+                showError('Please fill in all fields');
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const response = await fetch('/ask-question', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ context, topic })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                displayQuestion(data.question);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Failed to generate question. Please try again.');
+            } finally {
+                hideLoading();
+            }
+        });
+
+        // Answer form submission
+        document.getElementById('answerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const answer = document.getElementById('answer').value;
+            if (!answer.trim()) {
+                showError('Please write your answer');
+                return;
+            }
+
+            showLoading();
+            try {
+                // Send answer to backend for evaluation/feedback
+                const response = await fetch('/evaluate-answer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ 
+                        answer: answer,
+                        question: document.getElementById('generatedQuestion').textContent
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                displayResponse(data.feedback);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Failed to evaluate answer. Please try again.');
+            } finally {
+                hideLoading();
+            }
+        });
+
+        // Custom prompt form submission
+        document.getElementById('customPromptForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const prompt = document.getElementById('customPrompt').value;
+            if (!prompt.trim()) {
+                showError('Please write your prompt');
+                return;
+            }
+
+            showLoading();
+            try {
+                const response = await fetch('/ask-custom-prompt', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ prompt })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                displayResponse(data.response);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                showError('Failed to process prompt. Please try again.');
+            } finally {
+                hideLoading();
+            }
+        });
+
+        // Display question
+        function displayQuestion(question) {
+            document.getElementById('generatedQuestion').textContent = question;
+            document.getElementById('questionSection').style.display = 'block';
+            document.getElementById('promptSection').style.display = 'block';
+            window.scrollTo(0, document.getElementById('questionSection').offsetTop - 20);
+        }
+
+        // Generate new question
+        function generateNewQuestion() {
+            showLoading();
+            const context = document.getElementById('context').value;
+            const topic = document.getElementById('topic').value;
+
+            fetch('/ask-question', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ context, topic })
+            })
+            .then(res => res.json())
+            .then(data => {
+                displayQuestion(data.question);
+            })
+            .catch(error => {
+                showError('Failed to generate new question');
+                console.error(error);
+            })
+            .finally(hideLoading);
+        }
+
+        // Display response
+        function displayResponse(response) {
+            document.getElementById('modelResponse').textContent = response;
+            document.getElementById('responseSection').style.display = 'block';
+            window.scrollTo(0, document.getElementById('responseSection').offsetTop - 20);
+        }
+
+        // Loading state
+        function showLoading() {
+            document.getElementById('loadingIndicator').style.display = 'flex';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingIndicator').style.display = 'none';
+        }
+
+        // Reset everything
+        function reset() {
+            document.getElementById('setupForm').reset();
+            document.getElementById('answerForm').reset();
+            document.getElementById('customPromptForm').reset();
+            document.getElementById('questionSection').style.display = 'none';
+            document.getElementById('promptSection').style.display = 'none';
+            document.getElementById('responseSection').style.display = 'none';
+            document.getElementById('errorMessage').style.display = 'none';
+            window.scrollTo(0, 0);
+        }
+    </script>
+</body>
+</html>
