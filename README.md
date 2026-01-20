@@ -1,2 +1,2 @@
-# AI_Interview_Fastapi
-This is FastAPI app used for learning purpose. 
+# AI_Interview_Backenc
+A project for AI based interview process.
