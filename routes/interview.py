@@ -11,8 +11,7 @@ from fastapi.templating import Jinja2Templates
 from config.settings import local_llm
 from prompts.interview import interview_prompt
 from prompts.evaluation import evaluation_prompt
-from models.requests import AnswerRequest
-from pydantic import BaseModel
+from models.requests import AnswerRequest, EvaluateRequest
 
 # Initialize templates
 templates = Jinja2Templates(directory="templates")
@@ -28,10 +27,6 @@ evaluation_chain = evaluation_prompt | local_llm
 QUESTIONS_FILE = "config/questions.json"
 RESULTS_FILE = "results.json"
 RESUME_TOPICS = ["Data Structures & Algorithms", "System Design", "Database Management", "API Design", "Security", "Scalability", "DevOps"]
-
-class EvaluateRequest(BaseModel):
-    question: str
-    answer: str
 
 def load_general_questions():
     try:
