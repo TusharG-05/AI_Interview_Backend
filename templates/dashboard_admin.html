@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+        .card { background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 2rem; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid #eee; }
+        input { padding: 0.5rem; border: 1px solid #ddd; border-radius: 4px; margin-right: 1rem; }
+        .btn { padding: 0.5rem 1rem; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Admin Dashboard</h1>
+            <button onclick="logout()" class="btn" style="background: #ef4444;">Logout</button>
+        </div>
+
+        <div class="card">
+            <h2>Create Interview Room</h2>
+            <div style="display: flex; margin-top: 1rem;">
+                <input type="text" id="roomPassword" placeholder="Set Room Password">
+                <button onclick="createRoom()" class="btn">Create Room</button>
+            </div>
+            <div id="newRoomInfo" style="margin-top: 1rem; display: none; background: #ecfdf5; padding: 1rem; border-radius: 4px;">
+                <strong>Room Created!</strong> Code: <span id="roomCodeDisplay" style="font-family: monospace; font-size: 1.2rem;"></span>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Active Rooms</h2>
+            <div id="roomsList">Loading...</div>
+        </div>
+
+        <div class="card">
+            <h2>Interview History</h2>
+            <table id="historyTable">
+                <thead>
+                    <tr>
+                        <th>Candidate</th>
+                        <th>Room</th>
+                        <th>Date</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Populated by JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Auth Check
+        const token = localStorage.getItem('token');
+        if (!token) window.location.href = '/login';
+
+        async function fetchWithAuth(url, options = {}) {
+            options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
+            const res = await fetch(url, options);
+            if (res.status === 401) { logout(); return; }
+            return res;
+        }
+
+        async function createRoom() {
+            const password = document.getElementById('roomPassword').value;
+            if(!password) return alert("Enter a password");
+
+            const res = await fetchWithAuth('/admin/rooms', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password })
+            });
+            const data = await res.json();
+            
+            document.getElementById('roomCodeDisplay').textContent = data.room_code;
+            document.getElementById('newRoomInfo').style.display = 'block';
+            loadRooms();
+        }
+
+        async function loadRooms() {
+            const res = await fetchWithAuth('/admin/rooms');
+            const rooms = await res.json();
+            const container = document.getElementById('roomsList');
+            if (rooms.length === 0) {
+                container.innerHTML = "<p>No rooms created yet.</p>";
+                return;
+            }
+            container.innerHTML = rooms.map(r => `
+                <div style="padding: 0.5rem; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;">
+                    <span>Code: <strong>${r.room_code}</strong></span>
+                    <span>Active: ${r.is_active}</span>
+                </div>
+            `).join('');
+        }
+
+        async function loadHistory() {
+            const res = await fetchWithAuth('/admin/history');
+            const data = await res.json();
+            const tbody = document.querySelector('#historyTable tbody');
+            tbody.innerHTML = data.map(i => `
+                <tr>
+                    <td>${i.candidate_name}</td>
+                    <td>${i.room_code}</td>
+                    <td>${new Date(i.start_time).toLocaleString()}</td>
+                    <td>${i.total_score || 'Pending'}</td>
+                </tr>
+            `).join('');
+        }
+
+        function logout() {
+            localStorage.clear();
+            window.location.href = '/login';
+        }
+
+        loadRooms();
+        loadHistory();
+    </script>
+</body>
+</html>

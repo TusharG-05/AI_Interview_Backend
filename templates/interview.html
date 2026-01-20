@@ -38,8 +38,11 @@
 
             <!-- Question & Answer Section -->
             <section class="question-section" id="interviewSection" style="display: none;">
-                <div class="progress-indicator">
-                    Question <span id="currentQuestionNum">1</span> / 4
+                <div class="header-row" style="display: flex; justify-content: space-between; align-items: center;">
+                    <div class="progress-indicator">
+                        Question <span id="currentQuestionNum">1</span> / 4
+                    </div>
+                    <div id="timerDisplay" style="font-weight: bold; color: #dc2626;">Time: 05:00</div>
                 </div>
                 
                 <h2><span id="questionTypeTitle">General Question</span></h2>
@@ -68,7 +71,9 @@
              <section class="response-section" id="completionSection" style="display: none;">
                 <h2>Interview Complete!</h2>
                 <p>Thank you for completing the interview. Your results have been recorded.</p>
-                <button class="btn btn-primary" onclick="location.reload()">Start New Interview</button>
+                <div style="margin-top: 1rem;">
+                    <a href="/candidate/dashboard" class="btn btn-primary" style="text-decoration: none;">Return to Dashboard</a>
+                </div>
             </section>
 
             <div id="loadingIndicator" class="loading" style="display: none;">
@@ -83,14 +88,28 @@
     <script>
         // State Management
         const state = {
-            step: 0, // 0-1: General, 2-3: Resume
+            step: 0, 
             generalQuestions: [],
             resumeText: "",
             userContext: "",
-            currentQuestion: ""
+            currentQuestion: "",
+            sessionId: null,
+            timerInterval: null
         };
 
-        // UI Helpers
+        // Auth Check
+        const token = localStorage.getItem('token');
+        if (!token) window.location.href = '/login';
+
+        // Get Session ID
+        const urlParams = new URLSearchParams(window.location.search);
+        state.sessionId = urlParams.get('session_id');
+        if (!state.sessionId) {
+            alert("No session ID found. Returning to dashboard.");
+            window.location.href = '/candidate/dashboard';
+        }
+
+        // Helpers
         function showLoading() { document.getElementById('loadingIndicator').style.display = 'flex'; }
         function hideLoading() { document.getElementById('loadingIndicator').style.display = 'none'; }
         function showSection(id) {
@@ -104,26 +123,55 @@
             setTimeout(() => el.style.display = 'none', 5000);
         }
 
-        // 1. Start Interview - Upload Resume & Fetch General Questions
+        async function fetchWithAuth(url, options = {}) {
+            options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
+            return fetch(url, options);
+        }
+
+        // Timer Logic
+        function startTimer(durationSeconds) {
+            clearInterval(state.timerInterval);
+            let timer = durationSeconds;
+            const display = document.getElementById('timerDisplay');
+            
+            function updateDisplay() {
+                const minutes = parseInt(timer / 60, 10);
+                const seconds = parseInt(timer % 60, 10);
+                display.textContent = "Time: " + (minutes < 10 ? "0" + minutes : minutes) + ":" + (seconds < 10 ? "0" + seconds : seconds);
+            }
+            
+            updateDisplay();
+            state.timerInterval = setInterval(() => {
+                timer--;
+                updateDisplay();
+                if (timer < 0) {
+                    clearInterval(state.timerInterval);
+                    alert("Time is up! Submitting current answer.");
+                    document.getElementById('submitAnswerBtn').click();
+                }
+            }, 1000);
+        }
+
+        // 1. Start Interview
         document.getElementById('setupForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             showLoading();
 
             try {
-                // Upload Resume & Context first
+                // Upload Resume & Context
                 const formData = new FormData();
                 const fileInput = document.getElementById('resume');
                 state.userContext = document.getElementById('context').value || "";
 
                 if (fileInput.files[0]) {
                     formData.append('resume', fileInput.files[0]);
-                    const resumeRes = await fetch('/process-resume', { method: 'POST', body: formData });
+                    const resumeRes = await fetchWithAuth('/process-resume', { method: 'POST', body: formData });
                     const resumeData = await resumeRes.json();
                     state.resumeText = resumeData.text || "";
                 }
 
-                // Get General Questions
-                const qRes = await fetch('/general-questions');
+                // Get General Questions (now from DB)
+                const qRes = await fetchWithAuth('/general-questions');
                 const qData = await qRes.json();
                 state.generalQuestions = qData.questions;
 
@@ -144,23 +192,26 @@
             showSection('interviewSection');
             document.getElementById('answer').value = "";
             document.getElementById('currentQuestionNum').textContent = state.step + 1;
+            
+            // Hardcoded time limit: 5 minutes per question
+            startTimer(300);
 
             if (state.step < 2) {
                 // General Questions
                 document.getElementById('questionTypeTitle').textContent = "General Coding Question";
-                state.currentQuestion = state.generalQuestions[state.step].question;
+                // Depending on DB structure, property might be 'content' not 'question'
+                state.currentQuestion = state.generalQuestions[state.step].content || state.generalQuestions[state.step].question;
                 document.getElementById('currentQuestionText').textContent = state.currentQuestion;
             } else if (state.step < 4) {
                 // Resume Questions
                 document.getElementById('questionTypeTitle').textContent = "Resume-Based Question";
                 showLoading();
                 try {
-                    // Generate dynamic question
                     const formData = new FormData();
                     formData.append('context', state.userContext);
                     formData.append('resume_text', state.resumeText);
                     
-                    const res = await fetch('/generate-resume-question', {
+                    const res = await fetchWithAuth('/generate-resume-question', {
                         method: 'POST',
                         body: formData
                     });
@@ -173,19 +224,18 @@
                     hideLoading();
                 }
             } else {
-                // Done
                 showSection('completionSection');
             }
         }
 
-        // 3. Submit Answer & Evaluate
+        // 3. Submit Answer
         document.getElementById('submitAnswerBtn').addEventListener('click', async () => {
-            const answer = document.getElementById('answer').value;
-            if (!answer.trim()) { showError("Please enter an answer."); return; }
-
+            clearInterval(state.timerInterval);
+            const answer = document.getElementById('answer').value || "(No Answer)";
+            
             showLoading();
             try {
-                const res = await fetch('/evaluate-answer', {
+                const res = await fetchWithAuth(`/evaluate-answer?session_id=${state.sessionId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
