@@ -1,5 +1,3 @@
-"""Answer evaluation and feedback prompts."""
-
 from langchain_core.prompts import ChatPromptTemplate
 
 # Answer Evaluation Prompt
