@@ -17,7 +17,7 @@ def create_database():
         password = url.password
         host = url.hostname
         port = url.port
-        dbname = url.path[1:] # remove leading slash
+        dbname = url.path[1:] 
     except Exception as e:
         print(f"Error parsing DATABASE_URL: {e}")
         return
