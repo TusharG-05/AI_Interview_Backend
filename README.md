@@ -1,12 +1,31 @@
-# Face & Gaze Recognition Web App
+# AI-Driven Interview & Security Monitor
 
-A robust, FastAPI-based application for real-time face authentication and gaze tracking.
+A professional, real-time security monitoring and interview system powered by FastAPI and modern AI models. This system features multi-face detection, gaze tracking, automated audio interviews with speaker verification, and document-based question management.
 
-## 🚀 Quick Start
+## 🚀 Key Features
+
+### 🔐 Security & Monitoring
+- **Real-time Face Recognition**: High-FPS multi-face detection using MediaPipe and ArcFace (DeepFace).
+- **Gaze Tracking**: Detects suspicious behavior (looking left, right, up, down, or blinking/sleeping).
+- **Speaker Verification**: Uses voice fingerprinting (ECAPA-TDNN) to ensure only the candidate answers, preventing accomplices or "cheatingmates".
+- **Noise Robustness**: Built-in noise reduction for robust performance in office environments.
+
+### 🎙️ Audio Interview System
+- **Professional Female Voice**: Automated question delivery using `edge-tts`.
+- **Intelligent Flow Control**: Microphone activates 2 seconds after the computer ends speaking.
+- **Zero-Lag Architecture**: All heavy transcription (Faster-Whisper) and semantic evaluation run in a post-interview batch to preserve video performance.
+- **Semantic Matching**: Concept-based answer checking using `Sentence-Transformers`.
+
+### 🛠️ Admin Features
+- **Hidden Admin Panel**: Access at `/admin-panel` to manage questions and view results.
+- **Bulk Question Import**: Extract question-answer pairs automatically from **PDF**, **Word (.docx)**, or **Text (.txt)** files.
+
+## 🛠️ Quick Start
 
 ### Prerequisites
 - Python 3.9+
-- Webcam
+- Webcam & Microphone
+- Dependencies: `pip install -r requirements.txt`
 
 ### Installation
 1.  **Create a Virtual Environment**:
@@ -14,10 +33,8 @@ A robust, FastAPI-based application for real-time face authentication and gaze t
     python -m venv .venv
     # Windows
     .venv\Scripts\activate
-    # Linux/Mac
-    source .venv/bin/activate
     ```
-2.  **Install Dependencies**:
+2.  **Install AI Dependencies**:
     ```bash
     pip install -r requirements.txt
     ```
@@ -26,7 +43,8 @@ A robust, FastAPI-based application for real-time face authentication and gaze t
 ```bash
 python main.py
 ```
-The server will start at `http://localhost:8000`.
+- **Interview Site**: `http://localhost:8000`
+- **Admin Panel**: `http://localhost:8000/admin-panel`
 
 ---
 
@@ -34,60 +52,21 @@ The server will start at `http://localhost:8000`.
 
 ```
 ├── app/
-│   ├── assets/              # Models & Images
-│   │   ├── face_landmarker.task
-│   │   └── known_person.jpg  <-- The authorized face
-│   ├── routers/             # API Endpoints
-│   │   ├── video.py         # /video_feed stream
-│   │   ├── settings.py      # /upload-identity
-│   │   └── site.py          # / (Index HTML)
-│   ├── services/            # Business Logic
-│   │   ├── camera.py        # Singleton Camera Manager
-│   │   ├── face.py          # Face Detection Worker
-│   │   └── gaze.py          # Gaze Detection Worker
-│   └── templates/           # Frontend
-│       └── index.html
-│   └── server.py            # FastAPI App Definition
+│   ├── core/                # Database & Models
+│   ├── routers/             # API Endpoints (Admin, Interview, Video, Site)
+│   ├── services/            # Logic (Audio, NLP, Camera, Face, Gaze)
+│   ├── templates/           # UI (Index, Admin)
+│   └── assets/              # AI Models & Audio Cache
 ├── main.py                  # Entry Point
-└── requirements.txt
+└── requirements.txt         # Frozen Dependencies
 ```
 
 ---
 
-## 👨‍💻 For Frontend Developers
-
-### 1. Video Stream (`GET /video_feed`)
-The video feed is served as an **MJPEG Stream**.
-- **URL**: `http://localhost:8000/video_feed`
-- **Format**: `multipart/x-mixed-replace`
-- **Usage**:
-  ```html
-  <img src="/video_feed" alt="Live Stream" />
-  ```
-- **Note**: The red/green bounding boxes and status text are currently drawn **server-side** onto the image frames.
-
-### 2. Upload Identity (`POST /upload-identity`)
-Endpoint to update the "Authorized Person" without restarting the server.
-- **URL**: `http://localhost:8000/upload-identity`
-- **Method**: `POST`
-- **Body**: `FormData` with a key `file` containing the image.
-- **Response**: JSON `{ "message": "Identity updated successfully", ... }`
-
-**Example Fetch:**
-```javascript
-const formData = new FormData();
-formData.append('file', fileInput.files[0]);
-
-await fetch('/upload-identity', {
-    method: 'POST',
-    body: formData
-});
-```
-
----
-
-## 🔧 Configuration
-- **Camera Source**: Defaults to Webcam (`0`).
-- **Models**:
-    - **Face**: Uses `face_recognition` (dlib).
-    - **Gaze**: Uses MediaPipe `face_landmarker.task` located in `app/assets/`.
+## 🔧 AI Models Used
+- **Face Detection**: MediaPipe FaceLandmarker
+- **Face recognition**: ArcFace (via DeepFace)
+- **STT (Transcription)**: Faster-Whisper
+- **TTS (Speech)**: Edge-TTS
+- **Semantic Similarity**: all-MiniLM-L6-v2 (Sentence-Transformers)
+- **Speaker Verification**: ECAPA-TDNN (SpeechBrain)

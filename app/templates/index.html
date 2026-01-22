@@ -99,6 +99,36 @@
         <p>System Active • Real-time Monitoring • <span id="clockDisplay"></span></p>
     </div>
 
+    <!-- Interview Overlay/Panel -->
+    <div id="interviewPanel"
+        style="background: #2a2a2a; padding: 20px; border-radius: 12px; margin-top: 20px; width: 80%; text-align: center;">
+        <div id="initialView">
+            <h2>Ready to Start?</h2>
+            <input type="text" id="candidateName" placeholder="Enter Your Name"
+                style="padding: 10px; border-radius: 4px; border: none; margin-bottom: 10px; width: 60%;">
+            <br>
+            <button onclick="startInterview()">Start Interview</button>
+        </div>
+
+        <div id="questionView" style="display:none;">
+            <div id="questionText"
+                style="font-size: 1.2rem; margin-bottom: 20px; min-height: 3em; font-weight: bold; color: #00ffcc;">
+                Waiting for question...
+            </div>
+            <div class="interview-controls">
+                <button id="submitAudioBtn" onclick="stopRecordingAndSubmit()" disabled
+                    style="background-color: #555; cursor: not-allowed;">Submit Audio</button>
+                <div id="recordingStatus" style="margin-top: 10px; font-size: 0.9em; color: #aaa;"></div>
+            </div>
+            <audio id="ttsPlayer" style="display:none;"></audio>
+        </div>
+
+        <div id="finishedView" style="display:none;">
+            <h2 style="color: #00ffcc;">Interview Completed</h2>
+            <p>Thank you! Your answers are being processed.</p>
+        </div>
+    </div>
+
     <script>
         // Performance Monitoring (Testing Only)
         let frameCount = 0;
@@ -122,10 +152,148 @@
         }
         measureFPS();
 
-        setInterval(() => {
-            const clock = document.getElementById('clockDisplay');
-            if (clock) clock.innerText = new Date().toLocaleTimeString();
-        }, 1000);
+        // --- Interview Logic ---
+        let currentSessionId = null;
+        let currentQuestionId = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+
+        async function startInterview() {
+            const name = document.getElementById('candidateName').value || "Candidate";
+            const status = document.getElementById('recordingStatus');
+
+            // Enrollment Phase: Record 3 seconds of voice
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const enrollmentRecorder = new MediaRecorder(stream);
+                const chunks = [];
+
+                enrollmentRecorder.ondataavailable = e => chunks.push(e.data);
+                enrollmentRecorder.onstop = async () => {
+                    const blob = new Blob(chunks, { type: 'audio/wav' });
+                    const formData = new FormData();
+                    formData.append('candidate_name', name);
+                    formData.append('enrollment_audio', blob);
+
+                    const res = await fetch('/interview/start', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    currentSessionId = data.session_id;
+
+                    document.getElementById('initialView').style.display = 'none';
+                    document.getElementById('questionView').style.display = 'block';
+                    fetchNextQuestion();
+                };
+
+                enrollmentRecorder.start();
+                document.getElementById('initialView').innerHTML = "<h2>Enrolling Voice Fingerprint...</h2><p>Please say 'I am ready for the interview'</p>";
+
+                setTimeout(() => {
+                    enrollmentRecorder.stop();
+                    stream.getTracks().forEach(track => track.stop());
+                }, 3000);
+
+            } catch (err) {
+                alert("Microphone required for interview security.");
+            }
+        }
+
+        async function fetchNextQuestion() {
+            const status = document.getElementById('recordingStatus');
+            const submitBtn = document.getElementById('submitAudioBtn');
+            const questionText = document.getElementById('questionText');
+
+            status.innerText = "Loading question...";
+            submitBtn.disabled = true;
+            submitBtn.style.backgroundColor = "#555";
+            submitBtn.style.cursor = "not-allowed";
+
+            const res = await fetch(`/interview/next-question/${currentSessionId}`);
+            const data = await res.json();
+
+            if (data.status === 'finished') {
+                finishInterview();
+                return;
+            }
+
+            currentQuestionId = data.question_id;
+            questionText.innerText = data.text;
+
+            // Play TTS
+            const player = document.getElementById('ttsPlayer');
+            player.src = data.audio_url;
+            player.play();
+
+            player.onended = () => {
+                status.innerText = "Computer ended speaking. Waiting 2 seconds...";
+                setTimeout(() => {
+                    startRecording();
+                }, 2000);
+            };
+        }
+
+        async function startRecording() {
+            const status = document.getElementById('recordingStatus');
+            const submitBtn = document.getElementById('submitAudioBtn');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' }); // browser might use webm but server can handle
+                    await submitAudio(audioBlob);
+                };
+
+                mediaRecorder.start();
+                status.innerText = "Listening... Speak your answer.";
+                submitBtn.disabled = false;
+                submitBtn.style.backgroundColor = "#00ffcc";
+                submitBtn.style.color = "#000";
+                submitBtn.style.cursor = "pointer";
+            } catch (err) {
+                console.error("Microphone error:", err);
+                status.innerText = "Error accessing microphone.";
+            }
+        }
+
+        function stopRecordingAndSubmit() {
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                mediaRecorder.stop();
+                document.getElementById('recordingStatus').innerText = "Submitting...";
+                document.getElementById('submitAudioBtn').disabled = true;
+            }
+        }
+
+        async function submitAudio(blob) {
+            const formData = new FormData();
+            formData.append('session_id', currentSessionId);
+            formData.append('question_id', currentQuestionId);
+            formData.append('audio', blob, 'answer.wav');
+
+            const res = await fetch('/interview/submit-answer', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (res.ok) {
+                fetchNextQuestion();
+            } else {
+                alert("Error submitting audio");
+            }
+        }
+
+        async function finishInterview() {
+            await fetch(`/interview/finish/${currentSessionId}`, { method: 'POST' });
+            document.getElementById('questionView').style.display = 'none';
+            document.getElementById('finishedView').style.display = 'block';
+        }
+
+        // --- Original Scripts (Modified) ---
         async function uploadImage() {
             const fileInput = document.getElementById('fileInput');
             const status = document.getElementById('uploadStatus');
