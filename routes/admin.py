@@ -17,20 +17,8 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 async def admin_dashboard(request: Request):
     return templates.TemplateResponse("dashboard_admin.html", {"request": request})
 
-class RoomCreate(BaseModel):
-    password: str
-
-class RoomRead(BaseModel):
-    id: int
-    room_code: str
-    is_active: bool
-
-class SessionRead(BaseModel):
-    id: int
-    candidate_name: str
-    room_code: str
-    start_time: str
-    total_score: float = None
+from schemas.requests import RoomCreate, RoomUpdate
+from schemas.responses import RoomRead, SessionRead
 
 @router.post("/rooms", response_model=RoomRead)
 async def create_room(
@@ -46,12 +34,66 @@ async def create_room(
     new_room = InterviewRoom(
         room_code=room_code,
         password=room_data.password,
-        admin_id=current_user.id
+        admin_id=current_user.id,
+        max_sessions=room_data.max_sessions
     )
     session.add(new_room)
     session.commit()
     session.refresh(new_room)
-    return new_room
+    return RoomRead(
+        id=new_room.id,
+        room_code=new_room.room_code,
+        is_active=new_room.is_active,
+        max_sessions=new_room.max_sessions,
+        active_sessions_count=0
+    )
+
+@router.put("/rooms/{room_id}", response_model=RoomRead)
+async def update_room(
+    room_id: int,
+    room_data: RoomUpdate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    room = session.get(InterviewRoom, room_id)
+    if not room or room.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Room not found")
+    
+    if room_data.password is not None:
+        room.password = room_data.password
+    if room_data.max_sessions is not None:
+        room.max_sessions = room_data.max_sessions
+    if room_data.is_active is not None:
+        room.is_active = room_data.is_active
+        
+    session.add(room)
+    session.commit()
+    session.refresh(room)
+    
+    # helper for active count
+    active_count = len(room.sessions)
+    
+    return RoomRead(
+        id=room.id,
+        room_code=room.room_code,
+        is_active=room.is_active,
+        max_sessions=room.max_sessions,
+        active_sessions_count=active_count
+    )
+
+@router.delete("/rooms/{room_id}")
+async def delete_room(
+    room_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    room = session.get(InterviewRoom, room_id)
+    if not room or room.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Room not found")
+        
+    session.delete(room)
+    session.commit()
+    return {"message": "Room deleted successfully"}
 
 @router.get("/rooms", response_model=List[RoomRead])
 async def list_rooms(
@@ -61,7 +103,17 @@ async def list_rooms(
     # List rooms created by this admin
     statement = select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)
     rooms = session.exec(statement).all()
-    return rooms
+    
+    result = []
+    for r in rooms:
+        result.append(RoomRead(
+            id=r.id,
+            room_code=r.room_code,
+            is_active=r.is_active,
+            max_sessions=r.max_sessions,
+            active_sessions_count=len(r.sessions)
+        ))
+    return result
 
 @router.get("/history", response_model=List[SessionRead])
 async def get_all_interview_history(

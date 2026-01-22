@@ -17,20 +17,8 @@ router = APIRouter(prefix="/candidate", tags=["Candidate"])
 async def candidate_dashboard(request: Request):
     return templates.TemplateResponse("dashboard_candidate.html", {"request": request})
 
-class JoinRoomRequest(BaseModel):
-    room_code: str
-    password: str
-
-class JoinRoomResponse(BaseModel):
-    session_id: int
-    room_code: str
-    message: str
-
-class HistoryItem(BaseModel):
-    session_id: int
-    room_code: str
-    date: str
-    score: float = None
+from schemas.requests import JoinRoomRequest, JoinRoomResponse
+from schemas.responses import HistoryItem
 
 @router.post("/join", response_model=JoinRoomResponse)
 async def join_room(
@@ -54,6 +42,11 @@ async def join_room(
     # 2. Check if session already exists for this room/user? 
     # For now, allow multiple sessions or maybe just one? Let's create a new session.
     
+    # Check max sessions limit
+    if room.max_sessions is not None:
+        if len(room.sessions) >= room.max_sessions:
+             raise HTTPException(status_code=400, detail="Room has reached maximum session limit")
+
     new_session = InterviewSession(
         room_id=room.id,
         candidate_id=current_user.id,

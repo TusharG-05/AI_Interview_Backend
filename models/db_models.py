@@ -24,6 +24,7 @@ class InterviewRoom(SQLModel, table=True):
     admin_id: int = Field(foreign_key="user.id")
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    max_sessions: Optional[int] = Field(default=None)
     
     admin: User = Relationship(back_populates="rooms_created")
     sessions: List["InterviewSession"] = Relationship(back_populates="room")
@@ -59,3 +60,10 @@ class InterviewResponse(SQLModel, table=True):
     
     session: InterviewSession = Relationship(back_populates="responses")
     question: Question = Relationship(back_populates="responses")
+
+# Rebuild models to resolve forward references
+User.model_rebuild()
+InterviewRoom.model_rebuild()
+InterviewSession.model_rebuild()
+Question.model_rebuild()
+InterviewResponse.model_rebuild()

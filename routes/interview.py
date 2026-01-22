@@ -17,7 +17,7 @@ from services import interview_service, resume_service
 templates = Jinja2Templates(directory="templates")
 
 # Create router
-router = APIRouter()
+router = APIRouter(prefix="/interview", tags=["Interview"])
 
 @router.get("/", response_class=HTMLResponse)
 async def get_home(request: Request):
@@ -92,3 +92,26 @@ async def ask_custom_prompt(request: dict):
     prompt = request.get("prompt", "")
     response_content = interview_service.get_custom_response(prompt)
     return {"response": response_content}
+
+@router.post("/finish")
+async def finish_interview(
+    session_id: int,
+    session_db: Session = Depends(get_session)
+):
+    """Finish the interview session"""
+    interview_session = session_db.get(InterviewSession, session_id)
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    # Calculate total score
+    responses = session_db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
+    total_score = sum([r.score for r in responses if r.score is not None])
+    
+    interview_session.end_time = datetime.utcnow()
+    interview_session.total_score = total_score
+    
+    session_db.add(interview_session)
+    session_db.commit()
+    session_db.refresh(interview_session)
+    
+    return {"message": "Interview finished", "total_score": total_score}
