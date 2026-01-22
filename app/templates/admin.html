@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interview Admin Panel</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: #1a1a1a;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #00ffcc;
+            border-bottom: 2px solid #00ffcc;
+            padding-bottom: 10px;
+        }
+
+        button {
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        button.delete {
+            background: #ff4444;
+            color: #fff;
+            padding: 5px 10px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th,
+        td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #444;
+        }
+
+        input[type="file"] {
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .status {
+            margin-top: 10px;
+            color: #00ffcc;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Interview Admin Panel</h1>
+
+        <div class="card">
+            <h2>Upload Questions Document</h2>
+            <p>Upload a .txt, .pdf, or .docx file following the "Q: Question / A: Answer" format.</p>
+            <input type="file" id="docInput" accept=".txt,.pdf,.docx">
+            <button onclick="uploadDoc()">Upload & Extract</button>
+            <div id="uploadStatus" class="status"></div>
+        </div>
+
+        <div class="card">
+            <h2>Manage Questions</h2>
+            <table id="questionTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Question</th>
+                        <th>Reference Answer</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="questionList"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        async function loadQuestions() {
+            const res = await fetch('/admin/questions');
+            const questions = await res.json();
+            const list = document.getElementById('questionList');
+            list.innerHTML = '';
+            questions.forEach(q => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${q.id}</td>
+                    <td>${q.question_text}</td>
+                    <td>${q.reference_answer.substring(0, 50)}...</td>
+                    <td><button class="delete" onclick="deleteQuestion(${q.id})">Delete</button></td>
+                `;
+                list.appendChild(tr);
+            });
+        }
+
+        async function uploadDoc() {
+            const input = document.getElementById('docInput');
+            const status = document.getElementById('uploadStatus');
+            if (input.files.length === 0) return alert("Select a file");
+
+            const formData = new FormData();
+            formData.append('file', input.files[0]);
+
+            status.innerText = "Extracting...";
+            try {
+                const res = await fetch('/admin/upload-doc', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                status.innerText = data.message;
+                loadQuestions();
+            } catch (e) {
+                status.innerText = "Error: " + e.message;
+            }
+        }
+
+        async function deleteQuestion(id) {
+            if (!confirm("Delete this question?")) return;
+            await fetch(`/admin/questions/${id}`, { method: 'DELETE' });
+            loadQuestions();
+        }
+
+        loadQuestions();
+    </script>
+</body>
+
+</html>
