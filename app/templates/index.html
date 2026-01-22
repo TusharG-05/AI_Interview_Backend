@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face & Gaze Detection System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            /* Align top instead of center */
+            height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            border-bottom: 2px solid #00ffcc;
+            padding-bottom: 5px;
+            margin-bottom: 15px;
+            margin-top: 0;
+            font-size: 1.5rem;
+            /* Smaller header */
+        }
+
+        .video-container {
+            border: 3px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+            width: 100%;
+            max-width: 100%;
+            /* Allow full width */
+            flex-grow: 1;
+            /* Take up available space */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+        }
+
+        /* Ensure video fits within the container without cropping or overflowing */
+        .video-container img {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            /* Crucial: Ensures full video is visible */
+            width: auto;
+            height: auto;
+        }
+
+        .controls {
+            margin-top: 15px;
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            background: #2a2a2a;
+            padding: 10px 20px;
+            border-radius: 50px;
+        }
+
+        button {
+            padding: 8px 16px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            background-color: #00ffcc;
+            color: #000;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Face & Gaze Security Monitor</h1>
+
+    <div class="video-container">
+        <img src="/video_feed" alt="Video Feed">
+    </div>
+
+    <div class="controls">
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+        <button onclick="document.getElementById('fileInput').click()">Select Face</button>
+        <button onclick="uploadImage()">Upload</button>
+        <button onclick="stopServer()" style="background-color: #ff4444; color: white;">Stop Server</button>
+        <span id="fpsDisplay" style="margin-left: 20px; font-weight: bold; color: #00ffcc; min-width: 80px;">FPS:
+            0</span>
+        <span id="uploadStatus" style="font-size: 0.9em; margin-left:10px; color:#aaa"></span>
+    </div>
+
+    <div class="status">
+        <p>System Active • Real-time Monitoring • <span id="clockDisplay"></span></p>
+    </div>
+
+    <!-- Interview Overlay/Panel -->
+    <div id="interviewPanel"
+        style="background: #2a2a2a; padding: 20px; border-radius: 12px; margin-top: 20px; width: 80%; text-align: center;">
+        <div id="initialView">
+            <h2>Ready to Start?</h2>
+            <input type="text" id="candidateName" placeholder="Enter Your Name"
+                style="padding: 10px; border-radius: 4px; border: none; margin-bottom: 10px; width: 60%;">
+            <br>
+            <button onclick="startInterview()">Start Interview</button>
+        </div>
+
+        <div id="questionView" style="display:none;">
+            <div id="questionText"
+                style="font-size: 1.2rem; margin-bottom: 20px; min-height: 3em; font-weight: bold; color: #00ffcc;">
+                Waiting for question...
+            </div>
+            <div class="interview-controls">
+                <button id="submitAudioBtn" onclick="stopRecordingAndSubmit()" disabled
+                    style="background-color: #555; cursor: not-allowed;">Submit Audio</button>
+                <div id="recordingStatus" style="margin-top: 10px; font-size: 0.9em; color: #aaa;"></div>
+            </div>
+            <audio id="ttsPlayer" style="display:none;"></audio>
+        </div>
+
+        <div id="finishedView" style="display:none;">
+            <h2 style="color: #00ffcc;">Interview Completed</h2>
+            <p>Thank you! Your answers are being processed.</p>
+        </div>
+    </div>
+
+    <script>
+        // Performance Monitoring (Testing Only)
+        let frameCount = 0;
+        let lastFPSUpdate = performance.now();
+        const videoFeedImg = document.querySelector('img[alt="Video Feed"]');
+
+        function measureFPS() {
+            // Only count if video stream is effectively 'active' (has actual image data)
+            if (videoFeedImg && videoFeedImg.complete && videoFeedImg.naturalWidth > 1) {
+                frameCount++;
+            }
+
+            const now = performance.now();
+            if (now - lastFPSUpdate >= 1000) {
+                const meter = document.getElementById('fpsDisplay');
+                if (meter) meter.innerText = `FPS: ${frameCount}`;
+                frameCount = 0;
+                lastFPSUpdate = now;
+            }
+            requestAnimationFrame(measureFPS);
+        }
+        measureFPS();
+
+        // --- Interview Logic ---
+        let currentSessionId = null;
+        let currentQuestionId = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+
+        async function startInterview() {
+            const name = document.getElementById('candidateName').value || "Candidate";
+            const status = document.getElementById('recordingStatus');
+
+            // Enrollment Phase: Record 3 seconds of voice
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const enrollmentRecorder = new MediaRecorder(stream);
+                const chunks = [];
+
+                enrollmentRecorder.ondataavailable = e => chunks.push(e.data);
+                enrollmentRecorder.onstop = async () => {
+                    const blob = new Blob(chunks, { type: 'audio/wav' });
+                    const formData = new FormData();
+                    formData.append('candidate_name', name);
+                    formData.append('enrollment_audio', blob);
+
+                    const res = await fetch('/interview/start', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    currentSessionId = data.session_id;
+
+                    document.getElementById('initialView').style.display = 'none';
+                    document.getElementById('questionView').style.display = 'block';
+                    fetchNextQuestion();
+                };
+
+                enrollmentRecorder.start();
+                document.getElementById('initialView').innerHTML = "<h2>Enrolling Voice Fingerprint...</h2><p>Please say 'I am ready for the interview'</p>";
+
+                setTimeout(() => {
+                    enrollmentRecorder.stop();
+                    stream.getTracks().forEach(track => track.stop());
+                }, 3000);
+
+            } catch (err) {
+                alert("Microphone required for interview security.");
+            }
+        }
+
+        async function fetchNextQuestion() {
+            const status = document.getElementById('recordingStatus');
+            const submitBtn = document.getElementById('submitAudioBtn');
+            const questionText = document.getElementById('questionText');
+
+            status.innerText = "Loading question...";
+            submitBtn.disabled = true;
+            submitBtn.style.backgroundColor = "#555";
+            submitBtn.style.cursor = "not-allowed";
+
+            const res = await fetch(`/interview/next-question/${currentSessionId}`);
+            const data = await res.json();
+
+            if (data.status === 'finished') {
+                finishInterview();
+                return;
+            }
+
+            currentQuestionId = data.question_id;
+            questionText.innerText = data.text;
+
+            // Play TTS
+            const player = document.getElementById('ttsPlayer');
+            player.src = data.audio_url;
+            player.play();
+
+            player.onended = () => {
+                status.innerText = "Computer ended speaking. Waiting 2 seconds...";
+                setTimeout(() => {
+                    startRecording();
+                }, 2000);
+            };
+        }
+
+        async function startRecording() {
+            const status = document.getElementById('recordingStatus');
+            const submitBtn = document.getElementById('submitAudioBtn');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                audioChunks = [];
+
+                mediaRecorder.ondataavailable = (event) => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/wav' }); // browser might use webm but server can handle
+                    await submitAudio(audioBlob);
+                };
+
+                mediaRecorder.start();
+                status.innerText = "Listening... Speak your answer.";
+                submitBtn.disabled = false;
+                submitBtn.style.backgroundColor = "#00ffcc";
+                submitBtn.style.color = "#000";
+                submitBtn.style.cursor = "pointer";
+            } catch (err) {
+                console.error("Microphone error:", err);
+                status.innerText = "Error accessing microphone.";
+            }
+        }
+
+        function stopRecordingAndSubmit() {
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                mediaRecorder.stop();
+                document.getElementById('recordingStatus').innerText = "Submitting...";
+                document.getElementById('submitAudioBtn').disabled = true;
+            }
+        }
+
+        async function submitAudio(blob) {
+            const formData = new FormData();
+            formData.append('session_id', currentSessionId);
+            formData.append('question_id', currentQuestionId);
+            formData.append('audio', blob, 'answer.wav');
+
+            const res = await fetch('/interview/submit-answer', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (res.ok) {
+                fetchNextQuestion();
+            } else {
+                alert("Error submitting audio");
+            }
+        }
+
+        async function finishInterview() {
+            await fetch(`/interview/finish/${currentSessionId}`, { method: 'POST' });
+            document.getElementById('questionView').style.display = 'none';
+            document.getElementById('finishedView').style.display = 'block';
+        }
+
+        // --- Original Scripts (Modified) ---
+        async function uploadImage() {
+            const fileInput = document.getElementById('fileInput');
+            const status = document.getElementById('uploadStatus');
+
+            if (fileInput.files.length === 0) {
+                status.textContent = "Please select a file first.";
+                status.style.color = "red";
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            status.textContent = "Uploading...";
+            status.style.color = "#aaa";
+
+            try {
+                const response = await fetch('/upload-identity', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    status.textContent = "Success: " + data.message;
+                    status.style.color = "#00ffcc";
+                    // Reload page to refresh any server state if needed, though video stream monitors backend
+                } else {
+                    status.textContent = "Error uploading file.";
+                    status.style.color = "red";
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                status.textContent = "Upload failed.";
+                status.style.color = "red";
+            }
+        }
+
+        async function stopServer() {
+            if (!confirm("Are you sure you want to stop the server?")) return;
+
+            try {
+                await fetch('/shutdown', { method: 'POST' });
+                alert("Server Service Stopped. You can close this tab.");
+                document.body.innerHTML = "<h1 style='color:white;text-align:center;margin-top:20%'>Server Stopped</h1>";
+            } catch (e) {
+                console.error(e);
+            }
+        }
+    </script>
+</body>
+
+</html>
