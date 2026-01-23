@@ -1,6 +1,21 @@
 temp_old.py
-venv/
+.venv/
 __pycache__/
 *.mp4
 *.log
 .DS_Store
+.idea/
+.vscode/
+
+# Generated Audio
+app/assets/audio/responses/*.wav
+app/assets/audio/enrollment/*.wav
+test_*.wav
+*.mp3
+
+# Models (too large for git usually, but assume tracked if needed, otherwise ignore)
+# *.task
+
+# Test Artifacts
+test_api.py
+test_resp.wav/

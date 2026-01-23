@@ -156,12 +156,14 @@ class FaceDetector:
         print("Starting Zero-Lag Modernized Face Service (2026)...")
         try:
             # Generate encoding for known person using DeepFace
+            print("FaceDetector: Loading DeepFace/ArcFace Model...", flush=True)
             objs = DeepFace.represent(
                 img_path=known_person_path, 
                 model_name="ArcFace", 
                 enforce_detection=True,
                 detector_backend="opencv"
             )
+            print("FaceDetector: DeepFace Model Loaded.", flush=True)
             self.known_encoding = np.array(objs[0]["embedding"]) if objs else None
         except Exception as e:
             print(f"Known Person Load Error: {e}")

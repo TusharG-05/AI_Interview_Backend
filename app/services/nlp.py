@@ -7,9 +7,16 @@ import torch
 
 class NLPService:
     def __init__(self, model_name='all-MiniLM-L6-v2'):
-        print(f"Initializing NLPService with model: {model_name}...")
-        self.model = SentenceTransformer(model_name)
-        print("NLPService initialized.")
+        print(f"Initializing NLPService (Lazy Loading)...")
+        self.model_name = model_name
+        self._model = None
+
+    @property
+    def model(self):
+        if self._model is None:
+            print(f"Loading NLP Model ({self.model_name})...")
+            self._model = SentenceTransformer(self.model_name)
+        return self._model
 
     def calculate_similarity(self, text1, text2):
         """Calculates semantic similarity between two strings."""
