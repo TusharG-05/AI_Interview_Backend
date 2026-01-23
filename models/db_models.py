@@ -5,6 +5,7 @@ from enum import Enum
 
 class UserRole(str, Enum):
     ADMIN = "admin"
+    SUPER_ADMIN = "super_admin"
     CANDIDATE = "candidate"
 
 class User(SQLModel, table=True):

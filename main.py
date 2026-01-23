@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
 from routes.interview import router as interview_router
 from routes.auth import router as auth_router
 from routes.admin import router as admin_router
@@ -31,6 +32,11 @@ def on_startup():
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Root redirect
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/login")
 
 # Include routes
 app.include_router(auth_router)

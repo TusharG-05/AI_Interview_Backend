@@ -17,8 +17,8 @@ router = APIRouter(prefix="/candidate", tags=["Candidate"])
 async def candidate_dashboard(request: Request):
     return templates.TemplateResponse("dashboard_candidate.html", {"request": request})
 
-from schemas.requests import JoinRoomRequest, JoinRoomResponse
-from schemas.responses import HistoryItem
+from schemas.requests import JoinRoomRequest
+from schemas.responses import HistoryItem, JoinRoomResponse
 
 @router.post("/join", response_model=JoinRoomResponse)
 async def join_room(
