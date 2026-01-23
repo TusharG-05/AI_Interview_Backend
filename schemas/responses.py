@@ -12,6 +12,7 @@ class HistoryItem(BaseModel):
 class RoomRead(BaseModel):
     id: int
     room_code: str
+    password: str
     is_active: bool
     max_sessions: Optional[int]
     active_sessions_count: int = 0
@@ -22,3 +23,20 @@ class SessionRead(BaseModel):
     room_code: str
     start_time: str
     total_score: float = None
+
+class UserRead(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    role: str
+
+class JoinRoomResponse(BaseModel):
+    session_id: int
+    room_code: str
+    message: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    role: str
+

@@ -168,13 +168,13 @@
 
                 if (fileInput.files[0]) {
                     formData.append('resume', fileInput.files[0]);
-                    const resumeRes = await fetchWithAuth('/process-resume', { method: 'POST', body: formData });
+                    const resumeRes = await fetchWithAuth('/interview/process-resume', { method: 'POST', body: formData });
                     const resumeData = await resumeRes.json();
                     state.resumeText = resumeData.text || "";
                 }
 
                 // Get General Questions (now from DB)
-                const qRes = await fetchWithAuth('/general-questions');
+                const qRes = await fetchWithAuth('/interview/general-questions');
                 const qData = await qRes.json();
                 state.generalQuestions = qData.questions;
 
@@ -214,7 +214,7 @@
                     formData.append('context', state.userContext);
                     formData.append('resume_text', state.resumeText);
                     
-                    const res = await fetchWithAuth('/generate-resume-question', {
+                    const res = await fetchWithAuth('/interview/generate-resume-question', {
                         method: 'POST',
                         body: formData
                     });
@@ -238,7 +238,7 @@
             
             showLoading();
             try {
-                const res = await fetchWithAuth(`/evaluate-answer?session_id=${state.sessionId}`, {
+                const res = await fetchWithAuth(`/interview/evaluate-answer?session_id=${state.sessionId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

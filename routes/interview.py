@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from config.database import get_session
 from models.db_models import Question, InterviewResponse, InterviewSession, User
-from schemas.requests import AnswerRequest, EvaluateRequest
+from schemas.requests import AnswerRequest
 from auth.dependencies import get_current_user
 from services import interview_service, resume_service
 
@@ -33,7 +33,7 @@ async def get_general_questions(session: Session = Depends(get_session)):
 
 @router.post("/evaluate-answer")
 async def evaluate_answer(
-    request: EvaluateRequest, 
+    request: AnswerRequest, 
     session_id: int, # Pass session_id from frontend query param or body
     session_db: Session = Depends(get_session)
 ):

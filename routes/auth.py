@@ -7,20 +7,13 @@ from sqlmodel import Session
 from config.database import get_session
 from models.db_models import User, UserRole
 from auth.security import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from pydantic import BaseModel
+from auth.security import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from schemas.requests import UserCreate
+from schemas.responses import Token
 
 templates = Jinja2Templates(directory="templates")
 
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-    role: str
 
-class UserCreate(BaseModel):
-    email: str
-    password: str
-    full_name: str
-    role: UserRole = UserRole.CANDIDATE
 
 router = APIRouter(tags=["Authentication"])
 
