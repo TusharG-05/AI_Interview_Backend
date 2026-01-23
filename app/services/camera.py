@@ -33,7 +33,9 @@ class CameraService:
         self.thread: Optional[threading.Thread] = None
         self.latest_frame: Optional[bytes] = None
         self.frame_id: int = 0
+        self.current_warning_text: str = ""
         self.frame_lock = threading.Lock()
+        self._detectors_ready = False
 
     def start(self, video_source=0):
         if self.running: return
@@ -43,6 +45,7 @@ class CameraService:
         def init_detectors():
             print("Background: Initializing Detectors...", flush=True)
             known_path = "app/assets/known_person.jpg"
+            gaze_path = "app/assets/face_landmarker.task"
             if os.path.exists(known_path):
                 try:
                     self.face_detector = FaceDetector(known_person_path=known_path)
@@ -50,13 +53,15 @@ class CameraService:
                 except Exception as e:
                     print(f"Background: FaceDetector failed: {e}", flush=True)
             
-            gaze_path = "app/assets/face_landmarker.task"
             if os.path.exists(gaze_path):
                 try:
                     self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
                     print("Background: GazeDetector ready.", flush=True)
                 except Exception as e:
                     print(f"Background: GazeDetector failed: {e}", flush=True)
+            
+            self._detectors_ready = True
+            print("Background: All Detectors Initialized.", flush=True)
 
         threading.Thread(target=init_detectors, daemon=True).start()
 
@@ -170,3 +175,74 @@ class CameraService:
         """Returns the latest MJPEG frame and its ID."""
         with self.frame_lock:
             return self.latest_frame, self.frame_id
+
+    def get_current_warning(self):
+        # This is a bit of a hack to get the last warning text without locking
+        # Ideally we use a proper state variable
+        # But we need to see what `last_gaze_status` is holding.
+        # It's local to _process_loop. We need to promote it to instance var.
+        return self.current_warning_text
+
+    def _process_loop(self):
+        last_face_status = (False, 1.0, 0, [])
+        last_gaze_status = "Initializing..."
+        self.current_warning_text = ""  # Promoted
+        last_face_time = 0
+        
+        while self.running:
+            success, frame = self.camera.read()
+            
+            if not success or frame is None:
+                time.sleep(0.01)
+                continue
+
+            # 1. Detection
+            now = time.time()
+            if self.face_detector and (now - last_face_time) > 0.033: # 30 FPS (Zero-Lag)
+                last_face_time = now
+                # Pass BGR; worker will convert to RGB
+                f_res = self.face_detector.process_frame(frame)
+                if f_res and f_res[0] is not None: 
+                    last_face_status = f_res
+            
+            if self.gaze_detector:
+                # Pass BGR; worker will convert to RGB
+                g_res = self.gaze_detector.process_frame(frame)
+                if g_res: 
+                    last_gaze_status = g_res
+
+            # 2. Annotation & Status Update
+            found, dist, n_face, locs = last_face_status
+            gaze_txt = last_gaze_status
+            
+            warning_msg = ""
+            
+            if not self._detectors_ready:
+                 gaze_txt = "Loading AI..."
+                 warning_msg = "INITIALIZING AI MODELS... (PLEASE WAIT)"
+            elif n_face > 1: 
+                gaze_txt = "ERROR: Multiple Faces"
+                warning_msg = "MULTIPLE FACES DETECTED"
+            elif n_face == 0: 
+                gaze_txt = "No Face"
+                warning_msg = "NO FACE DETECTED"
+            elif "WARNING" in str(gaze_txt):
+                warning_msg = str(gaze_txt)
+
+            self.current_warning_text = warning_msg # Update state for polling
+
+            f_clr = (0, 255, 0) if (found and n_face == 1) else (0, 0, 255)
+            g_clr = (0, 0, 255) if warning_msg else (255, 255, 0)
+            
+            cv2.putText(frame, f"Auth: {found} ({dist:.2f})", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, f_clr, 2)
+            cv2.putText(frame, f"Gaze: {gaze_txt}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, g_clr, 2)
+            
+            for (t, r, b, l) in locs:
+                cv2.rectangle(frame, (l, t), (r, b), f_clr, 2)
+
+            # 3. Store
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if ret:
+                with self.frame_lock:
+                    self.latest_frame = buffer.tobytes()
+                    self.frame_id += 1

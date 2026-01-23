@@ -74,7 +74,36 @@
 
 <body>
     <div class="container">
-        <h1>Interview Admin Panel</h1>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h1>Interview Admin Panel</h1>
+            <button onclick="stopServer()" class="delete">Stop Server</button>
+        </div>
+
+        <div class="card">
+            <h2>Identity Management</h2>
+            <p>Upload a photo of the authorized candidate for Face Recognition.</p>
+            <input type="file" id="faceInput" accept="image/*">
+            <button onclick="uploadFace()">Update Identity</button>
+            <div id="faceStatus" class="status"></div>
+        </div>
+
+        <div class="card">
+            <h2>Interview Results</h2>
+            <button onclick="loadResults()">Refresh Results</button>
+            <table id="resultTable">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Candidate</th>
+                        <th>Status</th>
+                        <th>Avg Score</th>
+                        <th>Security Flags</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody id="resultList"></tbody>
+            </table>
+        </div>
 
         <div class="card">
             <h2>Upload Questions Document</h2>
@@ -118,6 +147,44 @@
             });
         }
 
+        async function loadResults() {
+            const res = await fetch('/admin/results');
+            const results = await res.json();
+            const list = document.getElementById('resultList');
+            list.innerHTML = '';
+            results.forEach(r => {
+                const tr = document.createElement('tr');
+                const flagColor = r.flags ? 'red' : 'green';
+                tr.innerHTML = `
+                    <td>${r.session_id}</td>
+                    <td>${r.candidate}</td>
+                    <td>${r.status}</td>
+                    <td>${r.score}</td>
+                    <td style="color:${flagColor}">${r.flags ? 'DETECTED' : 'None'}</td>
+                    <td>${r.date}</td>
+                `;
+                list.appendChild(tr);
+            });
+        }
+
+        async function uploadFace() {
+            const input = document.getElementById('faceInput');
+            const status = document.getElementById('faceStatus');
+            if (input.files.length === 0) return alert("Select a file");
+
+            const formData = new FormData();
+            formData.append('file', input.files[0]);
+
+            status.innerText = "Uploading...";
+            try {
+                const res = await fetch('/admin/upload-identity', { method: 'POST', body: formData });
+                const data = await res.json();
+                status.innerText = data.message;
+            } catch (e) {
+                status.innerText = "Error: " + e.message;
+            }
+        }
+
         async function uploadDoc() {
             const input = document.getElementById('docInput');
             const status = document.getElementById('uploadStatus');
@@ -146,7 +213,14 @@
             loadQuestions();
         }
 
+        async function stopServer() {
+            if (!confirm("Stop the server?")) return;
+            await fetch('/admin/shutdown', { method: 'POST' });
+            alert("Server stopped.");
+        }
+
         loadQuestions();
+        loadResults();
     </script>
 </body>
 

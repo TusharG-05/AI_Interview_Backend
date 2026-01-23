@@ -28,6 +28,10 @@ async def start_interview(
         enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
         content = await enrollment_audio.read()
         audio_service.save_audio_blob(content, enrollment_path)
+        
+        # Cleanup enrollment audio immediately for better baseline
+        audio_service.cleanup_audio(enrollment_path)
+        
         session.enrollment_audio_path = enrollment_path
         db.commit()
         
@@ -115,16 +119,25 @@ def process_session_results(session_id: int):
         responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == session_id).all()
         for resp in responses:
             if resp.audio_path and not resp.transcribed_text:
+                # 0. Cleanup (Noise Reduction) - Run ONCE
+                try:
+                    # Overwrites or cleans file in place
+                    audio_service.cleanup_audio(resp.audio_path)
+                except Exception as e:
+                    print(f"Cleanup failed for {resp.audio_path}: {e}")
+
                 # 1. Speaker Verification (New)
                 if enrollment_path:
+                    # enrollment_path should ideally be cleaned upon upload too, but assuming it's decent quality or we clean it here?
+                    # For performance, let's assume we clean it on upload (which we missed, but okay for now)
                     is_match, score = audio_service.verify_speaker(enrollment_path, resp.audio_path)
-                    # We store this in the score or transcribed text for now as a flag
+                    
                     if not is_match:
-                        resp.transcribed_text = "[SECURITY ALERT: VOICE MISMATCH DETECTED] "
+                        resp.transcribed_text = f"[SECURITY ALERT: VOICE MISMATCH DETECTED (Score: {score:.2f})] "
                     else:
                         resp.transcribed_text = ""
                 
-                # 2. Transcribe (includes noise reduction)
+                # 2. Transcribe
                 text = audio_service.speech_to_text(resp.audio_path)
                 resp.transcribed_text = (resp.transcribed_text or "") + text
                 

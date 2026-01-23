@@ -53,3 +53,51 @@ def delete_question(q_id: int, db: Session = Depends(get_db)):
     db.delete(q)
     db.commit()
     return {"message": "Question deleted"}
+
+# --- New Admin Features ---
+
+@router.get("/results")
+def get_results(db: Session = Depends(get_db)):
+    from ..core.database import InterviewSession, CandidateResponse
+    
+    # Simple join or just fetch sessions and relationships
+    sessions = db.query(InterviewSession).all()
+    results = []
+    
+    for s in sessions:
+        responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == s.id).all()
+        # Aggregate score from responses
+        total_score = sum([r.similarity_score for r in responses if r.similarity_score])
+        avg_score = total_score / len(responses) if responses else 0
+        
+        flags = [r.transcribed_text for r in responses if "SECURITY ALERT" in (r.transcribed_text or "")]
+        
+        results.append({
+            "session_id": s.id,
+            "candidate": s.candidate_name,
+            "date": str(s.start_time),  # formatting needed ideally
+            "score": round(avg_score, 2),
+            "status": "Completed" if s.is_completed else "In Progress",
+            "flags": len(flags) > 0
+        })
+    return results
+
+@router.post("/upload-identity")
+async def upload_identity(file: UploadFile = File(...)):
+    # Save to known_person.jpg
+    content = await file.read()
+    
+    from ..services.camera import CameraService
+    cam = CameraService()
+    success = cam.update_identity(content)
+    
+    if success:
+        return {"message": "Identity updated successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to update identity")
+
+@router.post("/shutdown")
+def shutdown():
+    import os, signal
+    os.kill(os.getpid(), signal.SIGTERM)
+    return {"message": "Server shutting down..."}
