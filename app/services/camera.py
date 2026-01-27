@@ -226,6 +226,8 @@ class CameraService:
             elif n_face == 0: 
                 gaze_txt = "No Face"
                 warning_msg = "NO FACE DETECTED"
+            elif n_face == 1 and not found:
+                warning_msg = "SECURITY ALERT: UNAUTHORIZED PERSON"
             elif "WARNING" in str(gaze_txt):
                 warning_msg = str(gaze_txt)
 

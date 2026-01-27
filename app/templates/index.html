@@ -38,7 +38,8 @@
             margin-bottom: 15px;
             border-radius: 8px;
             background-color: #333;
-            color: #00ffcc; /* Default safe color */
+            color: #00ffcc;
+            /* Default safe color */
             min-height: 40px;
             transition: background-color 0.3s, color 0.3s;
         }
@@ -50,9 +51,17 @@
         }
 
         @keyframes pulse {
-            0% { transform: scale(1); }
-            50% { transform: scale(1.02); }
-            100% { transform: scale(1); }
+            0% {
+                transform: scale(1);
+            }
+
+            50% {
+                transform: scale(1.02);
+            }
+
+            100% {
+                transform: scale(1);
+            }
         }
 
         .video-container {
@@ -103,7 +112,7 @@
         }
 
         .stop-btn {
-            background-color: #ff4444; 
+            background-color: #ff4444;
             color: white;
         }
     </style>
@@ -118,7 +127,7 @@
     <div class="video-container">
         <img src="/video_feed" alt="Video Feed" id="videoFeed">
         <!-- Zoom Button Overlay -->
-        <button onclick="window.open('/webcam-test', '_blank')" 
+        <button onclick="window.open('/webcam-test', '_blank')"
             style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.5); color: white; border: 1px solid white;">
             ⤢ Fullscreen Test
         </button>
@@ -160,12 +169,13 @@
         <div id="finishedView" style="display:none;">
             <h2 style="color: #00ffcc;">Questions Completed</h2>
             <p>Please click below to submit your interview for analysis.</p>
-            <button onclick="finalizeInterview()" style="font-size: 1.2rem; padding: 15px 30px;">Finish Interview</button>
+            <button onclick="finalizeInterview()" style="font-size: 1.2rem; padding: 15px 30px;">Finish
+                Interview</button>
         </div>
-        
+
         <div id="finalThankYou" style="display:none;">
-             <h2 style="color: #00ffcc;">Interview Submitted</h2>
-             <p>You may now close this window.</p>
+            <h2 style="color: #00ffcc;">Interview Submitted</h2>
+            <p>You may now close this window.</p>
         </div>
     </div>
 
@@ -196,10 +206,10 @@
         // For now, let's create that endpoint in python plan or just poll
         setInterval(async () => {
             try {
-                const res = await fetch('/status'); 
+                const res = await fetch('/status');
                 const data = await res.json();
                 const display = document.getElementById('warningDisplay');
-                
+
                 if (data.warning) {
                     display.innerText = data.warning;
                     display.classList.add('alert');
@@ -207,7 +217,7 @@
                     display.innerText = "System Safe";
                     display.classList.remove('alert');
                 }
-            } catch(e) {}
+            } catch (e) { }
         }, 500);
 
         // --- Interview Logic ---
@@ -247,7 +257,7 @@
                 setTimeout(() => {
                     enrollmentRecorder.stop();
                     stream.getTracks().forEach(track => track.stop());
-                }, 3000);
+                }, 5000);
 
             } catch (err) {
                 alert("Microphone required for interview security.");
@@ -346,8 +356,9 @@
                 await fetch('/shutdown', { method: 'POST' });
                 alert("Server Service Stopped.");
                 document.body.innerHTML = "<h1 style='color:white;text-align:center;margin-top:20%'>Server Stopped</h1>";
-            } catch (e) {}
+            } catch (e) { }
         }
     </script>
 </body>
+
 </html>
