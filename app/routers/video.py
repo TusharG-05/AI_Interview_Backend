@@ -41,6 +41,8 @@ async def video_feed():
     """
     if not camera_service.running:
         print("Lazy starting camera due to incoming request...")
+        # Start server-side camera
         camera_service.start()
         
     return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+
