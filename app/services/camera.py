@@ -2,6 +2,7 @@ import cv2
 import threading
 import time
 import os
+import numpy as np
 from typing import Optional, Tuple
 from .face import FaceDetector
 from .gaze import GazeDetector
@@ -9,7 +10,7 @@ from .gaze import GazeDetector
 class CameraService:
     """
     Singleton class to manage the camera resource and orchestrate detectors.
-    Ensures only one thread accesses the camera at a time.
+    Now supports CLIENT-SIDE streaming via WebSocket.
     """
     _instance = None
     _lock = threading.Lock()
@@ -26,27 +27,31 @@ class CameraService:
         if self._initialized: return
         self._initialized = True
         
-        self.camera: Optional[cv2.VideoCapture] = None
         self.face_detector: Optional[FaceDetector] = None
         self.gaze_detector: Optional[GazeDetector] = None
         self.running: bool = False
-        self.thread: Optional[threading.Thread] = None
+        
+        # We no longer strictly need these for WebSocket mode, but keeping for compatibility
         self.latest_frame: Optional[bytes] = None
         self.frame_id: int = 0
         self.current_warning_text: str = ""
         self.frame_lock = threading.Lock()
         self._detectors_ready = False
-        self.listeners = []
 
-    def start(self, video_source=0):
+    def start(self, video_source=None):
+        """
+        Initializes detectors. 
+        video_source is ignored in Client-Side mode but kept for signature compatibility.
+        """
         if self.running: return
-        print(f"Lazy starting camera (Source: {video_source})...", flush=True)
+        print(f"Starting CameraService (Client-Side Streaming Mode)...", flush=True)
         
-        # Init Detectors in background to avoid blocking the first frame
+        # Init Detectors in background
         def init_detectors():
             print("Background: Initializing Detectors...", flush=True)
             known_path = "app/assets/known_person.jpg"
             gaze_path = "app/assets/face_landmarker.task"
+            
             if os.path.exists(known_path):
                 try:
                     self.face_detector = FaceDetector(known_person_path=known_path)
@@ -65,202 +70,81 @@ class CameraService:
             print("Background: All Detectors Initialized.", flush=True)
 
         threading.Thread(target=init_detectors, daemon=True).start()
-
-        # Open Camera: Try DSHOW for Windows stability first
-        print("Opening VideoCapture...", flush=True)
-        self.camera = cv2.VideoCapture(video_source, cv2.CAP_DSHOW)
-        if not self.camera.isOpened():
-            self.camera = cv2.VideoCapture(video_source)
-            
-        if not self.camera.isOpened():
-            print("Error: Could not open camera hardware.", flush=True)
-            return
-            
-        # Fast initialization
-        self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            
         self.running = True
-        self.thread = threading.Thread(target=self._process_loop)
-        self.thread.daemon = True
-        self.thread.start()
-        print("Camera Thread Started. System Live.", flush=True)
 
     def stop(self):
         self.running = False
-        if self.thread:
-            self.thread.join()
-        if self.camera:
-            self.camera.release()
         if self.face_detector:
             self.face_detector.close()
         if self.gaze_detector:
             self.gaze_detector.close()
 
-    def _process_loop(self):
-        last_face_status = (False, 1.0, 0, [])
-        last_gaze_status = "Initializing..."
-        last_face_time = 0
-        
-        while self.running:
-            success, frame = self.camera.read()
-            
-            if not success or frame is None:
-                time.sleep(0.01)
-                continue
+    def process_external_frame(self, image_bytes):
+        """
+        Processes a frame received from the client via WebSocket.
+        Returns a dict of analysis results.
+        """
+        if not self._detectors_ready:
+             return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
 
-            # 1. Detection
-            now = time.time()
-            if self.face_detector and (now - last_face_time) > 0.033: # 30 FPS (Zero-Lag)
-                last_face_time = now
-                # Pass BGR; worker will convert to RGB
+        try:
+            # Decode image
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if frame is None:
+                return {"warning": "Bad Frame"}
+
+            # Analyze
+            face_status = (False, 1.0, 0, [])
+            gaze_status = "No Gaze"
+            
+            if self.face_detector:
                 f_res = self.face_detector.process_frame(frame)
-                if f_res and f_res[0] is not None: 
-                    last_face_status = f_res
+                if f_res: face_status = f_res
             
             if self.gaze_detector:
-                # Pass BGR; worker will convert to RGB
                 g_res = self.gaze_detector.process_frame(frame)
-                if g_res: 
-                    last_gaze_status = g_res
+                if g_res: gaze_status = g_res
 
-            # 2. Annotation
-            found, dist, n_face, locs = last_face_status
-            gaze_txt = last_gaze_status
+            # Logic
+            found, dist, n_face, locs = face_status
             
-            if n_face > 1: gaze_txt = "ERROR: Multiple Faces"
-            elif n_face == 0: gaze_txt = "No Face"
+            warning = ""
+            if n_face > 1: warning = "MULTIPLE FACES DETECTED"
+            elif n_face == 0: warning = "NO FACE DETECTED"
+            elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
+            elif "WARNING" in str(gaze_status): warning = str(gaze_status)
 
-            f_clr = (0, 255, 0) if (found and n_face == 1) else (0, 0, 255)
-            g_clr = (0, 0, 255) if "WARNING" in str(gaze_txt) else (255, 255, 0)
+            return {
+                "auth": bool(found),
+                "auth_dist": float(dist),
+                "faces": int(n_face),
+                "gaze": str(gaze_status),
+                "warning": warning,
+                "box": locs[0] if locs else None # (top, right, bottom, left)
+            }
             
-            cv2.putText(frame, f"Auth: {found} ({dist:.2f})", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, f_clr, 2)
-            cv2.putText(frame, f"Gaze: {gaze_txt}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, g_clr, 2)
-            
-            for (t, r, b, l) in locs:
-                cv2.rectangle(frame, (l, t), (r, b), f_clr, 2)
-
-            # 3. Store
-            ret, buffer = cv2.imencode('.jpg', frame)
-            if ret:
-                with self.frame_lock:
-                    self.latest_frame = buffer.tobytes()
-                    self.frame_id += 1
+        except Exception as e:
+            print(f"Frame Process Error: {e}")
+            return {"warning": "Server Error"}
 
     def update_identity(self, image_bytes: bytes) -> bool:
         """Updates the known person identity and reloads the detector."""
         filepath = "app/assets/known_person.jpg"
-        
-        # Save new file
         with open(filepath, "wb") as f:
             f.write(image_bytes)
-            
-        print(f"Identity updated. Reloading FaceDetector from {filepath}...")
+        print(f"Identity updated. Reloading FaceDetector...")
         
-        # Stop old detector
+        # Stop old wrapper
         if self.face_detector:
             self.face_detector.close()
-            self.face_detector = None
-            
-        # Start new detector
+        
+        # Start new
         try:
             self.face_detector = FaceDetector(known_person_path=filepath)
-            print("FaceDetector reloaded successfully.")
             return True
         except Exception as e:
             print(f"Failed to reload FaceDetector: {e}")
             return False
 
-    def get_frame(self) -> Tuple[Optional[bytes], int]:
-        """Returns the latest MJPEG frame and its ID."""
-        with self.frame_lock:
-            return self.latest_frame, self.frame_id
-
-    def get_current_warning(self):
-        # This is a bit of a hack to get the last warning text without locking
-        # Ideally we use a proper state variable
-        # But we need to see what `last_gaze_status` is holding.
-        # It's local to _process_loop. We need to promote it to instance var.
-        return self.current_warning_text
-
-    def _process_loop(self):
-        last_face_status = (False, 1.0, 0, [])
-        last_gaze_status = "Initializing..."
-        self.current_warning_text = ""  # Promoted
-        last_face_time = 0
-        
-        while self.running:
-            success, frame = self.camera.read()
-            
-            if not success or frame is None:
-                time.sleep(0.01)
-                continue
-
-            # 1. Detection
-            now = time.time()
-            if self.face_detector and (now - last_face_time) > 0.033: # 30 FPS (Zero-Lag)
-                last_face_time = now
-                # Pass BGR; worker will convert to RGB
-                f_res = self.face_detector.process_frame(frame)
-                if f_res and f_res[0] is not None: 
-                    last_face_status = f_res
-            
-            if self.gaze_detector:
-                # Pass BGR; worker will convert to RGB
-                g_res = self.gaze_detector.process_frame(frame)
-                if g_res: 
-                    last_gaze_status = g_res
-
-            # 2. Annotation & Status Update
-            found, dist, n_face, locs = last_face_status
-            gaze_txt = last_gaze_status
-            
-            warning_msg = ""
-            
-            if not self._detectors_ready:
-                 gaze_txt = "Loading AI..."
-                 warning_msg = "INITIALIZING AI MODELS... (PLEASE WAIT)"
-            elif n_face > 1: 
-                gaze_txt = "ERROR: Multiple Faces"
-                warning_msg = "MULTIPLE FACES DETECTED"
-            elif n_face == 0: 
-                gaze_txt = "No Face"
-                warning_msg = "NO FACE DETECTED"
-            elif n_face == 1 and not found:
-                warning_msg = "SECURITY ALERT: UNAUTHORIZED PERSON"
-            elif "WARNING" in str(gaze_txt):
-                warning_msg = str(gaze_txt)
-
-            # Notify listeners if state changed (Deduplicate updates)
-            if warning_msg != self.current_warning_text:
-                self.current_warning_text = warning_msg
-                for callback in self.listeners:
-                    try:
-                        callback(warning_msg)
-                    except:
-                        pass # Ignore detached listeners
-
-            f_clr = (0, 255, 0) if (found and n_face == 1) else (0, 0, 255)
-            g_clr = (0, 0, 255) if warning_msg else (255, 255, 0)
-            
-            cv2.putText(frame, f"Auth: {found} ({dist:.2f})", (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, f_clr, 2)
-            cv2.putText(frame, f"Gaze: {gaze_txt}", (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, g_clr, 2)
-            
-            for (t, r, b, l) in locs:
-                cv2.rectangle(frame, (l, t), (r, b), f_clr, 2)
-
-            # 3. Store
-            ret, buffer = cv2.imencode('.jpg', frame)
-            if ret:
-                with self.frame_lock:
-                    self.latest_frame = buffer.tobytes()
-                    self.frame_id += 1 
-
-    def add_listener(self, callback):
-        """Register a callback function to be called on status change."""
-        self.listeners.append(callback)
-
-    def remove_listener(self, callback):
-        if callback in self.listeners:
-            self.listeners.remove(callback)
