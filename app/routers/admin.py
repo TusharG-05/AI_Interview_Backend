@@ -64,19 +64,25 @@ def get_results(db: Session = Depends(get_db)):
     sessions = db.query(InterviewSession).all()
     results = []
     
+    import datetime
+    
     for s in sessions:
         responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == s.id).all()
         # Aggregate score from responses
         total_score = sum([r.similarity_score for r in responses if r.similarity_score])
-        avg_score = total_score / len(responses) if responses else 0
+        avg_score = (total_score / len(responses)) * 100 if responses else 0
         
         flags = [r.transcribed_text for r in responses if "SECURITY ALERT" in (r.transcribed_text or "")]
         
+        # Format Timestamp
+        dt_object = datetime.datetime.fromtimestamp(s.start_time)
+        formatted_date = dt_object.strftime("%Y-%m-%d %H:%M")
+
         results.append({
             "session_id": s.id,
             "candidate": s.candidate_name,
-            "date": str(s.start_time),  # formatting needed ideally
-            "score": round(avg_score, 2),
+            "date": formatted_date,
+            "score": f"{round(avg_score, 1)}%",
             "status": "Completed" if s.is_completed else "In Progress",
             "flags": len(flags) > 0
         })
