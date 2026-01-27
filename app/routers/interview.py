@@ -23,6 +23,7 @@ async def start_interview(
     db.commit()
     db.refresh(session)
     
+    warning = None
     if enrollment_audio:
         os.makedirs("app/assets/audio/enrollment", exist_ok=True)
         enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
@@ -32,10 +33,16 @@ async def start_interview(
         # Cleanup enrollment audio immediately for better baseline
         audio_service.cleanup_audio(enrollment_path)
         
+        # Senior Dev UX: Silence Check
+        energy = audio_service.calculate_energy(enrollment_path)
+        print(f"DEBUG: Enrollment Energy: {energy}")
+        if energy < 50: # RMS Threshold for silence
+             warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
+        
         session.enrollment_audio_path = enrollment_path
         db.commit()
         
-    return {"session_id": session.id}
+    return {"session_id": session.id, "warning": warning}
 
 @router.get("/next-question/{session_id}")
 async def get_next_question(session_id: int, db: Session = Depends(get_db)):

@@ -6,33 +6,34 @@ A professional, real-time security monitoring and interview system powered by Fa
 
 ### 🔐 Security & Monitoring
 - **Real-time Face Recognition**: High-FPS multi-face detection using MediaPipe and ArcFace (DeepFace).
-- **Gaze Tracking**: Detects suspicious behavior (looking left, right, up, down, or blinking/sleeping).
-- **Speaker Verification**: Uses voice fingerprinting (ECAPA-TDNN) to ensure only the candidate answers, preventing accomplices or "cheatingmates".
-- **Noise Robustness**: Built-in noise reduction for robust performance in office environments.
+- **Gaze Tracking**: Detects suspicious behavior (looking left, right, up, down, or blinking/sleeping) with distance-adaptive sensitivity.
+- **Worker Auto-Recovery**: Background AI processes automatically restart if they crash.
+- **Microphone Signal Check**: Alerts user if they attempt enrollment with a silent or muted microphone.
 
 ### 🎙️ Audio Interview System
-- **Professional Female Voice**: Automated question delivery using `edge-tts`.
-- **Intelligent Flow Control**: Microphone activates 2 seconds after the computer ends speaking.
-- **Zero-Lag Architecture**: All heavy transcription (Faster-Whisper) and semantic evaluation run in a post-interview batch to preserve video performance.
-- **Semantic Matching**: Concept-based answer checking using `Sentence-Transformers`.
+- **High-Accuracy Transcription**: Powered by **Faster-Whisper (base.en)** with `int8` quantization for optimal CPU performance.
+- **Professional TTS**: Automated question delivery using `edge-tts` neural voices.
+- **Semantic Evaluation**: AI-driven answer checking using `Sentence-Transformers`.
 
 ### 🛠️ Admin Features
-- **Hidden Admin Panel**: Access at `/admin-panel` to manage questions and view results.
-- **Bulk Question Import**: Extract question-answer pairs automatically from **PDF**, **Word (.docx)**, or **Text (.txt)** files.
+- **Centralized Dashboard**: Manage questions and view detailed interview results at `/admin-panel`.
+- **Bulk Question Import**: Automated extraction from **PDF**, **Word (.docx)**, or **Text (.txt)**.
+- **N+1 Optimized API**: Optimized database layer for high scalability.
+
+---
 
 ## 🛠️ Quick Start
 
 ### Prerequisites
-- Python 3.9+
+- **Python 3.11** (Recommended)
 - Webcam & Microphone
 - Dependencies: `pip install -r requirements.txt`
 
 ### Installation
 1.  **Create a Virtual Environment**:
     ```bash
-    python -m venv .venv
-    # Windows
-    .venv\Scripts\activate
+    python3.11 -m venv .venv
+    source .venv/bin/activate
     ```
 2.  **Install AI Dependencies**:
     ```bash
@@ -43,8 +44,8 @@ A professional, real-time security monitoring and interview system powered by Fa
 ```bash
 python main.py
 ```
-- **Interview Site**: `http://localhost:8000`
-- **Admin Panel**: `http://localhost:8000/admin-panel`
+- **Interview Site**: `https://localhost:8000`
+- **Admin Panel**: `https://localhost:8000/admin-panel`
 
 ---
 
@@ -53,9 +54,10 @@ python main.py
 ```
 ├── app/
 │   ├── core/                # Database & Models
-│   ├── routers/             # API Endpoints (Admin, Interview, Video, Site)
-│   ├── services/            # Logic (Audio, NLP, Camera, Face, Gaze)
-│   ├── templates/           # UI (Index, Admin)
+│   ├── routers/             # API Endpoints
+│   ├── services/            # AI & Business Logic
+│   ├── utils/               # Shared Helper Functions (Image Processing, etc.)
+│   ├── templates/           # UI Templates
 │   └── assets/              # AI Models & Audio Cache
 ├── main.py                  # Entry Point
 └── requirements.txt         # Frozen Dependencies
@@ -64,9 +66,6 @@ python main.py
 ---
 
 ## 🔧 AI Models Used
-- **Face Detection**: MediaPipe FaceLandmarker
-- **Face recognition**: ArcFace (via DeepFace)
-- **STT (Transcription)**: Faster-Whisper
-- **TTS (Speech)**: Edge-TTS
-- **Semantic Similarity**: all-MiniLM-L6-v2 (Sentence-Transformers)
-- **Speaker Verification**: ECAPA-TDNN (SpeechBrain)
+- **Vision**: MediaPipe FaceLandmarker, ArcFace (DeepFace)
+- **Audio**: Faster-Whisper (base.en), SpeechBrain (ECAPA-VoxCeleb), Edge-TTS
+- **NLP**: all-MiniLM-L6-v2 (Sentence-Transformers)

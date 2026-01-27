@@ -10,7 +10,7 @@ from pydub import AudioSegment
 
 
 class AudioService:
-    def __init__(self, stt_model_size="tiny.en"):
+    def __init__(self, stt_model_size="base.en"):
         print(f"Initializing AudioService (Lazy Loading enabled)...")
         self.stt_model_size = stt_model_size
         self.female_voice = "en-US-AvaNeural"
@@ -23,14 +23,13 @@ class AudioService:
     @property
     def stt_model(self):
         if self._stt_model is None:
-            # Sweet spot: base.en is much better than tiny, faster than base.
-            model_to_use = "base.en" if self.stt_model_size != "tiny.en" else "tiny.en"
-            print(f"Loading Whisper Model ({model_to_use})...")
+            # Upgrade: base.en with int8 quantization is faster/better on i7
+            print(f"Loading Whisper Model ({self.stt_model_size})...")
             self._stt_model = WhisperModel(
-                model_to_use,
+                self.stt_model_size,
                 device="cpu",
-                compute_type="float32", 
-                cpu_threads=2 # Leave cores for camera/gaze to avoid 15min hang
+                compute_type="int8", 
+                cpu_threads=4 # i7 can handle more threads for faster results
             )
         return self._stt_model
 
@@ -133,3 +132,12 @@ class AudioService:
         with open(output_path, "wb") as f:
             f.write(blob)
         return output_path
+
+    def calculate_energy(self, audio_path):
+        """Calculates RMS energy of an audio file to detect silence."""
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            return audio.rms
+        except Exception as e:
+            print(f"Energy Check Error: {e}")
+            return 0

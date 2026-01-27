@@ -22,6 +22,7 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
         print("GazeWorker: Imported mediapipe.tasks.python", flush=True)
         from mediapipe.tasks.python import vision
         print("GazeWorker: Imported mediapipe.tasks.python.vision", flush=True)
+        from ..utils.image_processing import convert_to_rgb
         
         abs_model_path = os.path.abspath(model_path)
         print(f"GazeWorker: Initializing MediaPipe with model: {abs_model_path}", flush=True)
@@ -45,7 +46,7 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
         
         # State tracking for grace period
         suspicious_start_time = None
-        SUSPICION_THRESHOLD = 1.5  # Seconds before flagging "Looking Down"
+        SUSPICION_THRESHOLD = 2.5  # Seconds before flagging "Looking Down" (increased for natural glances)
         
         
         # Thresholds (Tuned based on user feedback)
@@ -67,8 +68,8 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                 break
                 
             try:
-                # Convert to RGB inside the worker
-                rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+                # Convert to RGB inside the worker using utility
+                rgb_frame = convert_to_rgb(bgr_frame)
                 rgb_frame.flags.writeable = False # Efficiency
                 
                 mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -109,9 +110,12 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                             r_right_v = get_iris_position(mesh[386], mesh[374], mesh[473])
                             avg_v = (r_left_v + r_right_v) / 2
                             
-                            # -- Blink Detection --
+                            # -- Distance-Adaptive Blink Detection --
+                            # Instead of absolute frame height, use face height (landmark 10 to 152)
+                            face_height = np.linalg.norm(mesh[10] - mesh[152])
                             eye_height = np.linalg.norm(mesh[159] - mesh[145])
-                            is_blinking = eye_height < (h * 0.012)
+                            # Adaptive threshold: if eyes are closed less than 6% of face height
+                            is_blinking = eye_height < (face_height * 0.05)
 
                             # --- DECISION LOGIC ---
                             # We separate "Immediate Warnings" (Left/Right/Up) from "Buffered Warnings" (Down/Blink)

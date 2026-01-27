@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-from sqlalchemy.orm import Session
-from ..core.database import get_db, Question, init_db
+from sqlalchemy.orm import Session, joinedload
+from ..core.database import get_db, Question, init_db, InterviewSession, CandidateResponse
 from ..services.nlp import NLPService
 import os
 import shutil
+import uuid
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 nlp_service = NLPService()
@@ -17,9 +18,10 @@ def get_questions(db: Session = Depends(get_db)):
 
 @router.post("/upload-doc")
 async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # Save file temporarily
+    # Save file temporarily with unique name
     os.makedirs("temp_uploads", exist_ok=True)
-    file_path = f"temp_uploads/{file.filename}"
+    file_id = uuid.uuid4().hex[:8]
+    file_path = f"temp_uploads/{file_id}_{file.filename}"
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
@@ -58,19 +60,19 @@ def delete_question(q_id: int, db: Session = Depends(get_db)):
 
 @router.get("/results")
 def get_results(db: Session = Depends(get_db)):
-    from ..core.database import InterviewSession, CandidateResponse
+    # Eagerly load all responses and their associated questions to avoid N+1 queries
+    sessions = db.query(InterviewSession).options(
+        joinedload(InterviewSession.responses).joinedload(CandidateResponse.question)
+    ).all()
     
-    # Simple join or just fetch sessions and relationships
-    sessions = db.query(InterviewSession).all()
     results = []
-    
     import datetime
     
     for s in sessions:
-        responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == s.id).all()
+        responses = s.responses
         # Aggregate score from responses
-        total_score = sum([r.similarity_score for r in responses if r.similarity_score])
-        avg_score = (total_score / len(responses)) * 100 if responses else 0
+        valid_scores = [r.similarity_score for r in responses if r.similarity_score is not None]
+        avg_score = (sum(valid_scores) / len(responses)) * 100 if responses else 0
         
         flags = [r.transcribed_text for r in responses if "SECURITY ALERT" in (r.transcribed_text or "")]
         
