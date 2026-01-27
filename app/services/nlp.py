@@ -1,6 +1,7 @@
 import os
 import fitz  # PyMuPDF
 import re
+import uuid
 from docx import Document
 from sentence_transformers import SentenceTransformer, util
 import torch
@@ -34,6 +35,7 @@ class NLPService:
         ext = os.path.splitext(file_path)[1].lower()
         content = ""
 
+        # UUID-based paths are handled by the caller (router), but we ensure we read correctly
         try:
             if ext == '.txt':
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -67,10 +69,9 @@ class NLPService:
         text = "".join(char for char in text if char.isprintable() or char in "\n\r\t")
         
         # Patterns for questions and answers
-        # Looking for start of line with markers like Q:, 1., Question: etc.
-        # Allowing optional space before the marker
-        q_pattern = re.compile(r'^\s*(?:Q:|Question:|Ques:|Q\s*:|Question\s*:|\d+[\.\)])\s*(.*)', re.IGNORECASE)
-        a_pattern = re.compile(r'^\s*(?:A:|Answer:|Ans:|Reference:|A\s*:|Answer\s*:)\s*(.*)', re.IGNORECASE)
+        # Improved regex to handle variations like "Q1.", "Question 1:", etc.
+        q_pattern = re.compile(r'^\s*(?:Q:|Question:|Ques:|Q\s*:|Question\s*:|\d+[\.\)]|Q\d+[\.\)])\s*(.*)', re.IGNORECASE)
+        a_pattern = re.compile(r'^\s*(?:A:|Answer:|Ans:|Reference:|A\s*:|Answer\s*:|R:|Ref:)\s*(.*)', re.IGNORECASE)
 
         lines = text.split('\n')
         qa_pairs = []

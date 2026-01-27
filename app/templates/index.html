@@ -210,38 +210,60 @@
 
         // Start Camera
         async function startCamera() {
+            console.log("Initializing Camera...");
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({
-                    video: { width: 640, height: 480, frameRate: 15 }, // Low res to save bandwidth
+                    video: { width: 640, height: 480, frameRate: 15 },
                     audio: false
                 });
+                console.log("Camera Stream obtained:", stream.id);
                 localVideo.srcObject = stream;
 
-                localVideo.onloadedmetadata = () => {
+                localVideo.onloadeddata = () => {
+                    console.log("Video data loaded. Dimensions:", localVideo.videoWidth, "x", localVideo.videoHeight);
                     canvas.width = localVideo.videoWidth;
                     canvas.height = localVideo.videoHeight;
-                    requestAnimationFrame(drawLoop);
-                    connectVideoWebSocket(); // Connect WS after camera ready
+                    localVideo.play().then(() => {
+                        console.log("Local video playback started.");
+                        requestAnimationFrame(drawLoop);
+                        connectVideoWebSocket();
+                    }).catch(err => {
+                        console.error("Playback failed:", err);
+                    });
                 };
+
+                localVideo.onerror = (err) => {
+                    console.error("Local Video Error:", err);
+                };
+
             } catch (err) {
-                alert("Camera Access Denied or Not Found!");
-                console.error(err);
+                console.error("Camera Access Error:", err);
+                alert("Camera Access Denied or Not Found! " + err.message);
             }
         }
 
         // WebSocket for Video Streaming
         function connectVideoWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            videoWs = new WebSocket(`${protocol}//${window.location.host}/ws/video`);
+            const wsUrl = `${protocol}//${window.location.host}/ws/video`;
+            console.log("Connecting to Video WebSocket:", wsUrl);
+            videoWs = new WebSocket(wsUrl);
 
-            videoWs.onopen = () => console.log("Video Stream Connected");
+            videoWs.onopen = () => console.log("Video Stream WS Connected");
             videoWs.onmessage = (event) => {
-                lastAnalysis = JSON.parse(event.data);
-                updateWarning(lastAnalysis.warning);
+                try {
+                    lastAnalysis = JSON.parse(event.data);
+                    updateWarning(lastAnalysis.warning);
+                } catch (e) {
+                    console.error("WS Message Error:", e);
+                }
             };
-            videoWs.onclose = () => {
-                console.log("Video WS Closed. Reconnecting...");
+            videoWs.onclose = (e) => {
+                console.log("Video WS Closed. Reason:", e.reason, "Code:", e.code);
                 setTimeout(connectVideoWebSocket, 2000);
+            };
+            videoWs.onerror = (err) => {
+                console.error("Video WS Error:", err);
             };
         }
 
@@ -259,20 +281,26 @@
         const SEND_INTERVAL = 100; // Send 10 FPS to server (100ms)
 
         function drawLoop(timestamp) {
-            // Draw video to canvas
-            ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
+            if (!localVideo.paused && !localVideo.ended) {
+                // Draw video to canvas
+                ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
 
-            // Send Frame to Server (Throttled)
-            if (videoWs && videoWs.readyState === WebSocket.OPEN && (timestamp - lastSendTime > SEND_INTERVAL)) {
-                canvas.toBlob(blob => {
-                    if (blob) videoWs.send(blob);
-                }, 'image/jpeg', 0.5); // Quality 0.5
-                lastSendTime = timestamp;
-            }
+                // Send Frame to Server (Throttled)
+                if (videoWs && videoWs.readyState === WebSocket.OPEN && (timestamp - lastSendTime > SEND_INTERVAL)) {
+                    canvas.toBlob(blob => {
+                        if (blob) {
+                            videoWs.send(blob);
+                        }
+                    }, 'image/jpeg', 0.5);
+                    lastSendTime = timestamp;
+                }
 
-            // Draw Overlays from latest server analysis
-            if (lastAnalysis) {
-                drawOverlays(lastAnalysis);
+                // Draw Overlays from latest server analysis
+                if (lastAnalysis) {
+                    drawOverlays(lastAnalysis);
+                }
+            } else {
+                // console.warn("Video playback paused or ended.");
             }
 
             // FPS Counter
@@ -365,6 +393,11 @@
 
                     const res = await fetch('/interview/start', { method: 'POST', body: formData });
                     const data = await res.json();
+
+                    if (data.warning) {
+                        alert("⚠️ Warning: " + data.warning);
+                    }
+
                     currentSessionId = data.session_id;
 
                     initialView.style.display = 'none';

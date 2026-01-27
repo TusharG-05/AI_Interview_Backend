@@ -1,21 +1,26 @@
-temp_old.py
+# Environment
 .venv/
+.env
 __pycache__/
-*.mp4
-*.log
+*.py[cod]
+*$py.class
 .DS_Store
+
+# IDEs
 .idea/
 .vscode/
 
-# Generated Audio
+# Assets & Media
 app/assets/audio/responses/*.wav
 app/assets/audio/enrollment/*.wav
-test_*.wav
-*.mp3
+app/assets/audio/questions/*.mp3
+*.mp4
+*.log
 
-# Models (too large for git usually, but assume tracked if needed, otherwise ignore)
-# *.task
+# Databases & Temp
+*.db
+temp_uploads/
+app/assets/known_person.jpg
 
-# Test Artifacts
-test_api.py
-test_resp.wav/
+# Models (Optional)
+# app/assets/*.task

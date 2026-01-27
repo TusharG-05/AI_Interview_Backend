@@ -6,6 +6,7 @@ import numpy as np
 from typing import Optional, Tuple
 from .face import FaceDetector
 from .gaze import GazeDetector
+from ..utils.image_processing import decode_image
 
 class CameraService:
     """
@@ -30,6 +31,8 @@ class CameraService:
         self.face_detector: Optional[FaceDetector] = None
         self.gaze_detector: Optional[GazeDetector] = None
         self.running: bool = False
+        self._listeners = []
+        self._current_warning = "System Initializing..."
         
         # We no longer strictly need these for WebSocket mode, but keeping for compatibility
         self.latest_frame: Optional[bytes] = None
@@ -87,10 +90,19 @@ class CameraService:
         if not self._detectors_ready:
              return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
 
+        # Senior Dev Hardening: Worker Heartbeat Check
+        # If a worker process crashed (e.g. OOM or driver error), attempt restart
+        if self.face_detector and not self.face_detector.worker.is_alive():
+            print("RECOVERY: FaceDetector worker died. Restarting...")
+            self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
+            
+        if self.gaze_detector and not self.gaze_detector.worker.is_alive():
+            print("RECOVERY: GazeDetector worker died. Restarting...")
+            self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
+
         try:
-            # Decode image
-            nparr = np.frombuffer(image_bytes, np.uint8)
-            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            # Decode image using utility
+            frame = decode_image(image_bytes)
             
             if frame is None:
                 return {"warning": "Bad Frame"}
@@ -116,9 +128,15 @@ class CameraService:
             elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
             elif "WARNING" in str(gaze_status): warning = str(gaze_status)
 
+            # Update state for external status calls
+            self._current_warning = warning if warning else "No Issues"
+            for callback in self._listeners:
+                try: callback(self._current_warning)
+                except: pass
+
             return {
                 "auth": bool(found),
-                "auth_dist": float(dist),
+                "auth_dist": float(dist) if dist is not None else 1.0,
                 "faces": int(n_face),
                 "gaze": str(gaze_status),
                 "warning": warning,
@@ -147,4 +165,10 @@ class CameraService:
         except Exception as e:
             print(f"Failed to reload FaceDetector: {e}")
             return False
+
+    def add_listener(self, callback):
+        self._listeners.append(callback)
+
+    def get_current_warning(self):
+        return self._current_warning
 

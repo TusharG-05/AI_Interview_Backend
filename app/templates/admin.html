@@ -148,6 +148,8 @@
             });
         }
 
+        let expandedRows = new Set();
+
         async function loadResults() {
             const res = await fetch('/admin/results');
             const results = await res.json();
@@ -170,10 +172,10 @@
                 `;
                 list.appendChild(tr);
 
-                // Details Row (Hidden by default)
+                // Details Row (Hidden by default unless in expandedRows)
                 const trDetail = document.createElement('tr');
                 trDetail.id = `detail-${r.session_id}`;
-                trDetail.style.display = 'none';
+                trDetail.style.display = expandedRows.has(r.session_id) ? 'table-row' : 'none';
                 trDetail.style.background = '#222';
 
                 let detailHtml = '<td colspan="7" style="padding:15px;"><table style="width:100%; font-size:0.9em;">';
@@ -202,8 +204,10 @@
             if (row) {
                 if (row.style.display === 'none') {
                     row.style.display = 'table-row';
+                    expandedRows.add(id);
                 } else {
                     row.style.display = 'none';
+                    expandedRows.delete(id);
                 }
             }
         }

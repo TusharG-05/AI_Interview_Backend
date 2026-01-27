@@ -8,6 +8,7 @@ from deepface import DeepFace
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+from ..utils.image_processing import convert_to_rgb, resize_with_aspect_ratio
 
 
 def face_recognition_worker(frame_queue, result_queue, known_encoding):
@@ -177,15 +178,13 @@ class FaceDetector:
         )
         self.worker.daemon = True
         self.worker.start()
+        self.last_result = (None, None, 0, [])
 
     def process_frame(self, frame_bgr):
         # RESIZE IN MAIN THREAD - Crucial for zero delay
-        h, w = frame_bgr.shape[:2]
-        s = 360.0 / h if h > 360 else 1.0
-        
-        # Convert to RGB and Resize
-        img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        img_small = cv2.resize(img_rgb, (0,0), fx=s, fy=s) if s < 1.0 else img_rgb
+        # Maintain aspect ratio using utility
+        img_rgb = convert_to_rgb(frame_bgr)
+        img_small, s = resize_with_aspect_ratio(img_rgb, target_height=360)
 
         if not self.frame_queue.full():
             self.frame_queue.put(img_small)
@@ -194,9 +193,10 @@ class FaceDetector:
             match, conf, n_faces, locs = self.result_queue.get_nowait()
             # Scale coordinates back up
             scaled_locs = [(int(t/s), int(r/s), int(b/s), int(l/s)) for (t,r,b,l) in locs]
-            return match, conf, n_faces, scaled_locs
+            self.last_result = (match, conf, n_faces, scaled_locs)
+            return self.last_result
         except:
-            return None, None, 0, []
+            return self.last_result
 
     def close(self):
         try:
