@@ -39,7 +39,6 @@
             border-radius: 8px;
             background-color: #333;
             color: #00ffcc;
-            /* Default safe color */
             min-height: 40px;
             transition: background-color 0.3s, color 0.3s;
         }
@@ -71,6 +70,8 @@
             overflow: hidden;
             width: 100%;
             max-width: 800px;
+            /* 1280x720 aspect ratio */
+            aspect-ratio: 16/9;
             flex-grow: 1;
             display: flex;
             align-items: center;
@@ -79,9 +80,15 @@
             position: relative;
         }
 
-        .video-container img {
-            max-width: 100%;
-            max-height: 100%;
+        /* Access to local webcam video (hidden, we draw to canvas) */
+        #localVideo {
+            display: none;
+        }
+
+        /* Main Display Canvas */
+        #videoCanvas {
+            width: 100%;
+            height: 100%;
             object-fit: contain;
         }
 
@@ -115,31 +122,41 @@
             background-color: #ff4444;
             color: white;
         }
+
+        /* Status Overlay on Canvas (optional, if we want raw text) */
+        #statsOverlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: #0f0;
+            font-family: monospace;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            pointer-events: none;
+        }
     </style>
 </head>
 
 <body>
-    <h1>Face & Gaze Security Monitor</h1>
+    <h1>Face & Gaze Security Monitor (Client-Side)</h1>
 
-    <!-- New Warning Area -->
     <div id="warningDisplay">System Safe</div>
 
     <div class="video-container">
-        <img src="/video_feed" alt="Video Feed" id="videoFeed">
-        <!-- Zoom Button Overlay -->
-        <button onclick="window.open('/webcam-test', '_blank')"
+        <!-- Hidden source video -->
+        <video id="localVideo" autoplay muted playsinline></video>
+        <!-- Drawing Canvas -->
+        <canvas id="videoCanvas"></canvas>
+
+        <button onclick="toggleFullScreen()"
             style="position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.5); color: white; border: 1px solid white;">
-            ⤢ Fullscreen Test
+            ⤢ Fullscreen
         </button>
     </div>
 
     <div class="controls">
         <button onclick="stopServer()" class="stop-btn">Stop Server</button>
         <span id="fpsDisplay" style="margin-left: 20px; font-weight: bold; color: #00ffcc;">FPS: 0</span>
-    </div>
-
-    <div class="status">
-        <p>System Active • Real-time Monitoring</p>
     </div>
 
     <!-- Interview Overlay/Panel -->
@@ -180,78 +197,151 @@
     </div>
 
     <script>
-        // Performance Monitoring
+        // --- 1. Client-Side Video Logic ---
+        const localVideo = document.getElementById('localVideo');
+        const canvas = document.getElementById('videoCanvas');
+        const ctx = canvas.getContext('2d');
+        const warningDisplay = document.getElementById('warningDisplay');
+
+        let videoWs = null;
+        let lastAnalysis = null;
         let frameCount = 0;
         let lastFPSUpdate = performance.now();
-        const videoFeedImg = document.getElementById('videoFeed');
 
-        function measureFPS() {
-            if (videoFeedImg && videoFeedImg.complete && videoFeedImg.naturalWidth > 1) {
-                frameCount++;
+        // Start Camera
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, frameRate: 15 }, // Low res to save bandwidth
+                    audio: false
+                });
+                localVideo.srcObject = stream;
+
+                localVideo.onloadedmetadata = () => {
+                    canvas.width = localVideo.videoWidth;
+                    canvas.height = localVideo.videoHeight;
+                    requestAnimationFrame(drawLoop);
+                    connectVideoWebSocket(); // Connect WS after camera ready
+                };
+            } catch (err) {
+                alert("Camera Access Denied or Not Found!");
+                console.error(err);
             }
-            const now = performance.now();
-            if (now - lastFPSUpdate >= 1000) {
+        }
+
+        // WebSocket for Video Streaming
+        function connectVideoWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            videoWs = new WebSocket(`${protocol}//${window.location.host}/ws/video`);
+
+            videoWs.onopen = () => console.log("Video Stream Connected");
+            videoWs.onmessage = (event) => {
+                lastAnalysis = JSON.parse(event.data);
+                updateWarning(lastAnalysis.warning);
+            };
+            videoWs.onclose = () => {
+                console.log("Video WS Closed. Reconnecting...");
+                setTimeout(connectVideoWebSocket, 2000);
+            };
+        }
+
+        function updateWarning(msg) {
+            if (msg) {
+                warningDisplay.innerText = msg;
+                warningDisplay.classList.add('alert');
+            } else {
+                warningDisplay.innerText = "System Safe";
+                warningDisplay.classList.remove('alert');
+            }
+        }
+
+        let lastSendTime = 0;
+        const SEND_INTERVAL = 100; // Send 10 FPS to server (100ms)
+
+        function drawLoop(timestamp) {
+            // Draw video to canvas
+            ctx.drawImage(localVideo, 0, 0, canvas.width, canvas.height);
+
+            // Send Frame to Server (Throttled)
+            if (videoWs && videoWs.readyState === WebSocket.OPEN && (timestamp - lastSendTime > SEND_INTERVAL)) {
+                canvas.toBlob(blob => {
+                    if (blob) videoWs.send(blob);
+                }, 'image/jpeg', 0.5); // Quality 0.5
+                lastSendTime = timestamp;
+            }
+
+            // Draw Overlays from latest server analysis
+            if (lastAnalysis) {
+                drawOverlays(lastAnalysis);
+            }
+
+            // FPS Counter
+            frameCount++;
+            if (timestamp - lastFPSUpdate >= 1000) {
                 document.getElementById('fpsDisplay').innerText = `FPS: ${frameCount}`;
                 frameCount = 0;
-                lastFPSUpdate = now;
+                lastFPSUpdate = timestamp;
             }
-            requestAnimationFrame(measureFPS);
+
+            requestAnimationFrame(drawLoop);
         }
-        measureFPS();
 
-        // --- Warning Polling (WebSockets) ---
-        function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const ws = new WebSocket(`${protocol}//${window.location.host}/ws/status`);
+        function drawOverlays(data) {
+            const { box, auth, gaze } = data;
 
-            ws.onopen = () => {
-                console.log("Connected to Security Status Stream");
-            };
+            // Text Color
+            const color = auth ? '#00ff00' : '#ff0000';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.fillStyle = color;
+            ctx.font = "20px Arial";
 
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                const display = document.getElementById('warningDisplay');
+            // Draw Face Box
+            if (box) {
+                const [top, right, bottom, left] = box;
+                ctx.strokeRect(left, top, right - left, bottom - top);
+                ctx.fillText(`Auth: ${auth}`, left, top - 10);
+            }
 
-                if (data.warning) {
-                    display.innerText = data.warning;
-                    display.classList.add('alert');
-                } else {
-                    display.innerText = "System Safe";
-                    display.classList.remove('alert');
+            // Draw Gaze Text
+            ctx.fillStyle = data.warning ? 'red' : 'yellow';
+            ctx.fillText(`Gaze: ${gaze}`, 20, 50);
+        }
+
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
                 }
-            };
-
-            ws.onclose = () => {
-                console.log("Status Stream Disconnected. Reconnecting...");
-                setTimeout(connectWebSocket, 1000);
-            };
+            }
         }
 
-        connectWebSocket();
+        // Start everything on load
+        window.addEventListener('load', startCamera);
 
-        // --- Audio Logic ---
+
+        // --- 2. Existing Audio/Interview Logic (Untouched) ---
+        // (Copied from previous logic, ensuring it works with `startCamera` handling video)
+
         function playStartSound() {
             try {
                 const ctx = new (window.AudioContext || window.webkitAudioContext)();
                 const osc = ctx.createOscillator();
                 const gain = ctx.createGain();
-
                 osc.connect(gain);
                 gain.connect(ctx.destination);
-
                 osc.type = "sine";
-                osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
+                osc.frequency.setValueAtTime(880, ctx.currentTime);
                 osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
-
                 gain.gain.setValueAtTime(0.05, ctx.currentTime);
                 gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-
                 osc.start();
                 osc.stop(ctx.currentTime + 0.3);
             } catch (e) { }
         }
 
-        // --- Interview Logic ---
         let currentSessionId = null;
         let currentQuestionId = null;
         let mediaRecorder = null;
@@ -288,6 +378,8 @@
 
                 setTimeout(() => {
                     enrollmentRecorder.stop();
+                    // Don't stop tracks here, we might lose microphone permission? 
+                    // Actually, safer to keep validation stream separate.
                     stream.getTracks().forEach(track => track.stop());
                 }, 5000);
 
