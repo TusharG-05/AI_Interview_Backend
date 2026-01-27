@@ -117,37 +117,44 @@ def process_session_results(session_id: int):
         enrollment_path = session.enrollment_audio_path if session else None
         
         responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == session_id).all()
-        for resp in responses:
-            if resp.audio_path and not resp.transcribed_text:
-                # 0. Cleanup (Noise Reduction) - Run ONCE
-                try:
-                    # Overwrites or cleans file in place
+        for i, resp in enumerate(responses):
+            try:
+                print(f"DEBUG: Processing Response {i+1}/{len(responses)} (Q_ID: {resp.question_id})...")
+                if resp.audio_path and not resp.transcribed_text:
+                    # 0. Cleanup
                     audio_service.cleanup_audio(resp.audio_path)
-                except Exception as e:
-                    print(f"Cleanup failed for {resp.audio_path}: {e}")
 
-                # 1. Speaker Verification (New)
-                if enrollment_path:
-                    # enrollment_path should ideally be cleaned upon upload too, but assuming it's decent quality or we clean it here?
-                    # For performance, let's assume we clean it on upload (which we missed, but okay for now)
-                    is_match, score = audio_service.verify_speaker(enrollment_path, resp.audio_path)
+                    # 1. Speaker Verification (Optional/Fast)
+                    if enrollment_path:
+                        print(f"DEBUG: Verifying Speaker for Q{resp.question_id}...")
+                        is_match, score = audio_service.verify_speaker(enrollment_path, resp.audio_path)
+                        if not is_match:
+                            resp.transcribed_text = f"[SECURITY ALERT: VOICE MISMATCH ({score:.2f})] "
+                        else:
+                            resp.transcribed_text = ""
                     
-                    if not is_match:
-                        resp.transcribed_text = f"[SECURITY ALERT: VOICE MISMATCH DETECTED (Score: {score:.2f})] "
-                    else:
-                        resp.transcribed_text = ""
-                
-                # 2. Transcribe
-                text = audio_service.speech_to_text(resp.audio_path)
-                resp.transcribed_text = (resp.transcribed_text or "") + text
-                
-                # 3. Match with reference
-                q = db.query(Question).filter(Question.id == resp.question_id).first()
-                if q:
-                    score = nlp_service.calculate_similarity(text, q.reference_answer)
-                    resp.similarity_score = score
-        db.commit()
+                    # 2. Transcribe (High Speed Tiny Model)
+                    print(f"DEBUG: Transcribing Q{resp.question_id} with High-Speed engine...")
+                    text = audio_service.speech_to_text(resp.audio_path)
+                    print(f"DEBUG: Q{resp.question_id} Result: '{text}'")
+                    
+                    resp.transcribed_text = (resp.transcribed_text or "") + text
+                    
+                    # 3. Match with reference
+                    q = db.query(Question).filter(Question.id == resp.question_id).first()
+                    if q:
+                        score = nlp_service.calculate_similarity(text, q.reference_answer)
+                        print(f"DEBUG: Q{resp.question_id} Similarity: {score:.2f}")
+                        resp.similarity_score = score
+                    
+                    db.commit() # Save progress instantly
+            except Exception as inner_e:
+                print(f"ERROR processing response {resp.id}: {inner_e}")
+                db.rollback()
+                continue
+
+        print(f"DEBUG: Session {session_id} background processing COMPLETED.")
     except Exception as e:
-        print(f"Error processing session {session_id}: {e}")
+        print(f"CRITICAL Error processing session {session_id}: {e}")
     finally:
         db.close()
