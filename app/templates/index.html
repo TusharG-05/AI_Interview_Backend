@@ -199,15 +199,17 @@
         }
         measureFPS();
 
-        // --- Warning Polling (New) ---
-        // Since we can't easily parse text from the image, we'll hit a lightweight endpoint
-        // Or we can rely on the video text. 
-        // OPTION: Create a tiny endpoint to get warning state.
-        // For now, let's create that endpoint in python plan or just poll
-        setInterval(async () => {
-            try {
-                const res = await fetch('/status');
-                const data = await res.json();
+        // --- Warning Polling (WebSockets) ---
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${window.location.host}/ws/status`);
+
+            ws.onopen = () => {
+                console.log("Connected to Security Status Stream");
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
                 const display = document.getElementById('warningDisplay');
 
                 if (data.warning) {
@@ -217,8 +219,37 @@
                     display.innerText = "System Safe";
                     display.classList.remove('alert');
                 }
+            };
+
+            ws.onclose = () => {
+                console.log("Status Stream Disconnected. Reconnecting...");
+                setTimeout(connectWebSocket, 1000);
+            };
+        }
+
+        connectWebSocket();
+
+        // --- Audio Logic ---
+        function playStartSound() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
+                osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
+
+                gain.gain.setValueAtTime(0.05, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+
+                osc.start();
+                osc.stop(ctx.currentTime + 0.3);
             } catch (e) { }
-        }, 500);
+        }
 
         // --- Interview Logic ---
         let currentSessionId = null;
@@ -252,6 +283,7 @@
                 };
 
                 enrollmentRecorder.start();
+                playStartSound();
                 initialView.innerHTML = "<h2>Enrolling Voice Fingerprint...</h2><p>Please say 'I am ready for the interview'</p>";
 
                 setTimeout(() => {
@@ -314,6 +346,7 @@
                 };
 
                 mediaRecorder.start();
+                playStartSound();
                 status.innerText = "Listening... Speak your answer.";
                 submitBtn.disabled = false;
                 submitBtn.style.backgroundColor = "#00ffcc";

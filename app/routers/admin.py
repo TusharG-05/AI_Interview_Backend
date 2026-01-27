@@ -78,13 +78,27 @@ def get_results(db: Session = Depends(get_db)):
         dt_object = datetime.datetime.fromtimestamp(s.start_time)
         formatted_date = dt_object.strftime("%Y-%m-%d %H:%M")
 
+        # Build Details List
+        details = []
+        for r in responses:
+            q_text = r.question.question_text if r.question else "Unknown Question"
+            ans_text = r.transcribed_text or "[No Answer]"
+            q_score = f"{round(r.similarity_score * 100, 1)}%" if r.similarity_score is not None else "0%"
+            
+            details.append({
+                "question": q_text,
+                "answer": ans_text,
+                "score": q_score
+            })
+
         results.append({
             "session_id": s.id,
             "candidate": s.candidate_name,
             "date": formatted_date,
             "score": f"{round(avg_score, 1)}%",
             "status": "Completed" if s.is_completed else "In Progress",
-            "flags": len(flags) > 0
+            "flags": len(flags) > 0,
+            "details": details
         })
     return results
 

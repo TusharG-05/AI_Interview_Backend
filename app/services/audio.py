@@ -5,14 +5,12 @@ from faster_whisper import WhisperModel
 import numpy as np
 import torch
 import soundfile as sf
-import resampy
-from scipy.signal import butter, lfilter
 from speechbrain.inference.speaker import EncoderClassifier
-import noisereduce as nr
+from pydub import AudioSegment
 
 
 class AudioService:
-    def __init__(self, stt_model_size="base"):
+    def __init__(self, stt_model_size="tiny.en"):
         print(f"Initializing AudioService (Lazy Loading enabled)...")
         self.stt_model_size = stt_model_size
         self.female_voice = "en-US-AvaNeural"
@@ -25,11 +23,14 @@ class AudioService:
     @property
     def stt_model(self):
         if self._stt_model is None:
-            print(f"Loading Whisper Model ({self.stt_model_size})...")
+            # Sweet spot: base.en is much better than tiny, faster than base.
+            model_to_use = "base.en" if self.stt_model_size != "tiny.en" else "tiny.en"
+            print(f"Loading Whisper Model ({model_to_use})...")
             self._stt_model = WhisperModel(
-                self.stt_model_size,
+                model_to_use,
                 device="cpu",
-                compute_type="int8"
+                compute_type="float32", 
+                cpu_threads=2 # Leave cores for camera/gaze to avoid 15min hang
             )
         return self._stt_model
 
@@ -50,6 +51,19 @@ class AudioService:
 
     # ---------- WINDOWS SAFE AUDIO ----------
 
+    def fix_audio_format(self, file_path: str):
+        """Converts ANY audio (WebM, etc.) to 16kHz Mono WAV."""
+        try:
+            audio = AudioSegment.from_file(file_path)
+            audio = audio.set_frame_rate(16000).set_channels(1)
+            # Normalize to -20dBFS for consistent AI results
+            change_in_dbfs = -20.0 - audio.dBFS
+            audio = audio.apply_gain(change_in_dbfs)
+            audio.export(file_path, format="wav")
+            print(f"DEBUG: Converted {file_path} to 16kHz WAV.")
+        except Exception as e:
+            print(f"ERROR converting audio {file_path}: {e}")
+
     def load_audio(self, audio_path, target_sr=None):
         audio, sr = sf.read(audio_path)
         if audio.ndim > 1:
@@ -66,14 +80,11 @@ class AudioService:
 
     def cleanup_audio(self, audio_path):
         """
-        Applies noise reduction and saves to the same file.
-        Returns the path to the cleaned audio.
+        Windows-safe audio fix. Disables intensive NR for speed.
+        The VAD filter in STT handles the rest.
         """
         try:
-            audio, sr = self.load_audio(audio_path)
-            # Gentle noise reduction
-            reduced = nr.reduce_noise(y=audio, sr=sr, prop_decrease=0.8)
-            self.save_audio(reduced, sr, audio_path)
+            self.fix_audio_format(audio_path)
             return audio_path
         except Exception as e:
             print(f"Audio Cleanup Error: {e}")
@@ -101,8 +112,18 @@ class AudioService:
 
         # Assumes audio_path is already cleaned if desired
         try:
-            segments, _ = self.stt_model.transcribe(audio_path, beam_size=5)
-            return " ".join(seg.text for seg in segments).strip()
+            # optimized for speed & accuracy
+            segments, info = self.stt_model.transcribe(
+                audio_path, 
+                beam_size=1, 
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500),
+                no_speech_threshold=0.5, # Stops "bathroom" hallucinations
+                initial_prompt="Interview answer about technology and programming."
+            )
+            text = " ".join(seg.text for seg in segments).strip()
+            # If still nothing, return a clean string
+            return text if text else "[Silence/No Speech Detected]"
         except Exception as e:
             print(f"STT Error: {e}")
             return ""

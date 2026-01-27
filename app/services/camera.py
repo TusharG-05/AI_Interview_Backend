@@ -36,6 +36,7 @@ class CameraService:
         self.current_warning_text: str = ""
         self.frame_lock = threading.Lock()
         self._detectors_ready = False
+        self.listeners = []
 
     def start(self, video_source=0):
         if self.running: return
@@ -231,7 +232,14 @@ class CameraService:
             elif "WARNING" in str(gaze_txt):
                 warning_msg = str(gaze_txt)
 
-            self.current_warning_text = warning_msg # Update state for polling
+            # Notify listeners if state changed (Deduplicate updates)
+            if warning_msg != self.current_warning_text:
+                self.current_warning_text = warning_msg
+                for callback in self.listeners:
+                    try:
+                        callback(warning_msg)
+                    except:
+                        pass # Ignore detached listeners
 
             f_clr = (0, 255, 0) if (found and n_face == 1) else (0, 0, 255)
             g_clr = (0, 0, 255) if warning_msg else (255, 255, 0)
@@ -247,4 +255,12 @@ class CameraService:
             if ret:
                 with self.frame_lock:
                     self.latest_frame = buffer.tobytes()
-                    self.frame_id += 1
+                    self.frame_id += 1 
+
+    def add_listener(self, callback):
+        """Register a callback function to be called on status change."""
+        self.listeners.append(callback)
+
+    def remove_listener(self, callback):
+        if callback in self.listeners:
+            self.listeners.remove(callback)
