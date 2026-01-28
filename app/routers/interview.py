@@ -1,12 +1,21 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from ..core.database import get_db, Question, InterviewSession, CandidateResponse
+from ..core.database import get_db
+from ..models.db_models import Question, InterviewSession, InterviewResponse as CandidateResponse
+import os
+from datetime import datetime
+import uuid
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
-import os
-import time
-import uuid
+from pydantic import BaseModel
+
+class TTSRange(BaseModel):
+    text: str
+
+class EvaluateRequest(BaseModel):
+    candidate_text: str
+    reference_text: str
 
 router = APIRouter(prefix="/interview", tags=["interview"])
 audio_service = AudioService()
@@ -18,7 +27,7 @@ async def start_interview(
     enrollment_audio: UploadFile = File(None),
     db: Session = Depends(get_db)
 ):
-    session = InterviewSession(candidate_name=candidate_name, start_time=time.time())
+    session = InterviewSession(candidate_name=candidate_name, start_time=datetime.utcnow())
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -106,7 +115,7 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, d
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    session.end_time = time.time()
+    session.end_time = datetime.utcnow()
     session.is_completed = True
     db.commit()
     
@@ -117,51 +126,69 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, d
 
 def process_session_results(session_id: int):
     # This runs in background to avoid blocking
-    from ..core.database import SessionLocal
-    db = SessionLocal()
-    try:
-        session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
-        enrollment_path = session.enrollment_audio_path if session else None
-        
-        responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == session_id).all()
-        for i, resp in enumerate(responses):
-            try:
-                print(f"DEBUG: Processing Response {i+1}/{len(responses)} (Q_ID: {resp.question_id})...")
-                if resp.audio_path and not resp.transcribed_text:
-                    # 0. Cleanup
-                    audio_service.cleanup_audio(resp.audio_path)
+    from ..core.database import engine
+    from sqlmodel import Session
+    with Session(engine) as db:
+        try:
+            session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
+            enrollment_path = session.enrollment_audio_path if session else None
+            
+            responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == session_id).all()
+            for i, resp in enumerate(responses):
+                try:
+                    print(f"DEBUG: Processing Response {i+1}/{len(responses)} (Q_ID: {resp.question_id})...")
+                    if resp.audio_path and not resp.transcribed_text:
+                        # 0. Cleanup
+                        audio_service.cleanup_audio(resp.audio_path)
 
-                    # 1. Speaker Verification (Optional/Fast)
-                    if enrollment_path:
-                        print(f"DEBUG: Verifying Speaker for Q{resp.question_id}...")
-                        is_match, score = audio_service.verify_speaker(enrollment_path, resp.audio_path)
-                        if not is_match:
-                            resp.transcribed_text = f"[SECURITY ALERT: VOICE MISMATCH ({score:.2f})] "
-                        else:
-                            resp.transcribed_text = ""
-                    
-                    # 2. Transcribe (High Speed Tiny Model)
-                    print(f"DEBUG: Transcribing Q{resp.question_id} with High-Speed engine...")
-                    text = audio_service.speech_to_text(resp.audio_path)
-                    print(f"DEBUG: Q{resp.question_id} Result: '{text}'")
-                    
-                    resp.transcribed_text = (resp.transcribed_text or "") + text
-                    
-                    # 3. Match with reference
-                    q = db.query(Question).filter(Question.id == resp.question_id).first()
-                    if q:
-                        score = nlp_service.calculate_similarity(text, q.reference_answer)
-                        print(f"DEBUG: Q{resp.question_id} Similarity: {score:.2f}")
-                        resp.similarity_score = score
-                    
-                    db.commit() # Save progress instantly
-            except Exception as inner_e:
-                print(f"ERROR processing response {resp.id}: {inner_e}")
-                db.rollback()
-                continue
+                        # 1. Speaker Verification (Optional/Fast)
+                        if enrollment_path:
+                            print(f"DEBUG: Verifying Speaker for Q{resp.question_id}...")
+                            is_match, score = audio_service.verify_speaker(enrollment_path, resp.audio_path)
+                            if not is_match:
+                                resp.transcribed_text = f"[SECURITY ALERT: VOICE MISMATCH ({score:.2f})] "
+                            else:
+                                resp.transcribed_text = ""
+                        
+                        # 2. Transcribe (High Speed Tiny Model)
+                        print(f"DEBUG: Transcribing Q{resp.question_id} with High-Speed engine...")
+                        text = audio_service.speech_to_text(resp.audio_path)
+                        print(f"DEBUG: Q{resp.question_id} Result: '{text}'")
+                        
+                        resp.transcribed_text = (resp.transcribed_text or "") + text
+                        
+                        # 3. Match with reference
+                        q = db.query(Question).filter(Question.id == resp.question_id).first()
+                        if q:
+                            score = nlp_service.calculate_similarity(text, q.reference_answer)
+                            print(f"DEBUG: Q{resp.question_id} Similarity: {score:.2f}")
+                            resp.similarity_score = score
+                        
+                        db.commit() # Save progress instantly
+                except Exception as inner_e:
+                    print(f"ERROR processing response {resp.id}: {inner_e}")
+                    db.rollback()
+                    continue
 
-        print(f"DEBUG: Session {session_id} background processing COMPLETED.")
-    except Exception as e:
-        print(f"CRITICAL Error processing session {session_id}: {e}")
-    finally:
-        db.close()
+            print(f"DEBUG: Session {session_id} background processing COMPLETED.")
+        except Exception as e:
+            print(f"CRITICAL Error processing session {session_id}: {e}")
+
+
+
+@router.post("/tts")
+async def standalone_tts(req: TTSRange):
+    """Standalone TTS endpoint for frontend testing."""
+    os.makedirs("app/assets/audio/standalone", exist_ok=True)
+    temp_id = uuid.uuid4().hex[:8]
+    audio_path = f"app/assets/audio/standalone/tts_{temp_id}.mp3"
+    
+    await audio_service.text_to_speech(req.text, audio_path)
+    
+    return FileResponse(audio_path, media_type="audio/mpeg")
+
+@router.post("/evaluate")
+async def standalone_evaluate(req: EvaluateRequest):
+    """Standalone NLP similarity evaluation for frontend testing."""
+    score = nlp_service.calculate_similarity(req.candidate_text, req.reference_text)
+    return {"score": round(score, 4)}

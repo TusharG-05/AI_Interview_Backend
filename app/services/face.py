@@ -9,6 +9,9 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from ..utils.image_processing import convert_to_rgb, resize_with_aspect_ratio
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def face_recognition_worker(frame_queue, result_queue, known_encoding):
@@ -25,6 +28,11 @@ def face_recognition_worker(frame_queue, result_queue, known_encoding):
         'last_recog_time': 0,
         'lock': threading.Lock()
     }
+    
+    # Configure logging for worker process
+    from ..core.logger import setup_logging
+    setup_logging()
+    worker_logger = get_logger("face_worker")
 
     # Initialize MediaPipe
     base_options = python.BaseOptions(model_asset_path='app/assets/face_landmarker.task')
@@ -150,24 +158,24 @@ def face_recognition_worker(frame_queue, result_queue, known_encoding):
             if not result_queue.full():
                 result_queue.put((match_val, conf_val, len(final_locs), final_locs))
         except Exception as e:
-            print(f"Face Worker Error: {e}")
+            worker_logger.error(f"Face Worker Error: {e}")
 
 class FaceDetector:
     def __init__(self, known_person_path="known_person.jpg"):
-        print("Starting Zero-Lag Modernized Face Service (2026)...")
+        logger.info("Starting Zero-Lag Modernized Face Service (2026)...")
         try:
             # Generate encoding for known person using DeepFace
-            print("FaceDetector: Loading DeepFace/ArcFace Model...", flush=True)
+            logger.info("FaceDetector: Loading DeepFace/ArcFace Model...")
             objs = DeepFace.represent(
                 img_path=known_person_path, 
                 model_name="ArcFace", 
                 enforce_detection=True,
                 detector_backend="opencv"
             )
-            print("FaceDetector: DeepFace Model Loaded.", flush=True)
+            logger.info("FaceDetector: DeepFace Model Loaded.")
             self.known_encoding = np.array(objs[0]["embedding"]) if objs else None
         except Exception as e:
-            print(f"Known Person Load Error: {e}")
+            logger.error(f"Known Person Load Error: {e}")
             self.known_encoding = None
 
         self.frame_queue = multiprocessing.Queue(maxsize=1)

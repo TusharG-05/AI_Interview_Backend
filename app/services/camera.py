@@ -7,6 +7,9 @@ from typing import Optional, Tuple
 from .face import FaceDetector
 from .gaze import GazeDetector
 from ..utils.image_processing import decode_image
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 class CameraService:
     """
@@ -47,30 +50,30 @@ class CameraService:
         video_source is ignored in Client-Side mode but kept for signature compatibility.
         """
         if self.running: return
-        print(f"Starting CameraService (Client-Side Streaming Mode)...", flush=True)
+        logger.info("Starting CameraService (Client-Side Streaming Mode)...")
         
         # Init Detectors in background
         def init_detectors():
-            print("Background: Initializing Detectors...", flush=True)
+            logger.info("Background: Initializing Detectors...")
             known_path = "app/assets/known_person.jpg"
             gaze_path = "app/assets/face_landmarker.task"
             
             if os.path.exists(known_path):
                 try:
                     self.face_detector = FaceDetector(known_person_path=known_path)
-                    print("Background: FaceDetector ready.", flush=True)
+                    logger.info("Background: FaceDetector ready.")
                 except Exception as e:
-                    print(f"Background: FaceDetector failed: {e}", flush=True)
+                    logger.error(f"Background: FaceDetector failed: {e}")
             
             if os.path.exists(gaze_path):
                 try:
                     self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
-                    print("Background: GazeDetector ready.", flush=True)
+                    logger.info("Background: GazeDetector ready.")
                 except Exception as e:
-                    print(f"Background: GazeDetector failed: {e}", flush=True)
+                    logger.error(f"Background: GazeDetector failed: {e}")
             
             self._detectors_ready = True
-            print("Background: All Detectors Initialized.", flush=True)
+            logger.info("Background: All Detectors Initialized.")
 
         threading.Thread(target=init_detectors, daemon=True).start()
         self.running = True
@@ -93,11 +96,11 @@ class CameraService:
         # Senior Dev Hardening: Worker Heartbeat Check
         # If a worker process crashed (e.g. OOM or driver error), attempt restart
         if self.face_detector and not self.face_detector.worker.is_alive():
-            print("RECOVERY: FaceDetector worker died. Restarting...")
+            logger.warning("RECOVERY: FaceDetector worker died. Restarting...")
             self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
             
         if self.gaze_detector and not self.gaze_detector.worker.is_alive():
-            print("RECOVERY: GazeDetector worker died. Restarting...")
+            logger.warning("RECOVERY: GazeDetector worker died. Restarting...")
             self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
 
         try:
@@ -144,7 +147,7 @@ class CameraService:
             }
             
         except Exception as e:
-            print(f"Frame Process Error: {e}")
+            logger.error(f"Frame Process Error: {e}")
             return {"warning": "Server Error"}
 
     def update_identity(self, image_bytes: bytes) -> bool:
@@ -152,7 +155,7 @@ class CameraService:
         filepath = "app/assets/known_person.jpg"
         with open(filepath, "wb") as f:
             f.write(image_bytes)
-        print(f"Identity updated. Reloading FaceDetector...")
+        logger.info("Identity updated. Reloading FaceDetector...")
         
         # Stop old wrapper
         if self.face_detector:
@@ -163,7 +166,7 @@ class CameraService:
             self.face_detector = FaceDetector(known_person_path=filepath)
             return True
         except Exception as e:
-            print(f"Failed to reload FaceDetector: {e}")
+            logger.error(f"Failed to reload FaceDetector: {e}")
             return False
 
     def add_listener(self, callback):

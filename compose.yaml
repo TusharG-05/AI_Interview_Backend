@@ -1,0 +1,16 @@
+services:
+  facegazedetection:
+    image: tusharg05/face_gaze_interview:latest
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    ports:
+      - 8000:8000
+    volumes:
+      - ./interview_system.db:/app/interview_system.db
+      - ./app/assets:/app/app/assets
+      - ./app:/app/app
+      - ./main.py:/app/main.py
+      - ./.env:/app/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

@@ -11,15 +11,14 @@ if __name__ == "__main__":
         
     print("Starting Server in STABLE mode (Reload Disabled for camera stability)...")
     
-    # Auto-setup ffmpeg path for pydub
-    try:
-        import static_ffmpeg
-        static_ffmpeg.add_paths()
-    except ImportError:
-        print("Warning: static-ffmpeg not found. Audio processing will fail if ffmpeg is not in PATH.")
-
     import os
     import socket
+    import shutil
+    
+    # Ensure ffmpeg is available for pydub
+    if not shutil.which("ffmpeg"):
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
     
     # Get local IP for easier connecting
     hostname = socket.gethostname()
