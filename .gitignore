@@ -138,11 +138,14 @@ celerybeat.pid
 .env
 .envrc
 .venv311
+.venv/
 env/
 venv311/
+venv/
 ENV/
 env.bak/
 venv311.bak/
+venv.bak/
 
 # Spyder project settings
 .spyderproject
@@ -205,3 +208,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# VS Code
+.vscode/
+
+# Logs
+error.log
+
+# User Generated Content
+assets/audio/
+assets/known_person.jpg
