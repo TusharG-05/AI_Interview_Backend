@@ -7,11 +7,14 @@ import torch
 import soundfile as sf
 from speechbrain.inference.speaker import EncoderClassifier
 from pydub import AudioSegment
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class AudioService:
     def __init__(self, stt_model_size="base.en"):
-        print(f"Initializing AudioService (Lazy Loading enabled)...")
+        logger.info(f"Initializing AudioService (Lazy Loading enabled)...")
         self.stt_model_size = stt_model_size
         self.female_voice = "en-US-AvaNeural"
         
@@ -24,7 +27,7 @@ class AudioService:
     def stt_model(self):
         if self._stt_model is None:
             # Upgrade: base.en with int8 quantization is faster/better on i7
-            print(f"Loading Whisper Model ({self.stt_model_size})...")
+            logger.info(f"Loading Whisper Model ({self.stt_model_size})...")
             self._stt_model = WhisperModel(
                 self.stt_model_size,
                 device="cpu",
@@ -36,7 +39,7 @@ class AudioService:
     @property
     def speaker_model(self):
         if self._speaker_model is None:
-            print("Loading Speaker Verification Model...")
+            logger.info("Loading Speaker Verification Model...")
             self._speaker_model = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb",
                 run_opts={"device": "cpu"}
@@ -59,9 +62,9 @@ class AudioService:
             change_in_dbfs = -20.0 - audio.dBFS
             audio = audio.apply_gain(change_in_dbfs)
             audio.export(file_path, format="wav")
-            print(f"DEBUG: Converted {file_path} to 16kHz WAV.")
+            logger.debug(f"Converted {file_path} to 16kHz WAV.")
         except Exception as e:
-            print(f"ERROR converting audio {file_path}: {e}")
+            logger.error(f"Error converting audio {file_path}: {e}")
 
     def load_audio(self, audio_path, target_sr=None):
         audio, sr = sf.read(audio_path)
@@ -86,7 +89,7 @@ class AudioService:
             self.fix_audio_format(audio_path)
             return audio_path
         except Exception as e:
-            print(f"Audio Cleanup Error: {e}")
+            logger.error(f"Audio Cleanup Error: {e}")
             return audio_path
 
     def get_voice_print(self, audio_path):
@@ -124,7 +127,7 @@ class AudioService:
             # If still nothing, return a clean string
             return text if text else "[Silence/No Speech Detected]"
         except Exception as e:
-            print(f"STT Error: {e}")
+            logger.error(f"STT Error: {e}")
             return ""
 
     def save_audio_blob(self, blob, output_path):
@@ -139,5 +142,5 @@ class AudioService:
             audio = AudioSegment.from_file(audio_path)
             return audio.rms
         except Exception as e:
-            print(f"Energy Check Error: {e}")
+            logger.error(f"Energy Check Error: {e}")
             return 0

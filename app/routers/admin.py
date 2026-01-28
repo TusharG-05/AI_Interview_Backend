@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from sqlalchemy.orm import Session, joinedload
-from ..core.database import get_db, Question, init_db, InterviewSession, CandidateResponse
+from ..core.database import get_db, init_db
+from ..models.db_models import Question, InterviewSession, CandidateResponse
 from ..services.nlp import NLPService
 import os
 import shutil
@@ -77,8 +78,7 @@ def get_results(db: Session = Depends(get_db)):
         flags = [r.transcribed_text for r in responses if "SECURITY ALERT" in (r.transcribed_text or "")]
         
         # Format Timestamp
-        dt_object = datetime.datetime.fromtimestamp(s.start_time)
-        formatted_date = dt_object.strftime("%Y-%m-%d %H:%M")
+        formatted_date = s.start_time.strftime("%Y-%m-%d %H:%M")
 
         # Build Details List
         details = []

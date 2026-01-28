@@ -3,34 +3,29 @@ import fitz  # PyMuPDF
 import re
 import uuid
 from docx import Document
-from sentence_transformers import SentenceTransformer, util
-import torch
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 class NLPService:
     def __init__(self, model_name='all-MiniLM-L6-v2'):
-        print(f"Initializing NLPService (Lazy Loading)...")
+        logger.info("Initializing NLPService (Lazy Loading with LLM)...")
         self.model_name = model_name
-        self._model = None
-
-    @property
-    def model(self):
-        if self._model is None:
-            print(f"Loading NLP Model ({self.model_name})...")
-            self._model = SentenceTransformer(self.model_name)
-        return self._model
 
     def calculate_similarity(self, text1, text2):
-        """Calculates semantic similarity between two strings."""
+        """
+        Calculates similarity using LLM evaluation.
+        Returns a score between 0 and 1.
+        """
         if not text1 or not text2:
             return 0.0
         
-        embeddings1 = self.model.encode(text1, convert_to_tensor=True)
-        embeddings2 = self.model.encode(text2, convert_to_tensor=True)
-        
-        cosine_score = util.cos_sim(embeddings1, embeddings2)
-        return float(cosine_score[0][0])
+        from .interview import evaluate_answer_content
+        result = evaluate_answer_content(question=text2, answer=text1) # text2 is usually the reference/question
+        return float(result.get("score", 0.0)) / 10.0 # Assuming score is 0-10, normalize to 0-1
 
     def extract_qa_from_file(self, file_path):
+
         """Extracts Q&A pairs from .txt, .pdf, or .docx files."""
         ext = os.path.splitext(file_path)[1].lower()
         content = ""
@@ -50,13 +45,13 @@ class NLPService:
             else:
                 raise ValueError(f"Unsupported file format: {ext}")
         except Exception as e:
-            print(f"Error reading file {file_path}: {e}")
+            logger.error(f"Error reading file {file_path}: {e}")
             return []
 
         # Debug: Print first 500 chars to see what was extracted
-        print(f"--- DOCUMENT CONTENT PREVIEW ({ext}) ---")
-        print(content[:500])
-        print("---------------------------------------")
+        logger.debug(f"--- DOCUMENT CONTENT PREVIEW ({ext}) ---")
+        logger.debug(content[:500])
+        logger.debug("---------------------------------------")
 
         return self.parse_qa_pairs(content)
 
@@ -107,5 +102,5 @@ class NLPService:
         if current_q and current_a:
             qa_pairs.append({'question': current_q.strip(), 'answer': current_a.strip()})
 
-        print(f"Extraction result: Found {len(qa_pairs)} pairs.")
+        logger.info(f"Extraction result: Found {len(qa_pairs)} pairs.")
         return qa_pairs
