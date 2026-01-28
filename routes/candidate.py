@@ -42,10 +42,11 @@ async def join_room(
     # 2. Check if session already exists for this room/user? 
     # For now, allow multiple sessions or maybe just one? Let's create a new session.
     
-    # Check max sessions limit
+    # Check max sessions limit (Only count ACTIVE sessions)
     if room.max_sessions is not None:
-        if len(room.sessions) >= room.max_sessions:
-             raise HTTPException(status_code=400, detail="Room has reached maximum session limit")
+        active_sessions_count = len([s for s in room.sessions if s.end_time is None])
+        if active_sessions_count >= room.max_sessions:
+             raise HTTPException(status_code=400, detail="Room has reached maximum active session limit. Please try again later.")
 
     new_session = InterviewSession(
         room_id=room.id,

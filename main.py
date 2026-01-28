@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 from routes.interview import router as interview_router
 from routes.auth import router as auth_router
 from routes.admin import router as admin_router
+from routes.video import router as video_router
 from routes.candidate import router as candidate_router
 from config.database import create_db_and_tables
 
@@ -41,5 +42,6 @@ async def root():
 # Include routes
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.include_router(video_router)
 app.include_router(candidate_router)
 app.include_router(interview_router)

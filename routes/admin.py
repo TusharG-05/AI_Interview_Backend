@@ -77,8 +77,9 @@ async def update_room(
     session.commit()
     session.refresh(room)
     
+    
     # helper for active count
-    active_count = len(room.sessions)
+    active_count = len([s for s in room.sessions if s.end_time is None])
     
     return RoomRead(
         id=room.id,
@@ -99,6 +100,21 @@ async def delete_room(
     if not room or room.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Room not found")
         
+    # Manual Cascade Delete: Responses -> Sessions -> Room
+    # 1. Get all sessions for this room
+    sessions = session.exec(select(InterviewSession).where(InterviewSession.room_id == room_id)).all()
+    
+    for s in sessions:
+        # 2. Delete responses for each session
+        statement = select(InterviewResponse).where(InterviewResponse.session_id == s.id)
+        responses = session.exec(statement).all()
+        for r in responses:
+            session.delete(r)
+        
+        # 3. Delete the session itself
+        session.delete(s)
+        
+    # 4. Delete the room
     session.delete(room)
     session.commit()
     return {"message": "Room deleted successfully"}
@@ -120,7 +136,7 @@ async def list_rooms(
             password=r.password,
             is_active=r.is_active,
             max_sessions=r.max_sessions,
-            active_sessions_count=len(r.sessions)
+            active_sessions_count=len([s for s in r.sessions if s.end_time is None])
         ))
     return result
 

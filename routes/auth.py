@@ -7,7 +7,7 @@ from sqlmodel import Session
 from config.database import get_session
 from models.db_models import User, UserRole
 from auth.security import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
-from auth.security import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+
 from schemas.requests import UserCreate
 from schemas.responses import Token
 

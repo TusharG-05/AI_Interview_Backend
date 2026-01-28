@@ -12,6 +12,12 @@ from models.db_models import Question, InterviewResponse, InterviewSession, User
 from schemas.requests import AnswerRequest
 from auth.dependencies import get_current_user
 from services import interview_service, resume_service
+from services.audio import AudioService
+import uuid
+import os
+
+audio_service = AudioService()
+
 
 # Initialize templates
 templates = Jinja2Templates(directory="templates")
@@ -44,33 +50,79 @@ async def evaluate_answer(
     if not interview_session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    evaluation = interview_service.evaluate_answer_content(request.question, request.answer)
+    evaluation_result = interview_service.evaluate_answer_content(request.question, request.answer)
     
-    # Logic update: We need question_id for the foreign key.
-    # WORKAROUND: For this iteration, if we can't find the question, we create it.
-    
-    q_stmt = select(Question).where(Question.content == request.question)
-    db_question = session_db.exec(q_stmt).first()
-    
-    if not db_question:
-        # Create a dynamic question entry
-        db_question = Question(content=request.question, topic="Dynamic/Resume", difficulty="Unknown")
-        session_db.add(db_question)
-        session_db.commit()
-        session_db.refresh(db_question)
+    # Use helper to find or create question
+    db_question = interview_service.get_or_create_question(
+        session_db, 
+        request.question, 
+        topic="Dynamic/Resume"
+    )
 
     new_response = InterviewResponse(
         session_id=session_id,
         question_id=db_question.id,
         answer_text=request.answer,
-        evaluation_text=evaluation,
-        score=0.0 # TODO: Parse score from evaluation text if possible
+        evaluation_text=evaluation_result["feedback"],
+        score=evaluation_result["score"]
     )
     
     session_db.add(new_response)
     session_db.commit()
     
-    return {"feedback": evaluation}
+    return {"feedback": evaluation_result["feedback"], "score": evaluation_result["score"]}
+
+@router.post("/submit-audio")
+async def submit_audio(
+    session_id: int = Form(...),
+    question: str = Form(...),
+    audio: UploadFile = File(...),
+    session_db: Session = Depends(get_session)
+):
+    # 1. Save Audio
+    os.makedirs("assets/audio/responses", exist_ok=True)
+    audio_filename = f"resp_{session_id}_{uuid.uuid4().hex[:8]}.wav"
+    audio_path = f"assets/audio/responses/{audio_filename}"
+    
+    content = await audio.read()
+    audio_service.save_audio_blob(content, audio_path)
+    
+    # 2. Transcribe
+    # Clean first?
+    audio_service.cleanup_audio(audio_path)
+    transcribed_text = audio_service.speech_to_text(audio_path)
+    
+    if not transcribed_text:
+        raise HTTPException(status_code=400, detail="Could not transcribe audio")
+        
+    # 3. Evaluate (Reuse existing logic)
+    # 3. Evaluate (Reuse existing logic)
+    evaluation_result = interview_service.evaluate_answer_content(question, transcribed_text)
+    
+    # 4. Save to DB using helper
+    db_question = interview_service.get_or_create_question(
+        session_db, 
+        question, 
+        topic="Audio/Dynamic"
+    )
+
+    new_response = InterviewResponse(
+        session_id=session_id,
+        question_id=db_question.id,
+        answer_text=transcribed_text, # Store text
+        evaluation_text=evaluation_result["feedback"],
+        score=evaluation_result["score"]
+    )
+    
+    session_db.add(new_response)
+    session_db.commit()
+    
+    return {
+        "transcription": transcribed_text,
+        "feedback": evaluation_result["feedback"],
+        "score": evaluation_result["score"]
+    }
+
 
 @router.post("/generate-resume-question")
 async def generate_resume_question(

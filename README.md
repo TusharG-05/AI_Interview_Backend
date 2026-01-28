@@ -20,7 +20,7 @@ A FastAPI-based application for practicing technical interviews with AI-powered 
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11 (Required for dependencies)
 - PostgreSQL
 - Ollama (running locally)
 
@@ -35,7 +35,7 @@ A FastAPI-based application for practicing technical interviews with AI-powered 
 2. **Create Virtual Environment**
    ```bash
    python -m venv .venv
-   .\.venv\Scripts\Activate
+   .\.venv311\Scripts\Activate
    ```
 
 3. **Install Dependencies**
