@@ -1,30 +1,34 @@
-# Use an official Python runtime as a parent image
+# For more information, please refer to https://aka.ms/vscode-docker-python
 FROM python:3.11-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Set the working directory in the container
-WORKDIR /app
-
-# Install system dependencies (ffmpeg for audio, build-essential for some python libs)
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy the requirements file into the container at /app
-COPY requirements.txt .
-
-# Install any needed packages specified in requirements.txt (with increased timeout)
-RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
-
-# Copy the rest of the application code
-COPY . .
-
-# Make port 8000 available to the world outside this container
 EXPOSE 8000
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Keeps Python from generating .pyc files in the container
+ENV PYTHONDONTWRITEBYTECODE=1
+# Turns off buffering for easier container logging
+ENV PYTHONUNBUFFERED=1
+
+# Install system dependencies for OpenCV, Faster-Whisper, and Audio processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    ffmpeg \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install pip requirements
+COPY requirements.txt .
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+COPY . /app
+
+# Creates a non-root user with an explicit UID and adds permission to access the /app folder
+RUN adduser -u 5678 --disabled-password --gecos "" appuser && chown -R appuser /app
+USER appuser
+
+# Use main.py as entrypoint for smarter SSL and config handling
+CMD ["python", "main.py"]
