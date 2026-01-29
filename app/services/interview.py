@@ -15,17 +15,23 @@ interview_chain = interview_prompt | local_llm
 evaluation_chain = evaluation_prompt | local_llm
 
 def generate_resume_question_content(context: str, resume_text: str) -> dict:
-    random_topic = random.choice(RESUME_TOPICS)
-    full_context = f"User Provided Context: {context}\n\nResume Content: {resume_text}"
+    # Use a priority sub-set of topics if they appear in resume
+    keywords = ["React", "Python", "Kubernetes", "Docker", "Go", "AWS", "SQL", "NoSQL", "Redis"]
+    found_keywords = [k for k in keywords if k.lower() in resume_text.lower()]
     
+    selected_topic = random.choice(found_keywords) if found_keywords else random.choice(RESUME_TOPICS)
+    
+    full_context = f"User Intent: {context}\n\nTECHNICAL RESUME DATA:\n{resume_text}"
+    
+    # We use the updated 'aggressive' prompt in the chain
     response = interview_chain.invoke({
         "context": full_context,
-        "topic": random_topic
+        "topic": selected_topic
     })
     
     return {
         "question": response.content,
-        "topic": random_topic
+        "topic": selected_topic
     }
 
 def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, float]]:

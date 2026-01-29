@@ -1,125 +1,163 @@
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-from sqlalchemy.orm import Session, joinedload
-from ..core.database import get_db, init_db
-from ..models.db_models import Question, InterviewSession, CandidateResponse
+from typing import List, Optional
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from sqlmodel import Session, select
+from ..core.database import get_db as get_session
+from ..models.db_models import Question, InterviewRoom, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent
+from ..auth.dependencies import get_admin_user
+from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
+from ..schemas.requests import RoomCreate, RoomUpdate, AdminCreate, UserUpdate
+from ..schemas.responses import RoomRead, SessionRead, UserRead
 import os
 import shutil
 import uuid
+import secrets
+from datetime import datetime
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["Admin"])
+templates = Jinja2Templates(directory="app/templates")
 nlp_service = NLPService()
 
-# Initialize DB on first load of admin (or we could do it in lifespan)
-init_db()
+@router.get("/dashboard", response_class=HTMLResponse)
+async def admin_dashboard(request: Request, current_user: User = Depends(get_admin_user)):
+    return templates.TemplateResponse("dashboard_admin.html", {"request": request})
 
-@router.get("/questions")
-def get_questions(db: Session = Depends(get_db)):
-    return db.query(Question).all()
+# --- Question Management ---
+
+@router.get("/questions", response_model=List[Question])
+async def get_questions(
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    return session.exec(select(Question)).all()
 
 @router.post("/upload-doc")
-async def upload_document(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # Save file temporarily with unique name
+async def upload_document(
+    file: UploadFile = File(...), 
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
     os.makedirs("temp_uploads", exist_ok=True)
-    file_id = uuid.uuid4().hex[:8]
-    file_path = f"temp_uploads/{file_id}_{file.filename}"
+    file_path = f"temp_uploads/{uuid.uuid4().hex[:8]}_{file.filename}"
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     
     try:
         qa_pairs = nlp_service.extract_qa_from_file(file_path)
-        
-        # Add to database
-        new_questions = []
         for pair in qa_pairs:
-            q = Question(
-                question_text=pair['question'],
-                reference_answer=pair['answer']
-            )
-            db.add(q)
-            new_questions.append(q)
-        
-        db.commit()
-        return {"message": f"Successfully extracted {len(qa_pairs)} questions", "questions": qa_pairs}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+            q = Question(content=pair['question'], question_text=pair['question'], reference_answer=pair['answer'], topic="Resume/Document")
+            session.add(q)
+        session.commit()
+        return {"message": f"Successfully extracted {len(qa_pairs)} questions"}
     finally:
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if os.path.exists(file_path): os.remove(file_path)
 
 @router.delete("/questions/{q_id}")
-def delete_question(q_id: int, db: Session = Depends(get_db)):
-    q = db.query(Question).filter(Question.id == q_id).first()
-    if not q:
-        raise HTTPException(status_code=404, detail="Question not found")
-    db.delete(q)
-    db.commit()
+async def delete_question(
+    q_id: int, 
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    q = session.get(Question, q_id)
+    if not q: raise HTTPException(status_code=404, detail="Question not found")
+    session.delete(q)
+    session.commit()
     return {"message": "Question deleted"}
 
-# --- New Admin Features ---
+# --- Room Management ---
+
+@router.post("/rooms", response_model=RoomRead)
+async def create_room(
+    room_data: RoomCreate, 
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
+    room_code = secrets.token_hex(3).upper()
+    while session.exec(select(InterviewRoom).where(InterviewRoom.room_code == room_code)).first():
+        room_code = secrets.token_hex(3).upper()
+        
+    new_room = InterviewRoom(
+        room_code=room_code,
+        password=room_data.password,
+        admin_id=current_user.id,
+        max_sessions=room_data.max_sessions or 30
+    )
+    session.add(new_room)
+    session.commit()
+    session.refresh(new_room)
+    return RoomRead(id=new_room.id, room_code=new_room.room_code, password=new_room.password, is_active=new_room.is_active, max_sessions=new_room.max_sessions, active_sessions_count=0)
+
+@router.get("/rooms", response_model=List[RoomRead])
+async def list_rooms(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+    rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)).all()
+    return [RoomRead(id=r.id, room_code=r.room_code, password=r.password, is_active=r.is_active, max_sessions=r.max_sessions, active_sessions_count=len([s for s in r.sessions if s.end_time is None])) for r in rooms]
+
+@router.delete("/rooms/{room_id}")
+async def delete_room(room_id: int, current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+    room = session.get(InterviewRoom, room_id)
+    if not room or room.admin_id != current_user.id: raise HTTPException(status_code=404, detail="Room not found")
+    # Cascade delete implementation
+    for s in room.sessions:
+        session.exec(f"DELETE FROM interviewresponse WHERE session_id = {s.id}")
+        session.exec(f"DELETE FROM proctoringevent WHERE session_id = {s.id}")
+        session.delete(s)
+    session.delete(room)
+    session.commit()
+    return {"message": "Room deleted"}
+
+# --- Results & Proctoring ---
 
 @router.get("/results")
-def get_results(db: Session = Depends(get_db)):
-    # Eagerly load all responses and their associated questions to avoid N+1 queries
-    sessions = db.query(InterviewSession).options(
-        joinedload(InterviewSession.responses).joinedload(CandidateResponse.question)
-    ).all()
+@router.get("/history")
+async def get_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+    # Fetch sessions for rooms owned by this admin
+    rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)).all()
+    room_ids = [r.id for r in rooms]
+    sessions = session.exec(select(InterviewSession).where(InterviewSession.room_id.in_(room_ids))).all()
     
     results = []
-    import datetime
-    
     for s in sessions:
         responses = s.responses
-        # Aggregate score from responses
-        valid_scores = [r.similarity_score for r in responses if r.similarity_score is not None]
-        avg_score = (sum(valid_scores) / len(responses)) * 100 if responses else 0
+        proctoring = s.proctoring_events
         
-        flags = [r.transcribed_text for r in responses if "SECURITY ALERT" in (r.transcribed_text or "")]
+        avg_score = sum([r.score for r in responses if r.score is not None]) / len(responses) if responses else 0
         
-        # Format Timestamp
-        formatted_date = s.start_time.strftime("%Y-%m-%d %H:%M")
-
-        # Build Details List
-        details = []
-        for r in responses:
-            q_text = r.question.question_text if r.question else "Unknown Question"
-            ans_text = r.transcribed_text or "[No Answer]"
-            q_score = f"{round(r.similarity_score * 100, 1)}%" if r.similarity_score is not None else "0%"
-            
-            details.append({
-                "question": q_text,
-                "answer": ans_text,
-                "score": q_score
-            })
-
         results.append({
             "session_id": s.id,
-            "candidate": s.candidate_name,
-            "date": formatted_date,
-            "score": f"{round(avg_score, 1)}%",
-            "status": "Completed" if s.is_completed else "In Progress",
-            "flags": len(flags) > 0,
-            "details": details
+            "candidate": s.candidate.full_name if s.candidate else (s.candidate_name or "Unknown"),
+            "date": s.start_time.strftime("%Y-%m-%d %H:%M"),
+            "score": f"{round(avg_score * 100, 1)}%",
+            "flags": len(proctoring) > 0,
+            "details": [{
+                "question": r.question.question_text or r.question.content or "Dynamic",
+                "answer": r.answer_text or r.transcribed_text or "[No Answer]",
+                "score": f"{round(r.score * 100, 1) if r.score is not None else 0}%"
+            } for r in responses],
+            "proctoring_logs": [{
+                "type": e.event_type,
+                "time": e.timestamp.strftime("%H:%M:%S"),
+                "details": e.details
+            } for e in proctoring]
         })
     return results
 
+# --- Identity & Users ---
+
 @router.post("/upload-identity")
-async def upload_identity(file: UploadFile = File(...)):
-    # Save to known_person.jpg
+async def upload_identity(file: UploadFile = File(...), current_user: User = Depends(get_admin_user)):
     content = await file.read()
-    
     from ..services.camera import CameraService
-    cam = CameraService()
-    success = cam.update_identity(content)
-    
-    if success:
-        return {"message": "Identity updated successfully"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to update identity")
+    if CameraService().update_identity(content): return {"message": "Identity updated"}
+    raise HTTPException(status_code=500, detail="Failed to update identity")
+
+@router.get("/users", response_model=List[UserRead])
+async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+    return [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
 
 @router.post("/shutdown")
-def shutdown():
-    import os, signal
-    os.kill(os.getpid(), signal.SIGTERM)
-    return {"message": "Server shutting down..."}
+def shutdown(current_user: User = Depends(get_admin_user)):
+    if current_user.role != UserRole.SUPER_ADMIN: raise HTTPException(status_code=403)
+    os.kill(os.getpid(), 15)
+    return {"message": "Shutting down"}

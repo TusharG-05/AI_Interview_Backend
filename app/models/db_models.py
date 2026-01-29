@@ -58,6 +58,16 @@ class InterviewSession(SQLModel, table=True):
     room: Optional["InterviewRoom"] = Relationship(back_populates="sessions")
     candidate: Optional["User"] = Relationship(back_populates="sessions")
     responses: List["InterviewResponse"] = Relationship(back_populates="session")
+    proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session")
+
+class ProctoringEvent(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(foreign_key="interviewsession.id")
+    event_type: str # e.g., "MULTIPLE_FACES", "Gaze Violation", "Unknown Person"
+    details: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    session: InterviewSession = Relationship(back_populates="proctoring_events")
 
 class InterviewResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -87,4 +97,5 @@ InterviewRoom.model_rebuild()
 InterviewSession.model_rebuild()
 Question.model_rebuild()
 InterviewResponse.model_rebuild()
+ProctoringEvent.model_rebuild()
 

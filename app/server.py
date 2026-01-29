@@ -1,7 +1,7 @@
 import contextlib
 import os
 from fastapi import FastAPI
-from .routers import video, site, settings, admin, interview, auth, candidate, interview_ai, video_ai, admin_ai
+from .routers import video, site, settings, admin, interview, auth, candidate
 from .core.database import init_db
 from .core.logger import setup_logging, get_logger
 
@@ -41,25 +41,27 @@ async def lifespan(app: FastAPI):
     logger.info("Stopping CameraService...")
     service.stop()
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(site.router)
 app.include_router(video.router)
 app.include_router(settings.router)
 app.include_router(admin.router)
 app.include_router(interview.router)
-
-# New AI Interview Routers
 app.include_router(auth.router)
 app.include_router(candidate.router)
-app.include_router(interview_ai.router)
-app.include_router(video_ai.router)
-app.include_router(admin_ai.router)
 
 # Mount static files for the new UI
 from fastapi.staticfiles import StaticFiles
 app.mount("/assets", StaticFiles(directory="app/assets"), name="assets")
 app.mount("/static", StaticFiles(directory="app/assets"), name="static")
-
-
-

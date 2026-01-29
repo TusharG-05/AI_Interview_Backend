@@ -12,5 +12,6 @@ services:
       - ./app:/app/app
       - ./main.py:/app/main.py
       - ./.env:/app/.env
+      - ./tools:/app/tools
     extra_hosts:
       - "host.docker.internal:host-gateway"
