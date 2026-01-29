@@ -64,6 +64,7 @@
                 const resData = await res.json();
                 localStorage.setItem('token', resData.access_token);
                 localStorage.setItem('role', resData.role);
+                localStorage.setItem('user_id', resData.user_id);
                 
                 if (resData.role === 'admin' || resData.role === 'super_admin') {
                     window.location.href = 'dashboard_admin.html';

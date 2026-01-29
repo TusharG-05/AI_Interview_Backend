@@ -60,10 +60,7 @@ Base URL: `http://localhost:8000`
 | `POST` | `/submit-audio` | `multipart/form-data`: `audio` (wav), `session_id`, `question` | Submit audio answer. Returns transcription & feedback. |
 | `POST` | `/finish?session_id={id}` | - | End interview and calculate total score. |
 
-### Other
-| Method | Endpoint | Request Body (JSON) | Description |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/ask-custom-prompt` | `{"prompt": "..."}` | Ad-hoc LLM query (optional feature). |
+
 
 ---
 

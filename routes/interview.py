@@ -138,12 +138,7 @@ async def process_resume(resume: UploadFile = File(...)):
     extracted_text = await resume_service.extract_text_from_pdf(resume)
     return {"text": extracted_text}
 
-@router.post("/ask-custom-prompt")
-async def ask_custom_prompt(request: dict):
-    """Answer custom prompt from user"""
-    prompt = request.get("prompt", "")
-    response_content = interview_service.get_custom_response(prompt)
-    return {"response": response_content}
+
 
 @router.post("/finish")
 async def finish_interview(
