@@ -39,6 +39,9 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     role: str
+    email: str
+    full_name: str
+    expires_at: str
 
 class InterviewLinkResponse(BaseModel):
     url: str
