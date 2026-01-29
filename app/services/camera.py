@@ -85,7 +85,7 @@ class CameraService:
         if self.gaze_detector:
             self.gaze_detector.close()
 
-    def process_external_frame(self, image_bytes):
+    def process_external_frame(self, image_bytes, session_id: Optional[int] = None):
         """
         Processes a frame received from the client via WebSocket.
         Returns a dict of analysis results.
@@ -94,7 +94,6 @@ class CameraService:
              return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
 
         # Senior Dev Hardening: Worker Heartbeat Check
-        # If a worker process crashed (e.g. OOM or driver error), attempt restart
         if self.face_detector and not self.face_detector.worker.is_alive():
             logger.warning("RECOVERY: FaceDetector worker died. Restarting...")
             self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
@@ -125,11 +124,37 @@ class CameraService:
             # Logic
             found, dist, n_face, locs = face_status
             
+            # --- ANNOTATE FOR ADMIN VIEW ---
+            if locs:
+                for (top, right, bottom, left) in locs:
+                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+            
             warning = ""
             if n_face > 1: warning = "MULTIPLE FACES DETECTED"
             elif n_face == 0: warning = "NO FACE DETECTED"
             elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
             elif "WARNING" in str(gaze_status): warning = str(gaze_status)
+
+            # Update latest frame for MJPEG stream
+            with self.frame_lock:
+                _, buffer = cv2.imencode('.jpg', frame)
+                self.latest_frame = buffer.tobytes()
+                self.frame_id += 1
+
+            # --- PERSIST PROCTORING EVENT ---
+            if session_id and warning:
+                from ..core.database import engine
+                from sqlmodel import Session
+                from ..models.db_models import ProctoringEvent
+                
+                with Session(engine) as db_session:
+                    event = ProctoringEvent(
+                        session_id=session_id,
+                        event_type=warning,
+                        details=f"Faces: {n_face}, Auth: {found}, Gaze: {gaze_status}"
+                    )
+                    db_session.add(event)
+                    db_session.commit()
 
             # Update state for external status calls
             self._current_warning = warning if warning else "No Issues"
@@ -143,12 +168,17 @@ class CameraService:
                 "faces": int(n_face),
                 "gaze": str(gaze_status),
                 "warning": warning,
-                "box": locs[0] if locs else None # (top, right, bottom, left)
+                "box": locs[0] if locs else None
             }
             
         except Exception as e:
             logger.error(f"Frame Process Error: {e}")
             return {"warning": "Server Error"}
+
+    def get_frame(self) -> Tuple[Optional[bytes], int]:
+        """Returns the latest annotated frame and its unique ID."""
+        with self.frame_lock:
+            return self.latest_frame, self.frame_id
 
     def update_identity(self, image_bytes: bytes) -> bool:
         """Updates the known person identity and reloads the detector."""

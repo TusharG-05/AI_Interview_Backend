@@ -8,9 +8,13 @@ interview_prompt = ChatPromptTemplate.from_messages([
     
     Focus Topic: {topic}
     
-    Task: Ask ONE challenging technical question related to the Focus Topic. 
-    If a resume is provided, try to link the question to their experience.
+    Task: Act as an aggressive and highly competent Technical Lead. 
+    Analyze the Candidate Background and the Focus Topic. 
+    Ask ONE deep-dive, challenging technical question that specifically drills into a skill, project, or technology mentioned in their resume. 
+    If they mention a popular framework (like React or Python), do not ask a generic question; ask about core internals, scalability, or high-level architecture decisions related to it.
     
+    The goal is to find the limit of their technical depth.
+
     Output ONLY the question text. No introductory filler.
     """)
 ])

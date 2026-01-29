@@ -1,14 +1,23 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks
-from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
-from ..core.database import get_db
-from ..models.db_models import Question, InterviewSession, InterviewResponse as CandidateResponse
-import os
-from datetime import datetime
-import uuid
+from typing import List, Optional, Dict, Union
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
+from sqlmodel import Session, select
+from ..core.database import get_db as get_session
+from ..models.db_models import Question, InterviewSession, InterviewResponse
+from ..schemas.requests import AnswerRequest
+from ..services import interview as interview_service, resume as resume_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
 from pydantic import BaseModel
+import os
+import uuid
+from datetime import datetime
+
+router = APIRouter(prefix="/interview", tags=["Interview"])
+templates = Jinja2Templates(directory="app/templates")
+audio_service = AudioService()
+nlp_service = NLPService()
 
 class TTSRange(BaseModel):
     text: str
@@ -17,70 +26,66 @@ class EvaluateRequest(BaseModel):
     candidate_text: str
     reference_text: str
 
-router = APIRouter(prefix="/interview", tags=["interview"])
-audio_service = AudioService()
-nlp_service = NLPService()
+@router.get("/", response_class=HTMLResponse)
+async def get_home(request: Request):
+    return templates.TemplateResponse("interview.html", {"request": request})
+
+@router.get("/general-questions")
+async def get_general_questions(session: Session = Depends(get_session)):
+    questions = session.exec(select(Question)).all()
+    return {"questions": [q.dict() for q in questions]}
 
 @router.post("/start")
 async def start_interview(
     candidate_name: str = Form("Candidate"), 
     enrollment_audio: UploadFile = File(None),
-    db: Session = Depends(get_db)
+    session_db: Session = Depends(get_session)
 ):
-    session = InterviewSession(candidate_name=candidate_name, start_time=datetime.utcnow())
-    db.add(session)
-    db.commit()
-    db.refresh(session)
+    new_session = InterviewSession(candidate_name=candidate_name, start_time=datetime.utcnow())
+    session_db.add(new_session)
+    session_db.commit()
+    session_db.refresh(new_session)
     
     warning = None
     if enrollment_audio:
         os.makedirs("app/assets/audio/enrollment", exist_ok=True)
-        enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
+        enrollment_path = f"app/assets/audio/enrollment/enroll_{new_session.id}.wav"
         content = await enrollment_audio.read()
         audio_service.save_audio_blob(content, enrollment_path)
-        
-        # Cleanup enrollment audio immediately for better baseline
         audio_service.cleanup_audio(enrollment_path)
         
-        # Senior Dev UX: Silence Check
-        energy = audio_service.calculate_energy(enrollment_path)
-        print(f"DEBUG: Enrollment Energy: {energy}")
-        if energy < 50: # RMS Threshold for silence
+        # Silence/Quality Check
+        if audio_service.calculate_energy(enrollment_path) < 50:
              warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
         
-        session.enrollment_audio_path = enrollment_path
-        db.commit()
+        new_session.enrollment_audio_path = enrollment_path
+        session_db.add(new_session)
+        session_db.commit()
         
-    return {"session_id": session.id, "warning": warning}
+    return {"session_id": new_session.id, "warning": warning}
 
 @router.get("/next-question/{session_id}")
-async def get_next_question(session_id: int, db: Session = Depends(get_db)):
-    # Simple logic: get the first question that hasn't been answered in this session
-    answered_ids = [r.question_id for r in db.query(CandidateResponse).filter(CandidateResponse.session_id == session_id).all()]
-    question = db.query(Question).filter(~Question.id.in_(answered_ids)).first()
+async def get_next_question(session_id: int, session_db: Session = Depends(get_session)):
+    answered_ids = [r.question_id for r in session_db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()]
+    question = session_db.exec(select(Question).where(~Question.id.in_(answered_ids))).first()
     
-    if not question:
-        return {"status": "finished"}
+    if not question: return {"status": "finished"}
     
-    # Generate TTS for the question
     os.makedirs("app/assets/audio/questions", exist_ok=True)
     audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
-    
-    # Generate TTS if it doesn't exist
     if not os.path.exists(audio_path):
-        await audio_service.text_to_speech(question.question_text, audio_path)
+        await audio_service.text_to_speech(question.question_text or question.content, audio_path)
     
     return {
         "question_id": question.id,
-        "text": question.question_text,
+        "text": question.question_text or question.content,
         "audio_url": f"/interview/audio/question/{question.id}"
     }
 
 @router.get("/audio/question/{q_id}")
 async def stream_question_audio(q_id: int):
     audio_path = f"app/assets/audio/questions/q_{q_id}.mp3"
-    if not os.path.exists(audio_path):
-        raise HTTPException(status_code=404, detail="Audio not found")
+    if not os.path.exists(audio_path): raise HTTPException(status_code=404)
     return FileResponse(audio_path, media_type="audio/mpeg")
 
 @router.post("/submit-answer")
@@ -88,107 +93,111 @@ async def submit_answer(
     session_id: int = Form(...),
     question_id: int = Form(...),
     audio: UploadFile = File(...),
-    db: Session = Depends(get_db)
+    session_db: Session = Depends(get_session)
 ):
     os.makedirs("app/assets/audio/responses", exist_ok=True)
-    audio_filename = f"resp_{session_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
-    audio_path = f"app/assets/audio/responses/{audio_filename}"
-    
-    # Save the audio blob
+    audio_path = f"app/assets/audio/responses/resp_{session_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
     audio_service.save_audio_blob(content, audio_path)
     
-    # Store response (processing is deferred)
-    response = CandidateResponse(
-        session_id=session_id,
-        question_id=question_id,
-        audio_path=audio_path
-    )
-    db.add(response)
-    db.commit()
-    
+    response = InterviewResponse(session_id=session_id, question_id=question_id, audio_path=audio_path)
+    session_db.add(response)
+    session_db.commit()
     return {"status": "saved"}
 
 @router.post("/finish/{session_id}")
-async def finish_interview(session_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+async def finish_interview(session_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session)):
+    interview_session = session_db.get(InterviewSession, session_id)
+    if not interview_session: raise HTTPException(status_code=404)
     
-    session.end_time = datetime.utcnow()
-    session.is_completed = True
-    db.commit()
+    interview_session.end_time = datetime.utcnow()
+    interview_session.is_completed = True
+    session_db.add(interview_session)
+    session_db.commit()
     
-    # Trigger deferred processing in background
-    background_tasks.add_task(process_session_results, session_id)
-    
-    return {"status": "interview_finished", "message": "Results are being processed. Admin can view them later."}
+    background_tasks.add_task(process_session_results_unified, session_id)
+    return {"status": "finished", "message": "Results are being processed by AI."}
 
-def process_session_results(session_id: int):
-    # This runs in background to avoid blocking
+# --- AI & Resume Specific ---
+
+@router.post("/evaluate-answer")
+async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: Session = Depends(get_session)):
+    interview_session = session_db.get(InterviewSession, session_id)
+    if not interview_session: raise HTTPException(status_code=404)
+
+    evaluation = interview_service.evaluate_answer_content(request.question, request.answer)
+    db_question = interview_service.get_or_create_question(session_db, request.question, topic="Dynamic")
+
+    new_response = InterviewResponse(
+        session_id=session_id,
+        question_id=db_question.id,
+        answer_text=request.answer,
+        evaluation_text=evaluation["feedback"],
+        score=evaluation["score"]
+    )
+    session_db.add(new_response)
+    session_db.commit()
+    return evaluation
+
+@router.post("/generate-resume-question")
+async def generate_resume_question(context: str = Form(...), resume_text: str = Form(...)):
+    return interview_service.generate_resume_question_content(context, resume_text)
+
+@router.post("/process-resume")
+async def process_resume(resume: UploadFile = File(...)):
+    return {"text": await resume_service.extract_text_from_pdf(resume)}
+
+# --- Background Unified Processor ---
+
+def process_session_results_unified(session_id: int):
     from ..core.database import engine
-    from sqlmodel import Session
+    from sqlmodel import Session, select
     with Session(engine) as db:
         try:
-            session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
-            enrollment_path = session.enrollment_audio_path if session else None
+            session = db.get(InterviewSession, session_id)
+            if not session: return
             
-            responses = db.query(CandidateResponse).filter(CandidateResponse.session_id == session_id).all()
-            for i, resp in enumerate(responses):
-                try:
-                    print(f"DEBUG: Processing Response {i+1}/{len(responses)} (Q_ID: {resp.question_id})...")
-                    if resp.audio_path and not resp.transcribed_text:
-                        # 0. Cleanup
-                        audio_service.cleanup_audio(resp.audio_path)
-
-                        # 1. Speaker Verification (Optional/Fast)
-                        if enrollment_path:
-                            print(f"DEBUG: Verifying Speaker for Q{resp.question_id}...")
-                            is_match, score = audio_service.verify_speaker(enrollment_path, resp.audio_path)
-                            if not is_match:
-                                resp.transcribed_text = f"[SECURITY ALERT: VOICE MISMATCH ({score:.2f})] "
-                            else:
-                                resp.transcribed_text = ""
-                        
-                        # 2. Transcribe (High Speed Tiny Model)
-                        print(f"DEBUG: Transcribing Q{resp.question_id} with High-Speed engine...")
-                        text = audio_service.speech_to_text(resp.audio_path)
-                        print(f"DEBUG: Q{resp.question_id} Result: '{text}'")
-                        
-                        resp.transcribed_text = (resp.transcribed_text or "") + text
-                        
-                        # 3. Match with reference
-                        q = db.query(Question).filter(Question.id == resp.question_id).first()
-                        if q:
-                            score = nlp_service.calculate_similarity(text, q.reference_answer)
-                            print(f"DEBUG: Q{resp.question_id} Similarity: {score:.2f}")
-                            resp.similarity_score = score
-                        
-                        db.commit() # Save progress instantly
-                except Exception as inner_e:
-                    print(f"ERROR processing response {resp.id}: {inner_e}")
-                    db.rollback()
-                    continue
-
-            print(f"DEBUG: Session {session_id} background processing COMPLETED.")
+            responses = db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
+            for resp in responses:
+                if resp.audio_path and not (resp.answer_text or resp.transcribed_text):
+                    audio_service.cleanup_audio(resp.audio_path)
+                    
+                    # 1. Verification & Transcription
+                    text = audio_service.speech_to_text(resp.audio_path)
+                    if session.enrollment_audio_path:
+                        match, _ = audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path)
+                        if not match: text = f"[VOICE MISMATCH] {text}"
+                    
+                    resp.answer_text = text
+                    resp.transcribed_text = text # Compatibility
+                    
+                    # 2. LLM Evaluation
+                    q_text = resp.question.question_text or resp.question.content or "General Question"
+                    evaluation = interview_service.evaluate_answer_content(q_text, text)
+                    
+                    resp.evaluation_text = evaluation["feedback"]
+                    resp.score = evaluation["score"]
+                    db.add(resp)
+                    db.commit()
+            
+            # Final Score Aggregation
+            all_scores = [r.score for r in responses if r.score is not None]
+            session.total_score = sum(all_scores) / len(all_scores) if all_scores else 0
+            db.add(session)
+            db.commit()
+            print(f"DEBUG: Session {session_id} Unified Processing Complete.")
         except Exception as e:
-            print(f"CRITICAL Error processing session {session_id}: {e}")
+            print(f"ERROR: Session {session_id} Processing Failed: {e}")
 
-
+# --- Standalone Testing ---
 
 @router.post("/tts")
 async def standalone_tts(req: TTSRange):
-    """Standalone TTS endpoint for frontend testing."""
-    os.makedirs("app/assets/audio/standalone", exist_ok=True)
-    temp_id = uuid.uuid4().hex[:8]
-    audio_path = f"app/assets/audio/standalone/tts_{temp_id}.mp3"
-    
-    await audio_service.text_to_speech(req.text, audio_path)
-    
-    return FileResponse(audio_path, media_type="audio/mpeg")
+    path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex[:8]}.mp3"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    await audio_service.text_to_speech(req.text, path)
+    return FileResponse(path, media_type="audio/mpeg")
 
 @router.post("/evaluate")
 async def standalone_evaluate(req: EvaluateRequest):
-    """Standalone NLP similarity evaluation for frontend testing."""
-    score = nlp_service.calculate_similarity(req.candidate_text, req.reference_text)
-    return {"score": round(score, 4)}
+    return interview_service.evaluate_answer_content(req.reference_text, req.candidate_text)
