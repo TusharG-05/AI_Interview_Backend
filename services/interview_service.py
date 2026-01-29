@@ -84,6 +84,4 @@ def get_or_create_question(session: Session, content: str, topic: str = "General
         
     return question
 
-def get_custom_response(prompt: str) -> str:
-    response = local_llm.invoke(prompt)
-    return response.content
+

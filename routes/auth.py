@@ -26,7 +26,7 @@ async def login_json(user_credentials: UserLogin, session: Session = Depends(get
     access_token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
+    return {"access_token": access_token, "token_type": "bearer", "role": user.role, "user_id": user.id}
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
@@ -41,7 +41,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     access_token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
+    return {"access_token": access_token, "token_type": "bearer", "role": user.role, "user_id": user.id}
 
 
 @router.post("/register", response_model=Token)
@@ -68,4 +68,4 @@ async def register(user_data: UserCreate, session: Session = Depends(get_session
     access_token = create_access_token(
         data={"sub": new_user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": access_token, "token_type": "bearer", "role": new_user.role}
+    return {"access_token": access_token, "token_type": "bearer", "role": new_user.role, "user_id": new_user.id}
