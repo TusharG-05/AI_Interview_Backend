@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session
@@ -29,7 +29,17 @@ async def login(login_data: LoginRequest, session: Session = Depends(get_session
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": token, "token_type": "bearer", "role": user.role}
+    
+    expire_time = datetime.utcnow() + access_token_expires
+    
+    return {
+        "access_token": token, 
+        "token_type": "bearer", 
+        "role": user.role,
+        "email": user.email,
+        "full_name": user.full_name,
+        "expires_at": expire_time.isoformat()
+    }
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
@@ -45,7 +55,17 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": token, "token_type": "bearer", "role": user.role}
+    
+    expire_time = datetime.utcnow() + access_token_expires
+    
+    return {
+        "access_token": token, 
+        "token_type": "bearer", 
+        "role": user.role,
+        "email": user.email,
+        "full_name": user.full_name,
+        "expires_at": expire_time.isoformat()
+    }
 
 @router.post("/register", response_model=Token)
 async def register(user_data: UserCreate, session: Session = Depends(get_session)):
@@ -69,4 +89,14 @@ async def register(user_data: UserCreate, session: Session = Depends(get_session
     token = create_access_token(
         data={"sub": new_user.email}, expires_delta=access_token_expires
     )
-    return {"access_token": token, "token_type": "bearer", "role": new_user.role}
+    
+    expire_time = datetime.utcnow() + access_token_expires
+    
+    return {
+        "access_token": token, 
+        "token_type": "bearer", 
+        "role": new_user.role,
+        "email": new_user.email,
+        "full_name": new_user.full_name,
+        "expires_at": expire_time.isoformat()
+    }
