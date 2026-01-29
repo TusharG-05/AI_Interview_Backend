@@ -54,12 +54,13 @@
     </div>
 
     <script>
+        const API_BASE_URL = 'http://localhost:8000';
         const token = localStorage.getItem('token');
-        if (!token) window.location.href = '/login';
+        if (!token) window.location.href = 'login.html';
 
         async function fetchWithAuth(url, options = {}) {
             options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
-            const res = await fetch(url, options);
+            const res = await fetch(`${API_BASE_URL}${url}`, options);
             if (res.status === 401) { logout(); return; }
             return res;
         }
@@ -83,7 +84,7 @@
 
                 const data = await res.json();
                 // Redirect to interview page with session ID
-                window.location.href = `/interview?session_id=${data.session_id}`;
+                window.location.href = `interview.html?session_id=${data.session_id}`;
                 
             } catch (err) {
                 errorDiv.textContent = err.message;
@@ -106,7 +107,7 @@
 
         function logout() {
             localStorage.clear();
-            window.location.href = '/login';
+            window.location.href = 'login.html';
         }
 
         loadHistory();

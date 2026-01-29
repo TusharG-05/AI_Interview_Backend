@@ -1,29 +1,32 @@
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
+
 from sqlmodel import Session
 from config.database import get_session
 from models.db_models import User, UserRole
 from auth.security import verify_password, get_password_hash, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
-from schemas.requests import UserCreate
+from schemas.requests import UserCreate, UserLogin
 from schemas.responses import Token
-
-templates = Jinja2Templates(directory="templates")
-
 
 
 router = APIRouter(tags=["Authentication"])
 
-@router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
-
-@router.get("/register", response_class=HTMLResponse)
-async def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
+@router.post("/login", response_model=Token)
+async def login_json(user_credentials: UserLogin, session: Session = Depends(get_session)):
+    user = session.query(User).filter(User.email == user_credentials.email).first()
+    if not user or not verify_password(user_credentials.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
@@ -39,6 +42,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer", "role": user.role}
+
 
 @router.post("/register", response_model=Token)
 async def register(user_data: UserCreate, session: Session = Depends(get_session)):

@@ -4,12 +4,10 @@ import json
 from typing import Optional, List, Dict
 from datetime import datetime
 from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException, Depends
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from config.database import get_session
 from models.db_models import Question, InterviewResponse, InterviewSession, User
-from schemas.requests import AnswerRequest
+from schemas.requests import AnswerRequest, ResumeQuestionRequest
 from auth.dependencies import get_current_user
 from services import interview_service, resume_service
 from services.audio import AudioService
@@ -20,15 +18,8 @@ audio_service = AudioService()
 
 
 # Initialize templates
-templates = Jinja2Templates(directory="templates")
-
 # Create router
 router = APIRouter(prefix="/interview", tags=["Interview"])
-
-@router.get("/", response_class=HTMLResponse)
-async def get_home(request: Request):
-    """Serve the main interview page"""
-    return templates.TemplateResponse("interview.html", {"request": request})
 
 @router.get("/general-questions")
 async def get_general_questions(session: Session = Depends(get_session)):
@@ -133,13 +124,12 @@ async def submit_audio(
 
 @router.post("/generate-resume-question")
 async def generate_resume_question(
-    context: Optional[str] = Form(None),
-    resume_text: Optional[str] = Form(None)
+    request: ResumeQuestionRequest
 ):
     """Generate a question based on resume and a random topic"""
     # Ensure strings for the service
-    context = context or ""
-    resume_text = resume_text or ""
+    context = request.context or ""
+    resume_text = request.resume_text or ""
     return interview_service.generate_resume_question_content(context, resume_text)
 
 @router.post("/process-resume")

@@ -102,6 +102,8 @@
     </div>
 
     <script>
+        const API_BASE_URL = 'http://localhost:8000';
+        
         // State Management
         const state = {
             step: 0, 
@@ -115,14 +117,14 @@
 
         // Auth Check
         const token = localStorage.getItem('token');
-        if (!token) window.location.href = '/login';
+        if (!token) window.location.href = 'login.html';
 
         // Get Session ID
         const urlParams = new URLSearchParams(window.location.search);
         state.sessionId = urlParams.get('session_id');
         if (!state.sessionId) {
             alert("No session ID found. Returning to dashboard.");
-            window.location.href = '/candidate/dashboard';
+            window.location.href = 'dashboard_candidate.html';
         }
 
         // Helpers
@@ -141,7 +143,14 @@
 
         async function fetchWithAuth(url, options = {}) {
             options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
-            return fetch(url, options);
+            const res = await fetch(`${API_BASE_URL}${url}`, options);
+            if (res.status === 401) { logout(); return; }
+            return res;
+        }
+
+        function logout() {
+            localStorage.clear();
+            window.location.href = 'login.html';
         }
 
         // Timer Logic
@@ -235,13 +244,15 @@
                 document.getElementById('questionTypeTitle').textContent = "Resume-Based Question";
                 showLoading();
                 try {
-                    const formData = new FormData();
-                    formData.append('context', state.userContext);
-                    formData.append('resume_text', state.resumeText);
+                    const reqData = {
+                        context: state.userContext,
+                        resume_text: state.resumeText
+                    };
                     
                     const res = await fetchWithAuth('/interview/generate-resume-question', {
                         method: 'POST',
-                        body: formData
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(reqData)
                     });
                     const data = await res.json();
                     state.currentQuestion = data.question;

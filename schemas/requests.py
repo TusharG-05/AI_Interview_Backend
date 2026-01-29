@@ -24,6 +24,10 @@ class UserCreate(BaseModel):
     full_name: str
     role: UserRole = UserRole.CANDIDATE
 
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
 # Admin Requests
 class RoomCreate(BaseModel):
     password: str
@@ -39,5 +43,9 @@ class RoomUpdate(BaseModel):
 class AnswerRequest(BaseModel):
     question: str
     answer: str
+
+class ResumeQuestionRequest(BaseModel):
+    context: Optional[str] = None
+    resume_text: Optional[str] = None
 
 
