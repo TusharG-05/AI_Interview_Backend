@@ -1,7 +1,5 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from config.database import get_session
 from models.db_models import User, InterviewRoom, InterviewSession, InterviewResponse
@@ -9,13 +7,7 @@ from auth.dependencies import get_current_user
 from pydantic import BaseModel
 from datetime import datetime
 
-templates = Jinja2Templates(directory="templates")
-
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
-
-@router.get("/dashboard", response_class=HTMLResponse)
-async def candidate_dashboard(request: Request):
-    return templates.TemplateResponse("dashboard_candidate.html", {"request": request})
 
 from schemas.requests import JoinRoomRequest
 from schemas.responses import HistoryItem, JoinRoomResponse

@@ -1,7 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlmodel import Session, select
 from config.database import get_session
 from models.db_models import User, InterviewRoom, InterviewSession, InterviewResponse, UserRole
@@ -12,13 +10,7 @@ import secrets
 from schemas.requests import RoomCreate, RoomUpdate, AdminCreate, UserUpdate
 from schemas.responses import RoomRead, SessionRead, UserRead
 
-templates = Jinja2Templates(directory="templates")
-
 router = APIRouter(prefix="/admin", tags=["Admin"])
-
-@router.get("/dashboard", response_class=HTMLResponse)
-async def admin_dashboard(request: Request):
-    return templates.TemplateResponse("dashboard_admin.html", {"request": request})
 
 @router.post("/rooms", response_model=RoomRead)
 async def create_room(
