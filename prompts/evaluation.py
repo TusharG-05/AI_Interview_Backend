@@ -8,3 +8,11 @@ evaluation_prompt = ChatPromptTemplate.from_messages([
     ("user", "Question: {question}\n\nCandidate's Answer: {answer}"),
     ("user", "Do not include any text outside the JSON object."),
 ])
+
+# Follow-up Question Prompt
+followup_prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are an expert technical interviewer."),
+    ("user", "Based on the candidate's previous answer, generate ONE short, relevant follow-up question to probe deeper or clarify their understanding."),
+    ("user", "Original Question: {question}\nCandidate's Answer: {answer}"),
+    ("user", "Output ONLY the follow-up question text.")
+])
