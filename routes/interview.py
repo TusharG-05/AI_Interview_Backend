@@ -16,8 +16,6 @@ import os
 
 audio_service = AudioService()
 
-
-# Initialize templates
 # Create router
 router = APIRouter(prefix="/interview", tags=["Interview"])
 
