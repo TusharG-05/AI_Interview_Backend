@@ -6,84 +6,86 @@ A FastAPI-based application for practicing technical interviews with AI-powered 
 
 - **General Questions**: Practice common coding interview questions.
 - **Resume-Based Questions**: Upload your resume to get tailored questions.
-- **AI Evaluation**: Immediate feedback on your answers using a local LLM.
-- **Admin Dashboard**: Manage questions and viewing sessions.
+- **Real-time AI Evaluation**: Immediate feedback on your answers using a local LLM.
+- **Webcam Interface**: See yourself during the interview (Client-side, private).
+- **Admin Dashboard**: Manage interview rooms, view candidate history, and scores.
 
 ## Tech Stack
 
 - **Backend**: FastAPI
 - **Database**: PostgreSQL (via SQLModel)
 - **AI**: LangChain + Local LLM (Ollama recommended)
+- **Frontend**: HTML/JS with client-side Media APIs
 - **Containerization**: Docker & Docker Compose
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
+- **Ollama**: [Download Here](https://ollama.com/)
+    - Run `ollama serve`
+    - Pull the model: `ollama pull qwen2.5-coder:3b` (or update `config/settings.py`)
 
-- Python 3.11 (Required for dependencies)
-- PostgreSQL
-- Ollama (running locally)
+## Quick Start (Docker) - Recommended
 
-### Local Setup
+This is the easiest way to run the app on any machine.
 
-1. **Clone the repository**
-   ```bash
-   git clone <repo-url>
-   cd AI_Interview_Fastapi
-   ```
+1.  **Start the App**
+    ```bash
+    docker compose up --build
+    ```
+    *Note: The first build may take time as it installs heavy AI dependencies.*
 
-2. **Create Virtual Environment**
-   ```bash
-   python -m venv .venv
-   .\.venv311\Scripts\Activate
-   ```
+2.  **Access the Platform**
+    - **Candidate Interface**: `http://localhost:8000`
+    - **Admin Dashboard**: `http://localhost:8000/admin/dashboard`
+    - **API Docs**: `http://localhost:8000/docs`
 
-3. **Install Dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+3.  **Troubleshooting Docker**
+    - Ensure Ollama is running on your host machine.
+    - If you are on a slow connection, the build might pause on "Installing dependencies". Be patient.
 
-4. **Configure Environment**
-   Create a `.env` file:
-   ```env
-   DATABASE_URL=postgresql://postgres:password@localhost:5432/ai_interview_db
-   SECRET_KEY=your_secret_key
-   ```
+## Local Development Setup
 
-5. **Initialize Database**
-   ```bash
-   python scripts/create_db.py
-   ```
+If you prefer to run it without Docker:
 
-6. **Run Application**
-   ```bash
-   uvicorn main:app --reload
-   ```
-   Visit `http://localhost:8000`
+1.  **Clone & Setup Environment**
+    ```bash
+    git clone <repo-url>
+    cd AI_Interview_Fastapi
+    python -m venv .venv
+    .\.venv\Scripts\Activate
+    ```
 
-### Docker Setup
+2.  **Install Dependencies**
+    ```bash
+    # Note: Requires system FFmpeg installed for audio processing
+    pip install -r requirements.txt
+    ```
 
-Run the entire stack with one command:
+3.  **Configure Database**
+    - Create a `.env` file from the example below.
+    - Run migrations/setup script:
+    ```bash
+    python scripts/create_db.py
+    ```
 
-```bash
-docker compose up --build
-```
-The API will be available at `http://localhost:8000`.
+4.  **Run Application**
+    ```bash
+    uvicorn main:app --reload
+    ```
 
-## API Documentation
+## Environment Configuration (.env)
 
-Once running, access the interactive API docs at:
-- **Swagger UI**: `http://localhost:8000/docs`
-- **ReDoc**: `http://localhost:8000/redoc`
+| Variable | Default (Docker) | Description |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | `postgresql://postgres:password@db:5432/ai_interview_db` | Connection string for PostgreSQL |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | URL for the Ollama instance |
+| `SECRET_KEY` | `your_secret_key` | Secret for JWT Tokens |
 
 ## Project Structure
 
-- `auth/`: Authentication logic
-- `config/`: Configuration settings and DB connection
-- `models/`: Database models
-- `prompts/`: LangChain prompts
-- `routes/`: API endpoints
-- `schemas/`: Pydantic data schemas
-- `services/`: Business logic
-- `static/`: CSS and assets
-- `templates/`: HTML templates
+- `auth/`: Authentication logic (JWT, Password hashing)
+- `routes/`: API endpoints (Interview, Admin, Auth)
+- `services/`: Business logic (LLM chains, Audio processing)
+- `models/`: Database models (SQLModel)
+- `templates/`: Jinja2 HTML templates
+- `static/`: CSS and Assets

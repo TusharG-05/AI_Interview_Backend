@@ -334,7 +334,10 @@
                      document.getElementById('answer').value = data.transcription; // Show transcribed text
                 }
                 
-                document.getElementById('feedbackText').textContent = data.feedback;
+                document.getElementById('feedbackText').innerHTML = `
+                    <strong>Feedback:</strong> ${data.feedback} <br><br>
+                    <strong>Follow-up Question:</strong> ${data.follow_up_question || "None"}
+                `;
                 showSection('feedbackSection');
             } catch (err) {
                 console.error(err);

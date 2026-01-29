@@ -51,6 +51,7 @@ async def evaluate_answer(
         raise HTTPException(status_code=404, detail="Session not found")
 
     evaluation_result = interview_service.evaluate_answer_content(request.question, request.answer)
+    follow_up = interview_service.generate_followup_question(request.question, request.answer)
     
     # Use helper to find or create question
     db_question = interview_service.get_or_create_question(
@@ -70,7 +71,11 @@ async def evaluate_answer(
     session_db.add(new_response)
     session_db.commit()
     
-    return {"feedback": evaluation_result["feedback"], "score": evaluation_result["score"]}
+    return {
+        "feedback": evaluation_result["feedback"], 
+        "score": evaluation_result["score"],
+        "follow_up_question": follow_up
+    }
 
 @router.post("/submit-audio")
 async def submit_audio(
@@ -98,6 +103,7 @@ async def submit_audio(
     # 3. Evaluate (Reuse existing logic)
     # 3. Evaluate (Reuse existing logic)
     evaluation_result = interview_service.evaluate_answer_content(question, transcribed_text)
+    follow_up = interview_service.generate_followup_question(question, transcribed_text)
     
     # 4. Save to DB using helper
     db_question = interview_service.get_or_create_question(
@@ -120,16 +126,20 @@ async def submit_audio(
     return {
         "transcription": transcribed_text,
         "feedback": evaluation_result["feedback"],
-        "score": evaluation_result["score"]
+        "score": evaluation_result["score"],
+        "follow_up_question": follow_up
     }
 
 
 @router.post("/generate-resume-question")
 async def generate_resume_question(
-    context: str = Form(...),
-    resume_text: str = Form(...)  # We'll expect the extracted text directly for simplicity in the flow
+    context: Optional[str] = Form(None),
+    resume_text: Optional[str] = Form(None)
 ):
     """Generate a question based on resume and a random topic"""
+    # Ensure strings for the service
+    context = context or ""
+    resume_text = resume_text or ""
     return interview_service.generate_resume_question_content(context, resume_text)
 
 @router.post("/process-resume")

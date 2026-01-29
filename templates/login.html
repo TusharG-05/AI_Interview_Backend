@@ -62,7 +62,7 @@
                 localStorage.setItem('token', resData.access_token);
                 localStorage.setItem('role', resData.role);
                 
-                if (resData.role === 'admin') {
+                if (resData.role === 'admin' || resData.role === 'super_admin') {
                     window.location.href = '/admin/dashboard';
                 } else {
                     window.location.href = '/candidate/dashboard';
