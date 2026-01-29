@@ -41,3 +41,11 @@ class AnswerRequest(BaseModel):
     answer: str
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+class QuestionCreate(BaseModel):
+    content: str
+    topic: Optional[str] = "General"
+    difficulty: str = "Medium"
+    reference_answer: Optional[str] = None

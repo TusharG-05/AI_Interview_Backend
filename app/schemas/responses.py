@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, List
 from pydantic import BaseModel
 
 # Candidate Responses
@@ -40,3 +40,26 @@ class Token(BaseModel):
     token_type: str
     role: str
 
+class InterviewLinkResponse(BaseModel):
+    url: str
+    room_code: str
+    password: str
+
+class ProctoringLogItem(BaseModel):
+    type: str
+    time: str
+    details: Optional[str] = None
+
+class ResponseDetail(BaseModel):
+    question: str
+    answer: str
+    score: str
+
+class DetailedResult(BaseModel):
+    session_id: int
+    candidate: str
+    date: str
+    score: str
+    flags: bool
+    details: List[ResponseDetail]
+    proctoring_logs: List[ProctoringLogItem]
