@@ -1,15 +1,13 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import Question, InterviewRoom, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
-from ..schemas.requests import RoomCreate, RoomUpdate, AdminCreate, UserUpdate
-from ..schemas.responses import RoomRead, SessionRead, UserRead
+from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate
+from ..schemas.responses import RoomRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse
 import os
 import shutil
 import uuid
@@ -17,12 +15,7 @@ import secrets
 from datetime import datetime
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
-templates = Jinja2Templates(directory="app/templates")
 nlp_service = NLPService()
-
-@router.get("/dashboard", response_class=HTMLResponse)
-async def admin_dashboard(request: Request, current_user: User = Depends(get_admin_user)):
-    return templates.TemplateResponse("dashboard_admin.html", {"request": request})
 
 # --- Question Management ---
 
@@ -31,7 +24,27 @@ async def get_questions(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
+    """List all available interview questions."""
     return session.exec(select(Question)).all()
+
+@router.post("/questions", response_model=Question)
+async def add_question(
+    q_data: QuestionCreate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """API for manually adding a new interview question."""
+    new_q = Question(
+        content=q_data.content,
+        question_text=q_data.content,
+        topic=q_data.topic,
+        difficulty=q_data.difficulty,
+        reference_answer=q_data.reference_answer
+    )
+    session.add(new_q)
+    session.commit()
+    session.refresh(new_q)
+    return new_q
 
 @router.post("/upload-doc")
 async def upload_document(
@@ -39,6 +52,7 @@ async def upload_document(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
+    """Extract Q&A pairs from an uploaded document (Resume/Job Desc)."""
     os.makedirs("temp_uploads", exist_ok=True)
     file_path = f"temp_uploads/{uuid.uuid4().hex[:8]}_{file.filename}"
     with open(file_path, "wb") as buffer:
@@ -94,25 +108,32 @@ async def list_rooms(current_user: User = Depends(get_admin_user), session: Sess
     rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)).all()
     return [RoomRead(id=r.id, room_code=r.room_code, password=r.password, is_active=r.is_active, max_sessions=r.max_sessions, active_sessions_count=len([s for s in r.sessions if s.end_time is None])) for r in rooms]
 
-@router.delete("/rooms/{room_id}")
-async def delete_room(room_id: int, current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+@router.post("/interview/generate-link", response_model=InterviewLinkResponse)
+async def generate_interview_link(
+    room_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Gereate a join URL and credentials for an interview room."""
     room = session.get(InterviewRoom, room_id)
-    if not room or room.admin_id != current_user.id: raise HTTPException(status_code=404, detail="Room not found")
-    # Cascade delete implementation
-    for s in room.sessions:
-        session.exec(f"DELETE FROM interviewresponse WHERE session_id = {s.id}")
-        session.exec(f"DELETE FROM proctoringevent WHERE session_id = {s.id}")
-        session.delete(s)
-    session.delete(room)
-    session.commit()
-    return {"message": "Room deleted"}
+    if not room or room.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Room not found")
+    
+    # In a real environment, this would use a proper base URL from config
+    base_url = "https://ai-interview.example.com"
+    join_url = f"{base_url}/join?code={room.room_code}"
+    
+    return InterviewLinkResponse(
+        url=join_url,
+        room_code=room.room_code,
+        password=room.password
+    )
 
 # --- Results & Proctoring ---
 
-@router.get("/results")
-@router.get("/history")
-async def get_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    # Fetch sessions for rooms owned by this admin
+@router.get("/users/results", response_model=List[DetailedResult])
+async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+    """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
     rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)).all()
     room_ids = [r.id for r in rooms]
     sessions = session.exec(select(InterviewSession).where(InterviewSession.room_id.in_(room_ids))).all()
@@ -124,26 +145,26 @@ async def get_results(current_user: User = Depends(get_admin_user), session: Ses
         
         avg_score = sum([r.score for r in responses if r.score is not None]) / len(responses) if responses else 0
         
-        results.append({
-            "session_id": s.id,
-            "candidate": s.candidate.full_name if s.candidate else (s.candidate_name or "Unknown"),
-            "date": s.start_time.strftime("%Y-%m-%d %H:%M"),
-            "score": f"{round(avg_score * 100, 1)}%",
-            "flags": len(proctoring) > 0,
-            "details": [{
-                "question": r.question.question_text or r.question.content or "Dynamic",
-                "answer": r.answer_text or r.transcribed_text or "[No Answer]",
-                "score": f"{round(r.score * 100, 1) if r.score is not None else 0}%"
-            } for r in responses],
-            "proctoring_logs": [{
-                "type": e.event_type,
-                "time": e.timestamp.strftime("%H:%M:%S"),
-                "details": e.details
-            } for e in proctoring]
-        })
+        results.append(DetailedResult(
+            session_id=s.id,
+            candidate=s.candidate.full_name if s.candidate else (s.candidate_name or "Unknown"),
+            date=s.start_time.strftime("%Y-%m-%d %H:%M"),
+            score=f"{round(avg_score * 100, 1)}%",
+            flags=len(proctoring) > 0,
+            details=[ResponseDetail(
+                question=r.question.question_text or r.question.content or "Dynamic",
+                answer=r.answer_text or r.transcribed_text or "[No Answer]",
+                score=f"{round(r.score * 100, 1) if r.score is not None else 0}%"
+            ) for r in responses],
+            proctoring_logs=[ProctoringLogItem(
+                type=e.event_type,
+                time=e.timestamp.strftime("%H:%M:%S"),
+                details=e.details
+            ) for e in proctoring]
+        ))
     return results
 
-# --- Identity & Users ---
+# --- Identity & System ---
 
 @router.post("/upload-identity")
 async def upload_identity(file: UploadFile = File(...), current_user: User = Depends(get_admin_user)):

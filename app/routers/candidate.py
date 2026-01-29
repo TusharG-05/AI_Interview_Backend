@@ -9,13 +9,7 @@ from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
 from datetime import datetime
 
-templates = Jinja2Templates(directory="app/templates")
-
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
-
-@router.get("/dashboard", response_class=HTMLResponse)
-async def candidate_dashboard(request: Request):
-    return templates.TemplateResponse("dashboard_candidate.html", {"request": request})
 
 from ..schemas.requests import JoinRoomRequest
 from ..schemas.responses import HistoryItem, JoinRoomResponse

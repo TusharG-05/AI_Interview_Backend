@@ -15,7 +15,6 @@ import uuid
 from datetime import datetime
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
-templates = Jinja2Templates(directory="app/templates")
 audio_service = AudioService()
 nlp_service = NLPService()
 
@@ -25,10 +24,6 @@ class TTSRange(BaseModel):
 class EvaluateRequest(BaseModel):
     candidate_text: str
     reference_text: str
-
-@router.get("/", response_class=HTMLResponse)
-async def get_home(request: Request):
-    return templates.TemplateResponse("interview.html", {"request": request})
 
 @router.get("/general-questions")
 async def get_general_questions(session: Session = Depends(get_session)):
