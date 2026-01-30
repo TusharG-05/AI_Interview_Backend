@@ -43,8 +43,11 @@ async def lifespan(app: FastAPI):
     service = CameraService()
     yield
     
-    logger.info("Stopping CameraService...")
+    logger.info("Stopping Application Resources...")
+    from .core.database import engine
     service.stop()
+    engine.dispose()
+    logger.info("Application Shutdown Complete.")
 
 app = FastAPI(
     title="AI Interview Platform API",
