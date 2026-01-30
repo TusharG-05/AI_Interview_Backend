@@ -31,5 +31,9 @@ COPY . /app
 RUN adduser -u 5678 --disabled-password --gecos "" appuser && chown -R appuser /app
 USER appuser
 
+# Internal healthcheck to verify API availability
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -k -f https://localhost:8000/api/status/ || exit 1
+
 # Use main.py as entrypoint for smarter SSL and config handling
 CMD ["python", "main.py"]
