@@ -52,6 +52,29 @@ class AudioService:
         await communicate.save(output_path)
         return output_path
 
+    # ---------- AUDIO VALIDATION & HARDENING ----------
+
+    def validate_audio_integrity(self, file_path: str) -> bool:
+        """Verifies if the file exists, has size, and is readable as audio."""
+        if not os.path.exists(file_path):
+            logger.error(f"Validation Failed: File does not exist at {file_path}")
+            return False
+            
+        if os.path.getsize(file_path) < 100:
+            logger.error(f"Validation Failed: File too small/empty at {file_path}")
+            return False
+            
+        try:
+            # Quick check: can we read the header?
+            with sf.SoundFile(file_path) as f:
+                if f.frames == 0:
+                    logger.error(f"Validation Failed: Audio file has 0 frames {file_path}")
+                    return False
+            return True
+        except Exception as e:
+            logger.error(f"Validation Failed: File is not a valid audio format: {e}")
+            return False
+
     # ---------- WINDOWS SAFE AUDIO ----------
 
     def fix_audio_format(self, file_path: str):
@@ -68,6 +91,9 @@ class AudioService:
             logger.error(f"Error converting audio {file_path}: {e}")
 
     def load_audio(self, audio_path, target_sr=None):
+        if not self.validate_audio_integrity(audio_path):
+            raise ValueError(f"Cannot load invalid audio file: {audio_path}")
+            
         audio, sr = sf.read(audio_path)
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
@@ -86,6 +112,10 @@ class AudioService:
         Windows-safe audio fix. Disables intensive NR for speed.
         The VAD filter in STT handles the rest.
         """
+        if not self.validate_audio_integrity(audio_path):
+            logger.warning(f"Skipping cleanup for invalid audio: {audio_path}")
+            return audio_path
+            
         try:
             self.fix_audio_format(audio_path)
             return audio_path
