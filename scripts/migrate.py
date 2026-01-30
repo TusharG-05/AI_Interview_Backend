@@ -3,17 +3,15 @@ import os
 import sys
 
 # Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from sqlmodel import Session, select
-from config.database import engine, create_db_and_tables
-from models.db_models import Question
+from app.core.database import engine, init_db
+from app.models.db_models import Question
 
-QUESTIONS_FILE = "config/questions.json"
+QUESTIONS_FILE = "app/assets/questions.json"
 
 def migrate_questions():
     print("Starting migration...")
-    create_db_and_tables()
+    init_db()
     
     if not os.path.exists(QUESTIONS_FILE):
         print(f"No questions file found at {QUESTIONS_FILE}")
