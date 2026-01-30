@@ -5,6 +5,7 @@ from faster_whisper import WhisperModel
 import numpy as np
 import torch
 import soundfile as sf
+import resampy
 from speechbrain.inference.speaker import EncoderClassifier
 from pydub import AudioSegment
 from ..core.logger import get_logger

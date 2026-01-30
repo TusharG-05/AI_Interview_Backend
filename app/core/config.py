@@ -22,12 +22,23 @@ local_llm = ChatOllama(
 )
 
 # Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./interview_system.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    # Fallback to local sqlite for dev ONLY if explicitly requested, otherwise fail or default to postgres service
+    DATABASE_URL = "postgresql://postgres:postgres@postgres:5432/interview_db"
+
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Security
-SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key-change-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    # Fail-Fast in Production/Docker to prevent insecure defaults
+    if os.getenv("ENV", "development") == "production":
+         raise ValueError("FATAL: SECRET_KEY is missing in production environment.")
+    print("WARNING: Using insecure default SECRET_KEY for development.")
+    SECRET_KEY = "super-secret-key-change-in-production"
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 

@@ -4,14 +4,39 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/interview_db
     ports:
-      - 8000:8000
+      - "8000:8000"
     volumes:
-      - ./interview_system.db:/app/interview_system.db
       - ./app/assets:/app/app/assets
       - ./app:/app/app
       - ./main.py:/app/main.py
-      - ./.env:/app/.env
       - ./tools:/app/tools
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-interview_db}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
