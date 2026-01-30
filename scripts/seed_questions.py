@@ -1,6 +1,6 @@
 from sqlmodel import Session, select
-from config.database import engine, create_db_and_tables
-from models.db_models import Question
+from app.core.database import engine, init_db
+from app.models.db_models import Question
 
 def seed_questions():
     with Session(engine) as session:
@@ -26,5 +26,5 @@ def seed_questions():
         print(f"Successfully added {len(questions)} questions.")
 
 if __name__ == "__main__":
-    create_db_and_tables()
+    init_db()
     seed_questions()

@@ -2,12 +2,10 @@ import sys
 import os
 
 # Add parent directory to path so we can import from app
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from sqlmodel import Session, select
-from config.database import engine
-from models.db_models import User, UserRole
-from auth.security import get_password_hash
+from app.core.database import engine
+from app.models.db_models import User, UserRole
+from app.auth.security import get_password_hash
 
 def create_super_admin():
     with Session(engine) as session:

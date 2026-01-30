@@ -1,12 +1,10 @@
-from sqlmodel import select
-from config.database import get_session
-from models.db_models import InterviewRoom, User
+from sqlmodel import Session, select
+from app.core.database import engine
+from app.models.db_models import InterviewRoom
 
-# Manually get session
-session_generator = get_session()
-session = next(session_generator)
+with Session(engine) as session:
+    rooms = session.exec(select(InterviewRoom)).all()
 
-rooms = session.exec(select(InterviewRoom)).all()
 
 print(f"{'ID':<5} {'Code':<10} {'AdminID':<10} {'Active':<10} {'MaxSessions':<15}")
 print("-" * 60)
