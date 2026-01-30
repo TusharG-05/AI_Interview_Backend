@@ -12,7 +12,7 @@ The easiest way to test is via the built-in Swagger UI:
 ## 1. Authentication APIs
 
 ### Register a User
-- **Endpoint**: `POST /auth/register`
+- **Endpoint**: `POST /api/auth/register`
 - **Body**:
 ```json
 {
@@ -25,7 +25,7 @@ The easiest way to test is via the built-in Swagger UI:
 - **Response**: Returns JWT `access_token`.
 
 ### Login (JSON)
-- **Endpoint**: `POST /auth/login`
+- **Endpoint**: `POST /api/auth/login`
 - **Body**:
 ```json
 {
@@ -47,7 +47,7 @@ The easiest way to test is via the built-in Swagger UI:
 ## 2. Admin APIs (Requires Admin Token)
 
 ### Create an Interview Room
-- **Endpoint**: `POST /admin/rooms`
+- **Endpoint**: `POST /api/admin/rooms`
 - **Headers**: `Authorization: Bearer <ADMIN_TOKEN>`
 - **Body**:
 ```json
@@ -58,7 +58,7 @@ The easiest way to test is via the built-in Swagger UI:
 ```
 
 ### Add a Question
-- **Endpoint**: `POST /admin/questions`
+- **Endpoint**: `POST /api/admin/questions`
 - **Body**:
 ```json
 {
@@ -69,20 +69,8 @@ The easiest way to test is via the built-in Swagger UI:
 }
 ```
 
-### Generate Interview Invite (Link)
-- **Endpoint**: `POST /admin/interview/generate-link`
-- **Parameters**: `room_id` (Query)
-- **Response**:
-```json
-{
-  "url": "https://ai-interview.example.com/join?code=ABCDE",
-  "room_code": "ABCDE",
-  "password": "..."
-}
-```
-
 ### Get All User Results (Dashboard)
-- **Endpoint**: `GET /admin/users/results`
+- **Endpoint**: `GET /api/admin/users/results`
 - **Response**: A detailed list of all interview sessions, scores, and proctoring flags.
 
 ---
@@ -90,7 +78,7 @@ The easiest way to test is via the built-in Swagger UI:
 ## 3. Candidate & Interview APIs
 
 ### Join a Room
-- **Endpoint**: `POST /candidate/join`
+- **Endpoint**: `POST /api/candidate/join`
 - **Body**:
 ```json
 {
@@ -99,15 +87,27 @@ The easiest way to test is via the built-in Swagger UI:
 }
 ```
 
+### Upload Verification Selfie
+- **Endpoint**: `POST /api/candidate/upload-selfie`
+- **Headers**: `Authorization: Bearer <TOKEN>`
+- **Body**: `file` (Image File)
+- **Response**:
+```json
+{
+  "message": "Selfie uploaded successfully",
+  "path": "app/assets/images/profiles/user_1.jpg"
+}
+```
+
 ### Start Interview
-- **Endpoint**: `POST /interview/start`
+- **Endpoint**: `POST /api/interview/start`
 - **Body**: `candidate_name` (Form), `enrollment_audio` (File/Blob)
 
 ### Get Next Question
-- **Endpoint**: `GET /interview/next-question/{session_id}`
+- **Endpoint**: `GET /api/interview/next-question/{session_id}`
 
 ### Submit Answer (Voice)
-- **Endpoint**: `POST /interview/submit-answer`
+- **Endpoint**: `POST /api/interview/submit-answer`
 - **Body**: `session_id` (Form), `question_id` (Form), `audio` (File/Blob)
 
 ---
@@ -115,9 +115,9 @@ The easiest way to test is via the built-in Swagger UI:
 ## 4. System Status & Proctoring
 
 ### Health Check
-- **Endpoint**: `GET /status/`
+- **Endpoint**: `GET /api/status/`
 - Returns status of LLM (Ollama), Camera, and Database.
 
 ### Real-time Proctoring Alerts (WebSocket)
-- **Endpoint**: `ws://localhost:8000/status/ws`
+- **Endpoint**: `ws://localhost:8000/api/status/ws`
 - Receives JSON messages when security events occur (e.g., `{"warning": "MULTI-FACE DETECTED"}`).

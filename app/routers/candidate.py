@@ -78,3 +78,37 @@ async def my_history(
             "score": s.total_score
         })
     return history
+
+import shutil
+import os
+from fastapi import UploadFile, File
+
+@router.post("/upload-selfie")
+async def upload_selfie(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Allows candidate to upload their reference selfie for face verification."""
+    # Validate file type
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+        
+    # Create directory
+    upload_dir = "app/assets/images/profiles"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    # Save file with unique name (but consistent for user to avoid clutter? or history? Let's use user_id)
+    # Actually, using user_id allows easy overwrite and retrieval
+    file_path = f"{upload_dir}/user_{current_user.id}.jpg"
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    # Update DB
+    current_user.profile_image = file_path
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    
+    return {"message": "Selfie uploaded successfully", "path": file_path}

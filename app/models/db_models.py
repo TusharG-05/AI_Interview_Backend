@@ -14,6 +14,8 @@ class User(SQLModel, table=True):
     full_name: str
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
+    resume_text: Optional[str] = Field(default=None)  # Stored extracted text
+    profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie
     
     rooms_created: List["InterviewRoom"] = Relationship(back_populates="admin")
     sessions: List["InterviewSession"] = Relationship(back_populates="candidate")

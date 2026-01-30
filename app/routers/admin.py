@@ -108,26 +108,6 @@ async def list_rooms(current_user: User = Depends(get_admin_user), session: Sess
     rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)).all()
     return [RoomRead(id=r.id, room_code=r.room_code, password=r.password, is_active=r.is_active, max_sessions=r.max_sessions, active_sessions_count=len([s for s in r.sessions if s.end_time is None])) for r in rooms]
 
-@router.post("/interview/generate-link", response_model=InterviewLinkResponse)
-async def generate_interview_link(
-    room_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
-):
-    """Gereate a join URL and credentials for an interview room."""
-    room = session.get(InterviewRoom, room_id)
-    if not room or room.admin_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Room not found")
-    
-    # In a real environment, this would use a proper base URL from config
-    base_url = "https://ai-interview.example.com"
-    join_url = f"{base_url}/join?code={room.room_code}"
-    
-    return InterviewLinkResponse(
-        url=join_url,
-        room_code=room.room_code,
-        password=room.password
-    )
 
 # --- Results & Proctoring ---
 

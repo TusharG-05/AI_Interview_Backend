@@ -134,13 +134,37 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
     session_db.commit()
     return evaluation
 
+from ..auth.dependencies import get_current_user
+from ..models.db_models import User
+
 @router.post("/generate-resume-question")
-async def generate_resume_question(context: str = Form(...), resume_text: str = Form(...)):
-    return interview_service.generate_resume_question_content(context, resume_text)
+async def generate_resume_question(
+    context: str = Form(...), 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session)
+):
+    if not current_user.resume_text:
+        raise HTTPException(status_code=400, detail="No resume found. Please upload a resume first.")
+        
+    return interview_service.generate_resume_question_content(context, current_user.resume_text)
 
 @router.post("/process-resume")
-async def process_resume(resume: UploadFile = File(...)):
-    return {"text": await resume_service.extract_text_from_pdf(resume)}
+async def process_resume(
+    resume: UploadFile = File(...), 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_session)
+):
+    text = await resume_service.extract_text_from_pdf(resume)
+    if not text:
+         raise HTTPException(status_code=400, detail="Could not extract text from PDF.")
+    
+    # Persist to User Profile
+    current_user.resume_text = text
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    
+    return {"message": "Resume processed and saved successfully.", "preview": text[:100] + "..."}
 
 # --- Background Unified Processor ---
 

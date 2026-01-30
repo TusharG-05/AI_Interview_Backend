@@ -12,6 +12,13 @@ async def lifespan(app: FastAPI):
     # Startup
     setup_logging()
     logger.info("Starting Application (API-Only Mode)...")
+    
+    # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
+    import torchaudio
+    if not hasattr(torchaudio, "list_audio_backends"):
+        logger.warning("Monkey Patching torchaudio.list_audio_backends for SpeechBrain")
+        torchaudio.list_audio_backends = lambda: ["soundfile"]
+
     # Initialize database
     init_db()
     
@@ -30,7 +37,8 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Warm-up failed: {e}")
     
-    threading.Thread(target=warm_up, daemon=True).start()
+    # threading.Thread(target=warm_up, daemon=True).start()
+    logger.info("Warm-up: Validation skipped for stability.")
     
     service = CameraService()
     yield
@@ -42,7 +50,8 @@ app = FastAPI(
     title="AI Interview Platform API",
     description="High-performance JSON API for AI-driven face/gaze detection and automated interviews.",
     version="2.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    
 )
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,9 +64,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(video.router)
-app.include_router(settings.router)
-app.include_router(admin.router)
-app.include_router(interview.router)
-app.include_router(auth.router)
-app.include_router(candidate.router)
+app.include_router(video.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
+app.include_router(admin.router, prefix="/api")
+app.include_router(interview.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(candidate.router, prefix="/api")
