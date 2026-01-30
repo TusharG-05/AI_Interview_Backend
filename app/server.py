@@ -67,6 +67,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/api/status/")
+async def get_status():
+    """Simple healthcheck endpoint."""
+    return {"status": "online", "mode": "API-Only"}
+
 app.include_router(video.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")

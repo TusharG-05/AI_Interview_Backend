@@ -12,6 +12,7 @@ from ..auth.security import (
 )
 from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token
+from ..auth.security import verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -52,6 +53,36 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "email": user.email,
         "full_name": user.full_name,
         "expires_at": expire_time.isoformat()
+    }
+
+@router.post("/token", response_model=Token)
+async def login_for_access_token(
+    response: Response,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    session: Session = Depends(get_session)
+):
+    """Standard OAuth2 token endpoint for Swagger UI (Authorize button)."""
+    user = session.query(User).filter(User.email == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    
+    set_auth_cookie(response, token)
+    return {
+        "access_token": token, 
+        "token_type": "bearer",
+        "role": user.role,
+        "email": user.email,
+        "full_name": user.full_name,
+        "expires_at": (datetime.utcnow() + access_token_expires).isoformat()
     }
 
 @router.post("/logout")
