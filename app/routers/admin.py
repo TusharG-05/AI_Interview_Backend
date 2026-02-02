@@ -6,7 +6,7 @@ from ..models.db_models import Question, InterviewRoom, InterviewSession, Interv
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
-from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate
+from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate, UserCreate
 from ..schemas.responses import RoomRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse
 import os
 import shutil
@@ -152,6 +152,34 @@ async def upload_identity(file: UploadFile = File(...), current_user: User = Dep
     from ..services.camera import CameraService
     if CameraService().update_identity(content): return {"message": "Identity updated"}
     raise HTTPException(status_code=500, detail="Failed to update identity")
+
+@router.post("/users", response_model=UserRead)
+async def create_user(
+    user_data: UserCreate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Create a new user (Candidate or Admin)."""
+    existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    new_user = User(
+        email=user_data.email,
+        full_name=user_data.full_name,
+        password_hash=get_password_hash(user_data.password),
+        role=user_data.role
+    )
+    session.add(new_user)
+    session.commit()
+    session.refresh(new_user)
+    
+    return UserRead(
+        id=new_user.id,
+        email=new_user.email,
+        full_name=new_user.full_name,
+        role=new_user.role.value
+    )
 
 @router.get("/users", response_model=List[UserRead])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):

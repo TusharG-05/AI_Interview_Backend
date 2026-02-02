@@ -4,10 +4,6 @@ import numpy as np
 import multiprocessing
 import os
 import threading
-from deepface import DeepFace
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 from ..utils.image_processing import convert_to_rgb, resize_with_aspect_ratio
 from ..core.logger import get_logger
 
@@ -35,6 +31,10 @@ def face_recognition_worker(frame_queue, result_queue, known_encoding):
     worker_logger = get_logger("face_worker")
 
     # Initialize MediaPipe
+    import mediapipe as mp
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+    
     base_options = python.BaseOptions(model_asset_path='app/assets/face_landmarker.task')
     options = vision.FaceLandmarkerOptions(
         base_options=base_options,
@@ -46,6 +46,7 @@ def face_recognition_worker(frame_queue, result_queue, known_encoding):
     def recognition_loop():
         # Pre-warm DeepFace model
         try:
+            from deepface import DeepFace
             DeepFace.build_model("ArcFace")
         except:
             pass
@@ -71,6 +72,7 @@ def face_recognition_worker(frame_queue, result_queue, known_encoding):
                         # DeepFace expectation: BGR for numpy arrays
                         face_img_bgr = cv2.cvtColor(face_img_rgb, cv2.COLOR_RGB2BGR)
                         
+                        from deepface import DeepFace
                         objs = DeepFace.represent(
                             img_path=face_img_bgr, 
                             model_name="ArcFace", 
@@ -166,6 +168,7 @@ class FaceDetector:
         try:
             # Generate encoding for known person using DeepFace
             logger.info("FaceDetector: Loading DeepFace/ArcFace Model...")
+            from deepface import DeepFace
             objs = DeepFace.represent(
                 img_path=known_person_path, 
                 model_name="ArcFace", 
