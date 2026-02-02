@@ -3,6 +3,7 @@ import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import shutil
 import multiprocessing
+from app.server import app
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
