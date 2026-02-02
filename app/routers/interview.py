@@ -4,7 +4,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, InterviewSession, InterviewResponse
+from ..models.db_models import Question, InterviewSession, InterviewResponse, SessionQuestion
 from ..schemas.requests import AnswerRequest
 from ..services import interview as interview_service, resume as resume_service
 from ..services.audio import AudioService
@@ -61,8 +61,26 @@ async def start_interview(
 
 @router.get("/next-question/{session_id}")
 async def get_next_question(session_id: int, session_db: Session = Depends(get_session)):
+    # 1. Get answered questions
     answered_ids = [r.question_id for r in session_db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()]
-    question = session_db.exec(select(Question).where(~Question.id.in_(answered_ids))).first()
+    
+    # 2. Check if this session has assigned questions (Campaign mode)
+    has_assignments = session_db.exec(
+        select(SessionQuestion).where(SessionQuestion.session_id == session_id)
+    ).first() is not None
+    
+    if has_assignments:
+        # Campaign mode: Strictly follow assigned questions
+        session_q = session_db.exec(
+            select(SessionQuestion)
+            .where(SessionQuestion.session_id == session_id)
+            .where(~SessionQuestion.question_id.in_(answered_ids))
+            .order_by(SessionQuestion.sort_order)
+        ).first()
+        question = session_q.question if session_q else None
+    else:
+        # Legacy mode: Use general pool
+        question = session_db.exec(select(Question).where(~Question.id.in_(answered_ids))).first()
     
     if not question: return {"status": "finished"}
     

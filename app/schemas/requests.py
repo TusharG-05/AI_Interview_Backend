@@ -27,7 +27,14 @@ class UserCreate(BaseModel):
 # Admin Requests
 class RoomCreate(BaseModel):
     password: str
+    bank_id: int
+    question_count: int = 5
     max_sessions: Optional[int] = 30
+
+
+class BankCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
 
 
 class RoomUpdate(BaseModel):
@@ -49,3 +56,4 @@ class QuestionCreate(BaseModel):
     topic: Optional[str] = "General"
     difficulty: str = "Medium"
     reference_answer: Optional[str] = None
+    marks: int = 1

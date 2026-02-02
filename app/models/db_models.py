@@ -19,28 +19,48 @@ class User(SQLModel, table=True):
     
     rooms_created: List["InterviewRoom"] = Relationship(back_populates="admin")
     sessions: List["InterviewSession"] = Relationship(back_populates="candidate")
+    question_banks: List["QuestionBank"] = Relationship(back_populates="admin")
+
+class QuestionBank(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    description: Optional[str] = None
+    admin_id: int = Field(foreign_key="user.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    admin: User = Relationship(back_populates="question_banks")
+    questions: List["QuestionGroup"] = Relationship(back_populates="bank")
+    rooms: List["InterviewRoom"] = Relationship(back_populates="bank")
+
+class QuestionGroup(SQLModel, table=True):
+    """Formerly named 'Question'"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bank_id: Optional[int] = Field(default=None, foreign_key="questionbank.id")
+    content: Optional[str] = None
+    question_text: Optional[str] = None # Legacy support
+    topic: Optional[str] = None
+    difficulty: str = Field(default="Medium")
+    reference_answer: Optional[str] = None # Legacy support
+    marks: int = Field(default=1)
+    
+    bank: Optional[QuestionBank] = Relationship(back_populates="questions")
+    responses: List["InterviewResponse"] = Relationship(back_populates="question")
+    session_questions: List["SessionQuestion"] = Relationship(back_populates="question")
 
 class InterviewRoom(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     room_code: str = Field(unique=True, index=True)
     password: str
     admin_id: int = Field(foreign_key="user.id")
+    bank_id: Optional[int] = Field(default=None, foreign_key="questionbank.id")
+    question_count: int = Field(default=5) # How many random questions to pick
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     max_sessions: Optional[int] = Field(default=None)
     
     admin: User = Relationship(back_populates="rooms_created")
+    bank: Optional[QuestionBank] = Relationship(back_populates="rooms")
     sessions: List["InterviewSession"] = Relationship(back_populates="room")
-
-class Question(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    content: Optional[str] = None
-    question_text: Optional[str] = None # Legacy support
-    topic: Optional[str] = None
-    difficulty: str = Field(default="Medium")
-    reference_answer: Optional[str] = None # Legacy support
-    
-    responses: List["InterviewResponse"] = Relationship(back_populates="question")
 
 class InterviewSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -61,6 +81,17 @@ class InterviewSession(SQLModel, table=True):
     candidate: Optional["User"] = Relationship(back_populates="sessions")
     responses: List["InterviewResponse"] = Relationship(back_populates="session")
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session")
+    selected_questions: List["SessionQuestion"] = Relationship(back_populates="session")
+
+class SessionQuestion(SQLModel, table=True):
+    """Links sessions to their randomly assigned subset of questions"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(foreign_key="interviewsession.id")
+    question_id: int = Field(foreign_key="questiongroup.id")
+    sort_order: int = Field(default=0)
+    
+    session: InterviewSession = Relationship(back_populates="selected_questions")
+    question: QuestionGroup = Relationship(back_populates="session_questions")
 
 class ProctoringEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -74,7 +105,7 @@ class ProctoringEvent(SQLModel, table=True):
 class InterviewResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: int = Field(foreign_key="interviewsession.id")
-    question_id: int = Field(foreign_key="question.id")
+    question_id: int = Field(foreign_key="questiongroup.id")
     
     # Legacy fields
     audio_path: Optional[str] = None
@@ -88,16 +119,18 @@ class InterviewResponse(SQLModel, table=True):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     session: InterviewSession = Relationship(back_populates="responses")
-    question: Question = Relationship(back_populates="responses")
+    question: QuestionGroup = Relationship(back_populates="responses")
 
 # Aliases for legacy code
+Question = QuestionGroup
 CandidateResponse = InterviewResponse
 
 # Rebuild models to resolve forward references
 User.model_rebuild()
+QuestionBank.model_rebuild()
+QuestionGroup.model_rebuild()
 InterviewRoom.model_rebuild()
 InterviewSession.model_rebuild()
-Question.model_rebuild()
+SessionQuestion.model_rebuild()
 InterviewResponse.model_rebuild()
 ProctoringEvent.model_rebuild()
-
