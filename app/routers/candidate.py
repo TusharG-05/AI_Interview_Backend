@@ -4,10 +4,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, InterviewRoom, InterviewSession, InterviewResponse
+from ..models.db_models import User, InterviewRoom, InterviewSession, InterviewResponse, SessionQuestion
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
 from datetime import datetime
+import random
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
 
@@ -50,6 +51,23 @@ async def join_room(
     session.add(new_session)
     session.commit()
     session.refresh(new_session)
+    
+    # 3. Assign random questions from the bank (The Campaign Logic)
+    if room.bank_id and room.question_count > 0:
+        bank_questions = room.bank.questions
+        if bank_questions:
+            # Pick N random questions
+            sample_size = min(len(bank_questions), room.question_count)
+            selected = random.sample(bank_questions, sample_size)
+            
+            for i, q in enumerate(selected):
+                sq = SessionQuestion(
+                    session_id=new_session.id,
+                    question_id=q.id,
+                    sort_order=i
+                )
+                session.add(sq)
+            session.commit()
     
     return {
         "session_id": new_session.id,

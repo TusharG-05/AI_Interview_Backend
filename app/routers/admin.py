@@ -2,12 +2,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, InterviewRoom, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent
+from ..models.db_models import Question, QuestionBank, QuestionGroup, InterviewRoom, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
-from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate
-from ..schemas.responses import RoomRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse
+from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate, BankCreate
+from ..schemas.responses import RoomRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, BankRead
 import os
 import shutil
 import uuid
@@ -17,29 +17,69 @@ from datetime import datetime
 router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
 
-# --- Question Management ---
+# --- Question Bank & Question Management ---
 
-@router.get("/questions", response_model=List[Question])
-async def get_questions(
+@router.get("/banks", response_model=List[BankRead])
+async def list_banks(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """List all available interview questions."""
-    return session.exec(select(Question)).all()
+    """List all question banks created by the admin."""
+    banks = session.exec(select(QuestionBank).where(QuestionBank.admin_id == current_user.id)).all()
+    return [BankRead(
+        id=b.id, name=b.name, description=b.description, 
+        question_count=len(b.questions), created_at=b.created_at.isoformat()
+    ) for b in banks]
 
-@router.post("/questions", response_model=Question)
-async def add_question(
+@router.post("/banks", response_model=BankRead)
+async def create_bank(
+    bank_data: BankCreate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Create a new collection of questions."""
+    new_bank = QuestionBank(
+        name=bank_data.name,
+        description=bank_data.description,
+        admin_id=current_user.id
+    )
+    session.add(new_bank)
+    session.commit()
+    session.refresh(new_bank)
+    return BankRead(id=new_bank.id, name=new_bank.name, description=new_bank.description, question_count=0, created_at=new_bank.created_at.isoformat())
+
+@router.get("/banks/{bank_id}/questions", response_model=List[Question])
+async def get_bank_questions(
+    bank_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """List all questions within a specific bank."""
+    bank = session.get(QuestionBank, bank_id)
+    if not bank or bank.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Bank not found")
+    return bank.questions
+
+@router.post("/banks/{bank_id}/questions", response_model=Question)
+async def add_question_to_bank(
+    bank_id: int,
     q_data: QuestionCreate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """API for manually adding a new interview question."""
-    new_q = Question(
+    """API for manually adding a new interview question to a bank."""
+    bank = session.get(QuestionBank, bank_id)
+    if not bank or bank.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Bank not found")
+        
+    new_q = QuestionGroup(
+        bank_id=bank_id,
         content=q_data.content,
         question_text=q_data.content,
         topic=q_data.topic,
         difficulty=q_data.difficulty,
-        reference_answer=q_data.reference_answer
+        reference_answer=q_data.reference_answer,
+        marks=q_data.marks
     )
     session.add(new_q)
     session.commit()
@@ -88,6 +128,18 @@ async def create_room(
     current_user: User = Depends(get_admin_user), 
     session: Session = Depends(get_session)
 ):
+    # Validate Bank
+    bank = session.get(QuestionBank, room_data.bank_id)
+    if not bank or bank.admin_id != current_user.id:
+        raise HTTPException(status_code=400, detail="Invalid Question Bank ID")
+    
+    # Validate Question Count
+    if room_data.question_count > len(bank.questions):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Bank only has {len(bank.questions)} questions. Cannot request {room_data.question_count}."
+        )
+
     room_code = secrets.token_hex(3).upper()
     while session.exec(select(InterviewRoom).where(InterviewRoom.room_code == room_code)).first():
         room_code = secrets.token_hex(3).upper()
@@ -96,6 +148,8 @@ async def create_room(
         room_code=room_code,
         password=room_data.password,
         admin_id=current_user.id,
+        bank_id=room_data.bank_id,
+        question_count=room_data.question_count,
         max_sessions=room_data.max_sessions or 30
     )
     session.add(new_room)
