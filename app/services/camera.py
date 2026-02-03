@@ -4,8 +4,8 @@ import time
 import os
 import numpy as np
 from typing import Optional, Tuple
-from .face import FaceDetector
-from .gaze import GazeDetector
+# from .face import FaceDetector
+# from .gaze import GazeDetector
 from ..utils.image_processing import decode_image
 from ..core.logger import get_logger
 
@@ -43,6 +43,7 @@ class CameraService:
         self.current_warning_text: str = ""
         self.frame_lock = threading.Lock()
         self._detectors_ready = False
+        self._monitor_thread = None
 
     def start(self, video_source=None):
         """
@@ -60,6 +61,7 @@ class CameraService:
             
             if os.path.exists(known_path):
                 try:
+                    from .face import FaceDetector
                     self.face_detector = FaceDetector(known_person_path=known_path)
                     logger.info("Background: FaceDetector ready.")
                 except Exception as e:
@@ -67,6 +69,7 @@ class CameraService:
             
             if os.path.exists(gaze_path):
                 try:
+                    from .gaze import GazeDetector
                     self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
                     logger.info("Background: GazeDetector ready.")
                 except Exception as e:
@@ -77,6 +80,7 @@ class CameraService:
 
         threading.Thread(target=init_detectors, daemon=True).start()
         self.running = True
+        self.start_monitor()
 
     def stop(self):
         self.running = False
@@ -85,30 +89,12 @@ class CameraService:
         if self.gaze_detector:
             self.gaze_detector.close()
 
-    def process_external_frame(self, image_bytes, session_id: Optional[int] = None):
+    def process_frame_ndarray(self, frame: np.ndarray, session_id: Optional[int] = None):
         """
-        Processes a frame received from the client via WebSocket.
-        Returns a dict of analysis results.
+        Core logic: Processes a numpy BGR frame (from WS or WebRTC).
+        Returns: (annotated_frame, result_dict)
         """
-        if not self._detectors_ready:
-             return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
-
-        # Senior Dev Hardening: Worker Heartbeat Check
-        if self.face_detector and not self.face_detector.worker.is_alive():
-            logger.warning("RECOVERY: FaceDetector worker died. Restarting...")
-            self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
-            
-        if self.gaze_detector and not self.gaze_detector.worker.is_alive():
-            logger.warning("RECOVERY: GazeDetector worker died. Restarting...")
-            self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
-
         try:
-            # Decode image using utility
-            frame = decode_image(image_bytes)
-            
-            if frame is None:
-                return {"warning": "Bad Frame"}
-
             # Analyze
             face_status = (False, 1.0, 0, [])
             gaze_status = "No Gaze"
@@ -135,7 +121,7 @@ class CameraService:
             elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
             elif "WARNING" in str(gaze_status): warning = str(gaze_status)
 
-            # Update latest frame for MJPEG stream
+            # Update latest frame for MJPEG stream (Admin view)
             with self.frame_lock:
                 _, buffer = cv2.imencode('.jpg', frame)
                 self.latest_frame = buffer.tobytes()
@@ -143,6 +129,7 @@ class CameraService:
 
             # --- PERSIST PROCTORING EVENT ---
             if session_id and warning:
+                # Use local imports to avoid circular deps if any
                 from ..core.database import engine
                 from sqlmodel import Session
                 from ..models.db_models import ProctoringEvent
@@ -162,7 +149,7 @@ class CameraService:
                 try: callback(self._current_warning)
                 except: pass
 
-            return {
+            result_dict = {
                 "auth": bool(found),
                 "auth_dist": float(dist) if dist is not None else 1.0,
                 "faces": int(n_face),
@@ -170,6 +157,59 @@ class CameraService:
                 "warning": warning,
                 "box": locs[0] if locs else None
             }
+            return frame, result_dict
+
+        except Exception as e:
+            logger.error(f"Core Frame Process Error: {e}")
+            return frame, {"warning": "Server Error"}
+
+    def start_monitor(self):
+        """Starts background monitoring for detector health."""
+        if self._monitor_thread and self._monitor_thread.is_alive(): return
+        
+        def monitor_loop():
+            logger.info("Detector Monitor Started.")
+            while self.running:
+                time.sleep(5)
+                # Face Detector Check
+                if self.face_detector and not self.face_detector.worker.is_alive():
+                    logger.warning("MONITOR: FaceDetector worker died. Restarting...")
+                    try:
+                        from .face import FaceDetector
+                        self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
+                    except Exception as e:
+                        logger.error(f"MONITOR: Failed to restart FaceDetector: {e}")
+                
+                # Gaze Detector Check
+                if self.gaze_detector and not self.gaze_detector.worker.is_alive():
+                    logger.warning("MONITOR: GazeDetector worker died. Restarting...")
+                    try:
+                        from .gaze import GazeDetector
+                        self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
+                    except Exception as e:
+                        logger.error(f"MONITOR: Failed to restart GazeDetector: {e}")
+
+        self._monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+        self._monitor_thread.start()
+
+    def process_external_frame(self, image_bytes, session_id: Optional[int] = None):
+        """
+        Processes a frame received from the client via WebSocket.
+        Returns a dict of analysis results.
+        """
+        if not self._detectors_ready:
+             return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
+
+        try:
+            # Decode image using utility
+            frame = decode_image(image_bytes)
+            
+            if frame is None:
+                return {"warning": "Bad Frame"}
+
+            # Delegate to core logic
+            _, result = self.process_frame_ndarray(frame, session_id)
+            return result
             
         except Exception as e:
             logger.error(f"Frame Process Error: {e}")
@@ -193,6 +233,7 @@ class CameraService:
         
         # Start new
         try:
+            from .face import FaceDetector
             self.face_detector = FaceDetector(known_person_path=filepath)
             return True
         except Exception as e:

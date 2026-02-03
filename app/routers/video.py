@@ -5,6 +5,7 @@ from ..services.camera import CameraService
 import time
 import asyncio
 import json
+from ..core.logger import get_logger
 
 router = APIRouter(tags=["Video"])
 camera_service = CameraService()
@@ -43,3 +44,97 @@ async def video_websocket(websocket: WebSocket, session_id: Optional[int] = None
             await websocket.send_text(json.dumps(result))
     except WebSocketDisconnect: pass
     except Exception as e: print(f"Video WebSocket Error: {e}")
+
+# --- WebRTC Signaling ---
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from ..services.webrtc import VideoTransformTrack
+from pydantic import BaseModel
+
+class Offer(BaseModel):
+    sdp: str
+    type: str
+    session_id: Optional[int] = None
+
+# Global set to keep references to PCs
+# Global registry for active sessions: {session_id: {"pc": pc, "track": video_track}}
+active_sessions = {}
+
+@router.post("/video/offer")
+async def offer(params: Offer):
+    """
+    Candidate Connection (Proctoring Source)
+    """
+    offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
+    pc = RTCPeerConnection()
+    
+    # Store PC reference to prevent GC
+    session_id = params.session_id or 0
+    active_sessions[session_id] = {"pc": pc, "track": None}
+
+    logger = get_logger(__name__)
+    logger.info(f"WebRTC: New Candidate Connection {session_id}")
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        if pc.connectionState in ["failed", "closed"]:
+            await pc.close()
+            if session_id in active_sessions and active_sessions[session_id]["pc"] == pc:
+                del active_sessions[session_id]
+                logger.info(f"WebRTC: Candidate {session_id} Disconnected")
+
+    @pc.on("track")
+    def on_track(track):
+        if track.kind == "video":
+            # 1. Wrap with AI
+            local_track = VideoTransformTrack(track, session_id=session_id)
+            # 2. Add to PC (Echo back to candidate)
+            pc.addTrack(local_track)
+            # 3. Register for Admin Ghost Mode
+            active_sessions[session_id]["track"] = local_track
+            logger.info(f"WebRTC: Track registered for Session {session_id}")
+
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+@router.post("/video/watch/{target_session_id}")
+async def watch(target_session_id: int, params: Offer):
+    """
+    Admin Ghost Mode: Watch an active session.
+    """
+    if target_session_id not in active_sessions or not active_sessions[target_session_id]["track"]:
+        # Session not active or no video yet
+        return {"error": "Session Not Active"}
+
+    offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
+    pc = RTCPeerConnection()
+    
+    # We don't store Admin PCs permanently in the session registry, 
+    # but we track them to prevent GC (could use a separate set)
+    # For now, just a set is fine
+    pcs.add(pc)
+
+    logger = get_logger(__name__)
+    logger.info(f"WebRTC: Admin watching Session {target_session_id}")
+    
+    # Add the Candidate's track to Admin's PC
+    candidate_track = active_sessions[target_session_id]["track"]
+    pc.addTrack(candidate_track)
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        if pc.connectionState in ["failed", "closed"]:
+            await pc.close()
+            pcs.discard(pc)
+
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+# Shutdown hook to close PCs? 
+# In a real app, you'd want to close these on shutdown.
+# FastAPI lifespan in server.py could handle this if we exposed `pcs`.

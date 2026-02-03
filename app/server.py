@@ -8,13 +8,13 @@ from .core.logger import setup_logging, get_logger
 # to avoid segmentation faults in the database driver (psycopg2-binary).
 setup_logging()
 logger = get_logger(__name__)
-logger.info("PRE-INIT: Initializing database early for stability...")
-init_db()
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Lifespan: Starting Application (API-Only Mode)...")
+    logger.info("PRE-INIT: Initializing database...")
+    init_db()
     
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
     import torchaudio
@@ -58,6 +58,17 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global Exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "path": request.url.path}
+    )
 
 from fastapi.middleware.cors import CORSMiddleware
 

@@ -93,6 +93,18 @@ async def upload_document(
     session: Session = Depends(get_session)
 ):
     """Extract Q&A pairs from an uploaded document (Resume/Job Desc)."""
+    # 1. Validation (DoS Prevention)
+    if not file.filename.lower().endswith(('.pdf', '.txt', '.docx')):
+         raise HTTPException(status_code=400, detail="Only PDF, TXT, or DOCX files are allowed.")
+    
+    file.file.seek(0, 2)
+    size = file.file.tell()
+    file.file.seek(0)
+    
+    MAX_SIZE = 10 * 1024 * 1024 # 10MB
+    if size > MAX_SIZE:
+         raise HTTPException(status_code=400, detail=f"File too large. Max size is {MAX_SIZE/1024/1024}MB.")
+
     os.makedirs("temp_uploads", exist_ok=True)
     file_path = f"temp_uploads/{uuid.uuid4().hex[:8]}_{file.filename}"
     with open(file_path, "wb") as buffer:
@@ -241,6 +253,10 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
 
 @router.post("/shutdown")
 def shutdown(current_user: User = Depends(get_admin_user)):
+    """Graceful shutdown trigger."""
     if current_user.role != UserRole.SUPER_ADMIN: raise HTTPException(status_code=403)
-    os.kill(os.getpid(), 15)
-    return {"message": "Shutting down"}
+    
+    # Graceful shutdown for Uvicorn
+    import signal
+    os.kill(os.getpid(), signal.SIGTERM) # SIGTERM allows cleaning up
+    return {"message": "Server shutting down..."}

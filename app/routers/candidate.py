@@ -43,31 +43,37 @@ async def join_room(
         if active_sessions_count >= room.max_sessions:
              raise HTTPException(status_code=400, detail="Room has reached maximum active session limit. Please try again later.")
 
-    new_session = InterviewSession(
-        room_id=room.id,
-        candidate_id=current_user.id,
-        start_time=datetime.utcnow()
-    )
-    session.add(new_session)
-    session.commit()
-    session.refresh(new_session)
-    
-    # 3. Assign random questions from the bank (The Campaign Logic)
-    if room.bank_id and room.question_count > 0:
-        bank_questions = room.bank.questions
-        if bank_questions:
-            # Pick N random questions
-            sample_size = min(len(bank_questions), room.question_count)
-            selected = random.sample(bank_questions, sample_size)
-            
-            for i, q in enumerate(selected):
-                sq = SessionQuestion(
-                    session_id=new_session.id,
-                    question_id=q.id,
-                    sort_order=i
-                )
-                session.add(sq)
-            session.commit()
+    try:
+        new_session = InterviewSession(
+            room_id=room.id,
+            candidate_id=current_user.id,
+            start_time=datetime.utcnow()
+        )
+        session.add(new_session)
+        session.flush() # Get ID, do not commit
+        session.refresh(new_session)
+        
+        # 3. Assign random questions from the bank (The Campaign Logic)
+        if room.bank_id and room.question_count > 0:
+            bank_questions = room.bank.questions
+            if bank_questions:
+                # Pick N random questions
+                sample_size = min(len(bank_questions), room.question_count)
+                selected = random.sample(bank_questions, sample_size)
+                
+                for i, q in enumerate(selected):
+                    sq = SessionQuestion(
+                        session_id=new_session.id,
+                        question_id=q.id,
+                        sort_order=i
+                    )
+                    session.add(sq)
+        
+        # ACID: Single atomic commit for Session + Questions
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to join room: {str(e)}")
     
     return {
         "session_id": new_session.id,
