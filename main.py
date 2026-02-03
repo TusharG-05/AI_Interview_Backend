@@ -3,14 +3,12 @@ import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import shutil
 import multiprocessing
+from app.server import app
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        pass
-        
+    # Removed multiprocessing.freeze_support() and set_start_method('spawn') 
+    # as they were causing segmentation faults with certain AI libraries on Linux.
+    
     print("Starting Server in API-ONLY Mode...")
     
     # Ensure ffmpeg is available
@@ -31,4 +29,4 @@ if __name__ == "__main__":
     else:
         print("\n[WARNING] No SSL Certificates found. HTTPS disabled.")
 
-    uvicorn.run("app.server:app", host="0.0.0.0", port=8000, reload=True, **ssl_config)
+    uvicorn.run("app.server:app", host="0.0.0.0", port=8000, reload=False, **ssl_config)
