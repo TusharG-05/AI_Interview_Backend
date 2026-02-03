@@ -17,6 +17,13 @@ class RoomRead(BaseModel):
     max_sessions: Optional[int]
     active_sessions_count: int = 0
 
+class BankRead(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    question_count: int = 0
+    created_at: str
+
 class SessionRead(BaseModel):
     id: int
     candidate_name: str
