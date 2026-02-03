@@ -1,5 +1,6 @@
 """Configuration and settings for the application."""
 import os
+import logging
 from dotenv import load_dotenv
 from langchain_ollama import ChatOllama
 
@@ -31,13 +32,19 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # Security
+# Security
 SECRET_KEY = os.getenv("SECRET_KEY")
+ENV = os.getenv("ENV", "development")
+
 if not SECRET_KEY:
-    # Fail-Fast in Production/Docker to prevent insecure defaults
-    if os.getenv("ENV", "development") == "production":
-         raise ValueError("FATAL: SECRET_KEY is missing in production environment.")
-    print("WARNING: Using insecure default SECRET_KEY for development.")
-    SECRET_KEY = "super-secret-key-change-in-production"
+    if ENV == "production":
+        # FATAL: Never allow production start without secret
+        raise ValueError("CRITICAL SECURITY ERROR: SECRET_KEY is missing in production environment.")
+    else:
+        # Dev specific fallback
+        logger = logging.getLogger("uvicorn")
+        logger.warning("Using INSECURE default SECRET_KEY for development only.")
+        SECRET_KEY = "dev-insecure-secret-key-do-not-use-in-prod"
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
