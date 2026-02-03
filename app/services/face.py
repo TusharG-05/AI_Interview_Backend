@@ -4,7 +4,7 @@ import numpy as np
 import multiprocessing
 import os
 import threading
-# from deepface import DeepFace  # Disabled heavy model
+from deepface import DeepFace  
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -44,25 +44,62 @@ class MediaPipeDetector:
         return locs
 
 
-# class FaceRecognizer:
-#     """
-#     Handles face recognition using DeepFace.
-#     Currently disabled due to heavy model usage.
-#     """
-#     def __init__(self, known_encoding=None):
-#         self.known_encoding = known_encoding
-#         # self.model_name = "ArcFace"
-#         # try:
-#         #     DeepFace.build_model(self.model_name)
-#         # except:
-#         #     pass
-#
-#     def recognize(self, img_rgb, locs):
-#         """Returns matches based on known encoding. Currently returns NO matches."""
-#         # matches = []
-#         # if self.known_encoding is None: return matches
-#         # ... logic commented out ...
-#         return []
+class FaceRecognizer:
+    """
+    Handles face recognition using DeepFace.
+    Currently disabled due to heavy model usage.
+    """
+    def __init__(self, known_encoding=None):
+        self.known_encoding = known_encoding
+        self.model_name = "ArcFace"
+        try:
+            DeepFace.build_model(self.model_name)
+        except:
+            pass
+
+    def recognize(self, img_rgb, locs):
+        """
+        Returns list of booleans indicating matches for each face location.
+        Uses Cosine Similarity on ArcFace embeddings.
+        """
+        matches = []
+        if self.known_encoding is None: return [False] * len(locs)
+
+        for (t, r, b, l) in locs:
+            # Padding check
+            h, w = img_rgb.shape[:2]
+            if t < 0 or l < 0 or b > h or r > w: continue
+            
+            face = img_rgb[t:b, l:r]
+            if face.size == 0: 
+                matches.append(False)
+                continue
+            
+            try:
+                # Extract embedding for the cropped face
+                # normalization='ArcFace' is handled by DeepFace internally if model_name is ArcFace
+                objs = DeepFace.represent(
+                    img_path=face, 
+                    model_name=self.model_name, 
+                    enforce_detection=False, 
+                    detector_backend="skip",
+                    align=False # MediaPipe crop is already "aligned" enough for basic check
+                )
+                curr_emb = objs[0]["embedding"]
+                
+                # Cosine Similarity
+                a = np.array(self.known_encoding)
+                b = np.array(curr_emb)
+                cos_sim = np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+                
+                # ArcFace Threshold: roughly 0.4 - 0.5 for similarity
+                matches.append(bool(cos_sim > 0.40))
+                
+            except Exception as e:
+                # print(f"Rec Error: {e}")
+                matches.append(False)
+        
+        return matches
 
 
 def face_worker_process(frame_queue, result_queue, known_encoding):
@@ -72,7 +109,7 @@ def face_worker_process(frame_queue, result_queue, known_encoding):
     worker_logger = get_logger("face_worker")
 
     detector = MediaPipeDetector()
-    # recognizer = FaceRecognizer(known_encoding) # Disabled for now
+    recognizer = FaceRecognizer(known_encoding)
 
     while True:
         try:
@@ -93,14 +130,18 @@ def face_worker_process(frame_queue, result_queue, known_encoding):
             
             locs = detector.detect(img)
             
-            # Recognition is skipped
-            match_val, conf_val = False, 1.0 
+            # Recognition
+            matches = recognizer.recognize(img, locs)
+            
+            # Determine Authorization Status
+            # Logic: If at least one face matches the known person -> True
+            is_authorized = any(matches) if matches else False
             
             # Map back coordinates
             final_locs = [(int(t/s), int(r/s), int(b/s), int(l/s)) for (t,r,b,l) in locs]
 
             if not result_queue.full():
-                result_queue.put((match_val, conf_val, len(final_locs), final_locs))
+                result_queue.put((is_authorized, 1.0, len(final_locs), final_locs))
         except Exception as e:
             worker_logger.error(f"Face Worker Error: {e}")
 
@@ -108,15 +149,23 @@ def face_worker_process(frame_queue, result_queue, known_encoding):
 class FaceService:
     """The main interface for face-related services."""
     def __init__(self, known_person_path="known_person.jpg"):
-        logger.info("Starting Refactored Face Service (Detection Only)...")
+        logger.info("Starting Refactored Face Service (Detection + ArcFace)...")
         
         self.known_encoding = None
-        # Face recognition initialization commented out
-        # try:
-        #     objs = DeepFace.represent(img_path=known_person_path, model_name="ArcFace", ...)
-        #     self.known_encoding = np.array(objs[0]["embedding"])
-        # except Exception as e:
-        #     logger.error(f"Known Person Load Error: {e}")
+        
+        try:
+            if os.path.exists(known_person_path):
+                objs = DeepFace.represent(
+                    img_path=known_person_path, 
+                    model_name="ArcFace", 
+                    enforce_detection=False
+                )
+                self.known_encoding = np.array(objs[0]["embedding"])
+                logger.info("Known Person Embedding Loaded via ArcFace.")
+            else:
+                logger.warning(f"Known person file not found at {known_person_path}")
+        except Exception as e:
+            logger.error(f"Known Person Load Error: {e}")
 
         self.frame_queue = multiprocessing.Queue(maxsize=1)
         self.result_queue = multiprocessing.Queue(maxsize=1)

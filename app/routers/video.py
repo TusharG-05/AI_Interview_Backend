@@ -5,6 +5,7 @@ from ..services.camera import CameraService
 import time
 import asyncio
 import json
+from ..core.logger import get_logger
 
 router = APIRouter(tags=["Video"])
 camera_service = CameraService()
@@ -43,3 +44,62 @@ async def video_websocket(websocket: WebSocket, session_id: Optional[int] = None
             await websocket.send_text(json.dumps(result))
     except WebSocketDisconnect: pass
     except Exception as e: print(f"Video WebSocket Error: {e}")
+
+# --- WebRTC Signaling ---
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from ..services.webrtc import VideoTransformTrack
+from pydantic import BaseModel
+
+class Offer(BaseModel):
+    sdp: str
+    type: str
+    session_id: Optional[int] = None
+
+# Global set to keep references to PCs
+pcs = set()
+
+@router.post("/video/offer")
+async def offer(params: Offer):
+    """
+    WebRTC Signaling Outcome:
+    1. Client sends SDP Offer + session_id
+    2. Server creates RTCPeerConnection
+    3. Server wraps Client's Video with VideoTransformTrack (AI Processing)
+    4. Server returns SDP Answer
+    """
+    offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
+    
+    # Initialize the PeerConnection
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+
+    logger = get_logger(__name__)
+    logger.info(f"WebRTC: New Connection Request for Session {params.session_id}")
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        logger.info(f"WebRTC Connection State: {pc.connectionState}")
+        if pc.connectionState == "failed" or pc.connectionState == "closed":
+            await pc.close()
+            if pc in pcs:
+                pcs.discard(pc)
+
+    @pc.on("track")
+    def on_track(track):
+        logger.info(f"WebRTC: Track received kind={track.kind}")
+        if track.kind == "video":
+            # Add the transformer track to the PC
+            # This 'echoes' the video back to the client, but annotated!
+            local_track = VideoTransformTrack(track, session_id=params.session_id)
+            pc.addTrack(local_track)
+
+    # Handle the SDP Handshake
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+# Shutdown hook to close PCs? 
+# In a real app, you'd want to close these on shutdown.
+# FastAPI lifespan in server.py could handle this if we exposed `pcs`.
