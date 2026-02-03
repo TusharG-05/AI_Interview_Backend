@@ -11,7 +11,7 @@ from ..prompts.evaluation import evaluation_prompt
 RESUME_TOPICS = ["Data Structures & Algorithms", "System Design", "Database Management", "API Design", "Security", "Scalability", "DevOps"]
 
 # Chains
-interview_chain = interview_prompt | local_llm
+interview_chain = interview_prompt | local_llm 
 evaluation_chain = evaluation_prompt | local_llm
 
 def generate_resume_question_content(context: str, resume_text: str) -> dict:
