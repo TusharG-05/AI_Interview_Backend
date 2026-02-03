@@ -4,10 +4,6 @@ import numpy as np
 import multiprocessing
 import os
 import threading
-# from deepface import DeepFace  # Disabled heavy model
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
 from ..utils.image_processing import convert_to_rgb, resize_with_aspect_ratio
 from ..core.logger import get_logger
 
@@ -71,8 +67,80 @@ def face_worker_process(frame_queue, result_queue, known_encoding):
     setup_logging()
     worker_logger = get_logger("face_worker")
 
-    detector = MediaPipeDetector()
-    # recognizer = FaceRecognizer(known_encoding) # Disabled for now
+    # Initialize MediaPipe
+    import mediapipe as mp
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+    
+    base_options = python.BaseOptions(model_asset_path='app/assets/face_landmarker.task')
+    options = vision.FaceLandmarkerOptions(
+        base_options=base_options,
+        num_faces=4,
+        min_face_detection_confidence=0.5
+    )
+    detector = vision.FaceLandmarker.create_from_options(options)
+
+    def recognition_loop():
+        # Pre-warm DeepFace model
+        try:
+            from deepface import DeepFace
+            DeepFace.build_model("ArcFace")
+        except:
+            pass
+
+        while True:
+            time.sleep(0.01)
+            with state['lock']:
+                img_copy = state['img'].copy() if state['img'] is not None else None
+                locs_copy = list(state['locs'])
+            
+            if img_copy is not None and locs_copy:
+                try:
+                    # Slow recognition happens in background thread
+                    # Convert MediaPipe locs (top, right, bottom, left) to DeepFace bboxes if needed
+                    # DeepFace represent can take a list of alignments or full image.
+                    # For accuracy in 2026, we use ArcFace.
+                    matches = []
+                    for (t, r, b, l) in locs_copy:
+                        # Crop face
+                        face_img_rgb = img_copy[max(0, t):b, max(0, l):r]
+                        if face_img_rgb.size == 0: continue
+                        
+                        # DeepFace expectation: BGR for numpy arrays
+                        face_img_bgr = cv2.cvtColor(face_img_rgb, cv2.COLOR_RGB2BGR)
+                        
+                        from deepface import DeepFace
+                        objs = DeepFace.represent(
+                            img_path=face_img_bgr, 
+                            model_name="ArcFace", 
+                            enforce_detection=False,
+                            detector_backend="skip",
+                            align=True # Standard ArcFace alignment
+                        )
+                        
+                        if objs and known_encoding is not None:
+                            embedding = np.array(objs[0]["embedding"])
+                            # Manual Cosine Distance: 1 - (A.B / (|A||B|))
+                            dot = np.dot(embedding, known_encoding)
+                            norm_a = np.linalg.norm(embedding)
+                            norm_b = np.linalg.norm(known_encoding)
+                            dist = 1 - (dot / (norm_a * norm_b))
+                            matches.append(dist)
+
+                    if matches:
+                        min_dist = min(matches)
+                        # ArcFace Cosine threshold is typically around 0.4 for high security
+                        match = min_dist <= 0.45 
+                        with state['lock']:
+                            state['match'] = match
+                            state['conf'] = float(min_dist)
+                except Exception as e:
+                    # print(f"Recognition Thread Error: {e}")
+                    pass
+            time.sleep(0.3) # Throttle recognition thread for efficiency
+
+    recog_thread = threading.Thread(target=recognition_loop, daemon=True)
+    recog_thread.start()
 
     while True:
         try:
@@ -108,15 +176,22 @@ def face_worker_process(frame_queue, result_queue, known_encoding):
 class FaceService:
     """The main interface for face-related services."""
     def __init__(self, known_person_path="known_person.jpg"):
-        logger.info("Starting Refactored Face Service (Detection Only)...")
-        
-        self.known_encoding = None
-        # Face recognition initialization commented out
-        # try:
-        #     objs = DeepFace.represent(img_path=known_person_path, model_name="ArcFace", ...)
-        #     self.known_encoding = np.array(objs[0]["embedding"])
-        # except Exception as e:
-        #     logger.error(f"Known Person Load Error: {e}")
+        logger.info("Starting Zero-Lag Modernized Face Service (2026)...")
+        try:
+            # Generate encoding for known person using DeepFace
+            logger.info("FaceDetector: Loading DeepFace/ArcFace Model...")
+            from deepface import DeepFace
+            objs = DeepFace.represent(
+                img_path=known_person_path, 
+                model_name="ArcFace", 
+                enforce_detection=True,
+                detector_backend="opencv"
+            )
+            logger.info("FaceDetector: DeepFace Model Loaded.")
+            self.known_encoding = np.array(objs[0]["embedding"]) if objs else None
+        except Exception as e:
+            logger.error(f"Known Person Load Error: {e}")
+            self.known_encoding = None
 
         self.frame_queue = multiprocessing.Queue(maxsize=1)
         self.result_queue = multiprocessing.Queue(maxsize=1)
