@@ -1,39 +1,41 @@
-# For more information, please refer to https://aka.ms/vscode-docker-python
-FROM python:3.11-slim
+# Base Image: Python 3.11 Slim (Debian Bookworm)
+FROM python:3.11-slim-bookworm
 
-EXPOSE 8000
-
-# Keeps Python from generating .pyc files in the container
-ENV PYTHONDONTWRITEBYTECODE=1
-# Turns off buffering for easier container logging
-ENV PYTHONUNBUFFERED=1
-
-# Install system dependencies for OpenCV, Faster-Whisper, and Audio processing
+# System Dependencies
+# libav* -> For PyAV/aiortc header compilation (if wheel missing) or linking
+# libgl1/libglib2.0 -> For OpenCV
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    libavformat-dev \
+    libavcodec-dev \
+    libavdevice-dev \
+    libavutil-dev \
+    libswscale-dev \
+    libswresample-dev \
+    libavfilter-dev \
     libgl1 \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
-    libsndfile1 \
-    ffmpeg \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install pip requirements
+# Dependency Layer
 COPY requirements.txt .
-RUN python -m pip install --no-cache-dir -r requirements.txt
+# Install without cache to avoid corrupted wheels
+# Note: We can now use strict av versions if we want, or let aiortc decide
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-COPY . /app
+# Application Layer
+COPY . .
 
-# Creates a non-root user with an explicit UID and adds permission to access the /app folder
-RUN adduser -u 5678 --disabled-password --gecos "" appuser && chown -R appuser /app
-USER appuser
+# Expose API Port
+EXPOSE 8000
 
-# Internal healthcheck to verify API availability
-HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -k -f https://localhost:8000/api/status/ || exit 1
+# Force TensorFlow to use CPU (Prevents CUDA/Driver Segfaults)
+ENV CUDA_VISIBLE_DEVICES=-1
+ENV TF_CPP_MIN_LOG_LEVEL=2
 
-# Use main.py as entrypoint for smarter SSL and config handling
-CMD ["python", "main.py"]
+# Default Command
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

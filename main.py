@@ -2,6 +2,7 @@ import uvicorn
 import os
 import shutil
 import multiprocessing
+from app.server import app
 
 if __name__ == "__main__":
     # Removed multiprocessing.freeze_support() and set_start_method('spawn') 

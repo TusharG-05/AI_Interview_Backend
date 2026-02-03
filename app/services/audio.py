@@ -139,22 +139,28 @@ class AudioService:
 
         return score >= self.verification_threshold, score
 
-    def speech_to_text(self, audio_path):
+    async def speech_to_text(self, audio_path):
         if not os.path.exists(audio_path):
             return ""
 
         # Assumes audio_path is already cleaned if desired
         try:
-            # optimized for speed & accuracy
-            segments, info = self.stt_model.transcribe(
-                audio_path, 
-                beam_size=1, 
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500),
-                no_speech_threshold=0.5, # Stops "bathroom" hallucinations
-                initial_prompt="Interview answer about technology and programming."
-            )
-            text = " ".join(seg.text for seg in segments).strip()
+            loop = asyncio.get_running_loop()
+            
+            # Non-blocking wrapper for heavy STT
+            def _transcribe():
+                segments, info = self.stt_model.transcribe(
+                    audio_path, 
+                    beam_size=1, 
+                    vad_filter=True,
+                    vad_parameters=dict(min_silence_duration_ms=500),
+                    no_speech_threshold=0.5, # Stops "bathroom" hallucinations
+                    initial_prompt="Interview answer about technology and programming."
+                )
+                return " ".join(seg.text for seg in segments).strip()
+
+            text = await loop.run_in_executor(None, _transcribe)
+            
             # If still nothing, return a clean string
             return text if text else "[Silence/No Speech Detected]"
         except Exception as e:

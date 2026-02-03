@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
+      - SECRET_KEY=change_this_to_a_secure_random_string_in_production
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/interview_db
+      - LLM_MODEL=qwen2.5-coder:3b
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434 # Connects to host Ollama
+    volumes:
+      - ./app/assets:/app/app/assets # Persist assets
+    depends_on:
+      - db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: interview_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

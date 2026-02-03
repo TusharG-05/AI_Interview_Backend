@@ -4,19 +4,21 @@ import numpy as np
 import multiprocessing
 import os
 import threading
-from deepface import DeepFace  
-import mediapipe as mp
-from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+# import mediapipe as mp
+# from mediapipe.tasks import python
+# from mediapipe.tasks.python import vision
 from ..utils.image_processing import convert_to_rgb, resize_with_aspect_ratio
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class MediaPipeDetector:
     """Handles face detection using MediaPipe."""
     def __init__(self, model_path='app/assets/face_landmarker.task', num_faces=4, min_confidence=0.5):
+        import mediapipe as mp
+        from mediapipe.tasks import python
+        from mediapipe.tasks.python import vision
+        
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,
@@ -26,6 +28,7 @@ class MediaPipeDetector:
         self.detector = vision.FaceLandmarker.create_from_options(options)
 
     def detect(self, img_rgb):
+        import mediapipe as mp
         h, w = img_rgb.shape[:2]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
         detection_result = self.detector.detect(mp_image)
@@ -53,6 +56,7 @@ class FaceRecognizer:
         self.known_encoding = known_encoding
         self.model_name = "ArcFace"
         try:
+            from deepface import DeepFace
             DeepFace.build_model(self.model_name)
         except:
             pass
@@ -78,6 +82,7 @@ class FaceRecognizer:
             try:
                 # Extract embedding for the cropped face
                 # normalization='ArcFace' is handled by DeepFace internally if model_name is ArcFace
+                from deepface import DeepFace
                 objs = DeepFace.represent(
                     img_path=face, 
                     model_name=self.model_name, 
@@ -155,6 +160,7 @@ class FaceService:
         
         try:
             if os.path.exists(known_person_path):
+                from deepface import DeepFace
                 objs = DeepFace.represent(
                     img_path=known_person_path, 
                     model_name="ArcFace", 
