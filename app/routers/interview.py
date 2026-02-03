@@ -38,24 +38,29 @@ async def start_interview(
 ):
     new_session = InterviewSession(candidate_name=candidate_name, start_time=datetime.utcnow())
     session_db.add(new_session)
-    session_db.commit()
+    session_db.flush() # Get ID
     session_db.refresh(new_session)
     
     warning = None
-    if enrollment_audio:
-        os.makedirs("app/assets/audio/enrollment", exist_ok=True)
-        enrollment_path = f"app/assets/audio/enrollment/enroll_{new_session.id}.wav"
-        content = await enrollment_audio.read()
-        audio_service.save_audio_blob(content, enrollment_path)
-        audio_service.cleanup_audio(enrollment_path)
-        
-        # Silence/Quality Check
-        if audio_service.calculate_energy(enrollment_path) < 50:
-             warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
-        
-        new_session.enrollment_audio_path = enrollment_path
-        session_db.add(new_session)
+    try:
+        if enrollment_audio:
+            os.makedirs("app/assets/audio/enrollment", exist_ok=True)
+            enrollment_path = f"app/assets/audio/enrollment/enroll_{new_session.id}.wav"
+            content = await enrollment_audio.read()
+            audio_service.save_audio_blob(content, enrollment_path)
+            audio_service.cleanup_audio(enrollment_path)
+            
+            # Silence/Quality Check
+            if audio_service.calculate_energy(enrollment_path) < 50:
+                 warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
+            
+            new_session.enrollment_audio_path = enrollment_path
+            session_db.add(new_session)
+            
         session_db.commit()
+    except Exception as e:
+        session_db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to start interview: {str(e)}")
         
     return {"session_id": new_session.id, "warning": warning}
 
@@ -138,19 +143,27 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
     interview_session = session_db.get(InterviewSession, session_id)
     if not interview_session: raise HTTPException(status_code=404)
 
-    evaluation = interview_service.evaluate_answer_content(request.question, request.answer)
-    db_question = interview_service.get_or_create_question(session_db, request.question, topic="Dynamic")
+    try:
+        evaluation = interview_service.evaluate_answer_content(request.question, request.answer)
+        
+        # This now only flushes, doesn't commit
+        db_question = interview_service.get_or_create_question(session_db, request.question, topic="Dynamic")
 
-    new_response = InterviewResponse(
-        session_id=session_id,
-        question_id=db_question.id,
-        answer_text=request.answer,
-        evaluation_text=evaluation["feedback"],
-        score=evaluation["score"]
-    )
-    session_db.add(new_response)
-    session_db.commit()
-    return evaluation
+        new_response = InterviewResponse(
+            session_id=session_id,
+            question_id=db_question.id,
+            answer_text=request.answer,
+            evaluation_text=evaluation["feedback"],
+            score=evaluation["score"]
+        )
+        session_db.add(new_response)
+        
+        # ATOMIC COMMIT: Both Question (if new) and Response are saved together
+        session_db.commit()
+        return evaluation
+    except Exception as e:
+        session_db.rollback()
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 from ..auth.dependencies import get_current_user
 from ..models.db_models import User

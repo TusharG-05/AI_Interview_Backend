@@ -80,7 +80,7 @@ def get_or_create_question(session: Session, content: str, topic: str = "General
     if not question:
         question = Question(content=content, topic=topic, difficulty=difficulty)
         session.add(question)
-        session.commit()
+        session.flush() # Get ID but don't commit yet
         session.refresh(question)
         
     return question
