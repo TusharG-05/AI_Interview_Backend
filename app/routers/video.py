@@ -56,44 +56,79 @@ class Offer(BaseModel):
     session_id: Optional[int] = None
 
 # Global set to keep references to PCs
-pcs = set()
+# Global registry for active sessions: {session_id: {"pc": pc, "track": video_track}}
+active_sessions = {}
 
 @router.post("/video/offer")
 async def offer(params: Offer):
     """
-    WebRTC Signaling Outcome:
-    1. Client sends SDP Offer + session_id
-    2. Server creates RTCPeerConnection
-    3. Server wraps Client's Video with VideoTransformTrack (AI Processing)
-    4. Server returns SDP Answer
+    Candidate Connection (Proctoring Source)
     """
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
-    
-    # Initialize the PeerConnection
     pc = RTCPeerConnection()
-    pcs.add(pc)
+    
+    # Store PC reference to prevent GC
+    session_id = params.session_id or 0
+    active_sessions[session_id] = {"pc": pc, "track": None}
 
     logger = get_logger(__name__)
-    logger.info(f"WebRTC: New Connection Request for Session {params.session_id}")
+    logger.info(f"WebRTC: New Candidate Connection {session_id}")
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        logger.info(f"WebRTC Connection State: {pc.connectionState}")
-        if pc.connectionState == "failed" or pc.connectionState == "closed":
+        if pc.connectionState in ["failed", "closed"]:
             await pc.close()
-            if pc in pcs:
-                pcs.discard(pc)
+            if session_id in active_sessions and active_sessions[session_id]["pc"] == pc:
+                del active_sessions[session_id]
+                logger.info(f"WebRTC: Candidate {session_id} Disconnected")
 
     @pc.on("track")
     def on_track(track):
-        logger.info(f"WebRTC: Track received kind={track.kind}")
         if track.kind == "video":
-            # Add the transformer track to the PC
-            # This 'echoes' the video back to the client, but annotated!
-            local_track = VideoTransformTrack(track, session_id=params.session_id)
+            # 1. Wrap with AI
+            local_track = VideoTransformTrack(track, session_id=session_id)
+            # 2. Add to PC (Echo back to candidate)
             pc.addTrack(local_track)
+            # 3. Register for Admin Ghost Mode
+            active_sessions[session_id]["track"] = local_track
+            logger.info(f"WebRTC: Track registered for Session {session_id}")
 
-    # Handle the SDP Handshake
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+@router.post("/video/watch/{target_session_id}")
+async def watch(target_session_id: int, params: Offer):
+    """
+    Admin Ghost Mode: Watch an active session.
+    """
+    if target_session_id not in active_sessions or not active_sessions[target_session_id]["track"]:
+        # Session not active or no video yet
+        return {"error": "Session Not Active"}
+
+    offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
+    pc = RTCPeerConnection()
+    
+    # We don't store Admin PCs permanently in the session registry, 
+    # but we track them to prevent GC (could use a separate set)
+    # For now, just a set is fine
+    pcs.add(pc)
+
+    logger = get_logger(__name__)
+    logger.info(f"WebRTC: Admin watching Session {target_session_id}")
+    
+    # Add the Candidate's track to Admin's PC
+    candidate_track = active_sessions[target_session_id]["track"]
+    pc.addTrack(candidate_track)
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        if pc.connectionState in ["failed", "closed"]:
+            await pc.close()
+            pcs.discard(pc)
+
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)

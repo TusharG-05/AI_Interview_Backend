@@ -199,7 +199,7 @@ async def process_resume(
 
 # --- Background Unified Processor ---
 
-def process_session_results_unified(session_id: int):
+async def process_session_results_unified(session_id: int):
     from ..core.database import engine
     from sqlmodel import Session, select
     with Session(engine) as db:
@@ -212,8 +212,8 @@ def process_session_results_unified(session_id: int):
                 if resp.audio_path and not (resp.answer_text or resp.transcribed_text):
                     audio_service.cleanup_audio(resp.audio_path)
                     
-                    # 1. Verification & Transcription
-                    text = audio_service.speech_to_text(resp.audio_path)
+                    # 1. Verification & Transcription (Async)
+                    text = await audio_service.speech_to_text(resp.audio_path)
                     if session.enrollment_audio_path:
                         match, _ = audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path)
                         if not match: text = f"[VOICE MISMATCH] {text}"
