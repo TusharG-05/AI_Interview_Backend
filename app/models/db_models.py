@@ -7,6 +7,7 @@ class UserRole(str, Enum):
     ADMIN = "admin"
     SUPER_ADMIN = "super_admin"
     CANDIDATE = "candidate"
+    INTERVIEWER = "interviewer"
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -14,10 +15,11 @@ class User(SQLModel, table=True):
     full_name: str
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
-    resume_text: Optional[str] = Field(default=None)  # Stored extracted text
-    profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie
+    resume_text: Optional[str] = Field(default=None)
+    profile_image: Optional[str] = Field(default=None)
     
-    rooms_created: List["InterviewRoom"] = Relationship(back_populates="admin")
+    rooms_created: List["InterviewRoom"] = Relationship(back_populates="admin", sa_relationship_kwargs={"primaryjoin": "InterviewRoom.admin_id==User.id"})
+    rooms_assigned: List["InterviewRoom"] = Relationship(back_populates="interviewer", sa_relationship_kwargs={"primaryjoin": "InterviewRoom.interviewer_id==User.id"})
     sessions: List["InterviewSession"] = Relationship(back_populates="candidate")
     question_banks: List["QuestionBank"] = Relationship(back_populates="admin")
 
@@ -52,13 +54,15 @@ class InterviewRoom(SQLModel, table=True):
     room_code: str = Field(unique=True, index=True)
     password: str
     admin_id: int = Field(foreign_key="user.id")
+    interviewer_id: Optional[int] = Field(default=None, foreign_key="user.id")
     bank_id: Optional[int] = Field(default=None, foreign_key="questionbank.id")
     question_count: int = Field(default=5) # How many random questions to pick
     is_active: bool = Field(default=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     max_sessions: Optional[int] = Field(default=None)
     
-    admin: User = Relationship(back_populates="rooms_created")
+    admin: User = Relationship(back_populates="rooms_created", sa_relationship_kwargs={"primaryjoin": "InterviewRoom.admin_id==User.id"})
+    interviewer: Optional[User] = Relationship(back_populates="rooms_assigned", sa_relationship_kwargs={"primaryjoin": "InterviewRoom.interviewer_id==User.id"})
     bank: Optional[QuestionBank] = Relationship(back_populates="rooms")
     sessions: List["InterviewSession"] = Relationship(back_populates="room")
 

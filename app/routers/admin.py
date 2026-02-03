@@ -6,8 +6,8 @@ from ..models.db_models import Question, QuestionBank, QuestionGroup, InterviewR
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
-from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate, UserCreate
-from ..schemas.responses import RoomRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse
+from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate, UserCreate, BankCreate
+from ..schemas.responses import RoomRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, BankRead
 import os
 import shutil
 import uuid
@@ -108,14 +108,46 @@ async def upload_document(
     finally:
         if os.path.exists(file_path): os.remove(file_path)
 
+@router.delete("/banks/{bank_id}")
+async def delete_bank(
+    bank_id: int, 
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Delete a question bank and all its questions."""
+    bank = session.get(QuestionBank, bank_id)
+    if not bank or bank.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Bank not found")
+        
+    # Check if any room is using this bank
+    room_using = session.exec(select(InterviewRoom).where(InterviewRoom.bank_id == bank_id)).first()
+    if room_using:
+        raise HTTPException(status_code=400, detail=f"Cannot delete bank. It is currently assigned to room '{room_using.room_code}'.")
+
+    # Delete all questions in this bank first
+    questions = session.exec(select(QuestionGroup).where(QuestionGroup.bank_id == bank_id)).all()
+    for q in questions:
+        session.delete(q)
+        
+    session.delete(bank)
+    session.commit()
+    return {"message": "Bank and its questions deleted successfully"}
+
 @router.delete("/questions/{q_id}")
 async def delete_question(
     q_id: int, 
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    q = session.get(Question, q_id)
+    q = session.get(QuestionGroup, q_id)
     if not q: raise HTTPException(status_code=404, detail="Question not found")
+    
+    # Verify ownership via bank (Question -> Bank -> Admin)
+    # Questions might be legacy or linked to a bank.
+    if q.bank:
+        if q.bank.admin_id != current_user.id:
+             raise HTTPException(status_code=403, detail="Not authorized to delete this question")
+             
     session.delete(q)
     session.commit()
     return {"message": "Question deleted"}
@@ -150,12 +182,42 @@ async def create_room(
         admin_id=current_user.id,
         bank_id=room_data.bank_id,
         question_count=room_data.question_count,
-        max_sessions=room_data.max_sessions or 30
+        max_sessions=room_data.max_sessions or 30,
+        interviewer_id=room_data.interviewer_id
     )
     session.add(new_room)
     session.commit()
     session.refresh(new_room)
     return RoomRead(id=new_room.id, room_code=new_room.room_code, password=new_room.password, is_active=new_room.is_active, max_sessions=new_room.max_sessions, active_sessions_count=0)
+
+
+@router.patch("/rooms/{room_id}", response_model=RoomRead)
+async def update_room(
+    room_id: int,
+    room_data: RoomUpdate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    room = session.get(InterviewRoom, room_id)
+    if not room or room.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Room not found")
+        
+    if room_data.password is not None:
+        room.password = room_data.password
+    if room_data.max_sessions is not None:
+        room.max_sessions = room_data.max_sessions
+    if room_data.is_active is not None:
+        room.is_active = room_data.is_active
+    if room_data.interviewer_id is not None:
+        # Validate interviewer exists
+        interviewer = session.get(User, room_data.interviewer_id)
+        if not interviewer: raise HTTPException(status_code=400, detail="Interviewer not found")
+        room.interviewer_id = room_data.interviewer_id
+        
+    session.add(room)
+    session.commit()
+    session.refresh(room)
+    return RoomRead(id=room.id, room_code=room.room_code, password=room.password, is_active=room.is_active, max_sessions=room.max_sessions, active_sessions_count=len([s for s in room.sessions if s.end_time is None]))
 
 @router.get("/rooms", response_model=List[RoomRead])
 async def list_rooms(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
@@ -238,6 +300,67 @@ async def create_user(
 @router.get("/users", response_model=List[UserRead])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     return [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int, 
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
+    """Delete a user. Handles dependencies based on role."""
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    
+    if user.role == UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Cannot delete super admin")
+
+    # Handle dependencies based on role
+    
+    # 1. If user is ADMIN or INTERVIEWER/ADMIN (role=admin)
+    # Check if they own any question banks or rooms
+    # We choose to BLOCK delete if they own core assets, forcing manual cleanup or reassignment.
+    
+    owned_banks = session.exec(select(QuestionBank).where(QuestionBank.admin_id == user.id)).first()
+    if owned_banks:
+         raise HTTPException(status_code=400, detail=f"Cannot delete user. They own Question Banks (e.g. ID {owned_banks.id}). Delete or reassign banks first.")
+
+    created_rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == user.id)).first()
+    if created_rooms:
+         raise HTTPException(status_code=400, detail=f"Cannot delete user. They created Rooms (e.g. {created_rooms.room_code}). Delete rooms first.")
+
+    # 2. If user is INTERVIEWER (or assigned as one)
+    # Reassign rooms they are *assigned* to back to None
+    assigned_rooms = session.exec(select(InterviewRoom).where(InterviewRoom.interviewer_id == user.id)).all()
+    for room in assigned_rooms:
+        room.interviewer_id = None
+        session.add(room)
+        
+    # 3. If user is CANDIDATE
+    # Delete their sessions & responses?
+    # Usually we might want to keep history, but "Delete User" implies GDPR-style wipe.
+    # So we cascade delete sessions.
+    
+    sessions = session.exec(select(InterviewSession).where(InterviewSession.candidate_id == user.id)).all()
+    for s in sessions:
+        # Cascade delete responses usually handled by DB, but manual cleanup is safer if not set up
+        # Responses rely on session_id, so deleting session should be enough if DB enforced.
+        # But let's check Proctoring/Responses just in case.
+        # Given we are not 100% sure of SQLite cascade setup, let's just delete the user and let SQLite/ORM handle or fail.
+        # But strictly speaking, we should delete children.
+        # Let's trust ORM/SQLite foreign key cascade if it was set, 
+        # BUT our Models (db_models.py) don't explicitly say `cascade="all, delete"`.
+        # So manual cleanup is safer.
+        for r in s.responses: session.delete(r)
+        for e in s.proctoring_events: session.delete(e)
+        session.delete(s)
+
+    session.delete(user)
+    session.commit()
+    return {"message": f"User {user.email} deleted successfully"}
 
 @router.post("/shutdown")
 def shutdown(current_user: User = Depends(get_admin_user)):

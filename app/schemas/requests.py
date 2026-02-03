@@ -30,7 +30,7 @@ class RoomCreate(BaseModel):
     bank_id: int
     question_count: int = 5
     max_sessions: Optional[int] = 30
-
+    interviewer_id: Optional[int] = None
 
 class BankCreate(BaseModel):
     name: str
@@ -41,6 +41,7 @@ class RoomUpdate(BaseModel):
     password: Optional[str] = None
     max_sessions: Optional[int] = None
     is_active: Optional[bool] = None
+    interviewer_id: Optional[int] = None
 
 # Interview Requests
 class AnswerRequest(BaseModel):
