@@ -85,30 +85,12 @@ class CameraService:
         if self.gaze_detector:
             self.gaze_detector.close()
 
-    def process_external_frame(self, image_bytes, session_id: Optional[int] = None):
+    def process_frame_ndarray(self, frame: np.ndarray, session_id: Optional[int] = None):
         """
-        Processes a frame received from the client via WebSocket.
-        Returns a dict of analysis results.
+        Core logic: Processes a numpy BGR frame (from WS or WebRTC).
+        Returns: (annotated_frame, result_dict)
         """
-        if not self._detectors_ready:
-             return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
-
-        # Senior Dev Hardening: Worker Heartbeat Check
-        if self.face_detector and not self.face_detector.worker.is_alive():
-            logger.warning("RECOVERY: FaceDetector worker died. Restarting...")
-            self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
-            
-        if self.gaze_detector and not self.gaze_detector.worker.is_alive():
-            logger.warning("RECOVERY: GazeDetector worker died. Restarting...")
-            self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
-
         try:
-            # Decode image using utility
-            frame = decode_image(image_bytes)
-            
-            if frame is None:
-                return {"warning": "Bad Frame"}
-
             # Analyze
             face_status = (False, 1.0, 0, [])
             gaze_status = "No Gaze"
@@ -135,7 +117,7 @@ class CameraService:
             elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
             elif "WARNING" in str(gaze_status): warning = str(gaze_status)
 
-            # Update latest frame for MJPEG stream
+            # Update latest frame for MJPEG stream (Admin view)
             with self.frame_lock:
                 _, buffer = cv2.imencode('.jpg', frame)
                 self.latest_frame = buffer.tobytes()
@@ -143,6 +125,7 @@ class CameraService:
 
             # --- PERSIST PROCTORING EVENT ---
             if session_id and warning:
+                # Use local imports to avoid circular deps if any
                 from ..core.database import engine
                 from sqlmodel import Session
                 from ..models.db_models import ProctoringEvent
@@ -162,7 +145,7 @@ class CameraService:
                 try: callback(self._current_warning)
                 except: pass
 
-            return {
+            result_dict = {
                 "auth": bool(found),
                 "auth_dist": float(dist) if dist is not None else 1.0,
                 "faces": int(n_face),
@@ -170,6 +153,39 @@ class CameraService:
                 "warning": warning,
                 "box": locs[0] if locs else None
             }
+            return frame, result_dict
+
+        except Exception as e:
+            logger.error(f"Core Frame Process Error: {e}")
+            return frame, {"warning": "Server Error"}
+
+    def process_external_frame(self, image_bytes, session_id: Optional[int] = None):
+        """
+        Processes a frame received from the client via WebSocket.
+        Returns a dict of analysis results.
+        """
+        if not self._detectors_ready:
+             return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
+
+        # Senior Dev Hardening: Worker Heartbeat Check
+        if self.face_detector and not self.face_detector.worker.is_alive():
+            logger.warning("RECOVERY: FaceDetector worker died. Restarting...")
+            self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
+            
+        if self.gaze_detector and not self.gaze_detector.worker.is_alive():
+            logger.warning("RECOVERY: GazeDetector worker died. Restarting...")
+            self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
+
+        try:
+            # Decode image using utility
+            frame = decode_image(image_bytes)
+            
+            if frame is None:
+                return {"warning": "Bad Frame"}
+
+            # Delegate to core logic
+            _, result = self.process_frame_ndarray(frame, session_id)
+            return result
             
         except Exception as e:
             logger.error(f"Frame Process Error: {e}")

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC AI Proctoring Test</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        video { width: 320px; height: 240px; border: 1px solid black; background: #eee; }
+        .container { display: flex; gap: 20px; }
+        .box { display: flex; flex-direction: column; }
+    </style>
+</head>
+<body>
+    <h2>WebRTC AI Proctoring Integration Test</h2>
+    <p>Status: <span id="status">Disconnected</span></p>
+    <button onclick="start()">Start Proctoring</button>
+    <button onclick="stop()">Stop</button>
+
+    <div class="container">
+        <div class="box">
+            <h3>Local Camera (Candidate)</h3>
+            <video id="localVideo" autoplay muted playsinline></video>
+        </div>
+        <div class="box">
+            <h3>Server Processed (AI Annotated)</h3>
+            <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+    </div>
+
+    <script>
+        let pc = null;
+        let localStream = null;
+
+        async function start() {
+            document.getElementById('status').innerText = "Starting...";
+            
+            // 1. Get User Media
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                document.getElementById('localVideo').srcObject = localStream;
+            } catch (e) {
+                alert("Camera error: " + e);
+                return;
+            }
+
+            // 2. Create PeerConnection
+            pc = new RTCPeerConnection();
+
+            // 3. Add Tracks
+            localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+            // 4. Handle Remote Track (The annotated video back from server)
+            pc.ontrack = (event) => {
+                const el = document.getElementById('remoteVideo');
+                el.srcObject = event.streams[0];
+            };
+
+            // 5. Create Offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            // 6. Negotiate with Server
+            await negotiate(pc.localDescription);
+        }
+
+        async function negotiate(offer) {
+            document.getElementById('status').innerText = "Negotiating...";
+            
+            const response = await fetch('http://localhost:8000/api/video/offer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sdp: offer.sdp,
+                    type: offer.type,
+                    session_id: 123  // Test Session ID
+                })
+            });
+
+            if (!response.ok) {
+                alert("Server Error: " + response.statusText);
+                return;
+            }
+
+            const answer = await response.json();
+            await pc.setRemoteDescription(answer);
+            document.getElementById('status').innerText = "Connected & Streaming";
+        }
+
+        function stop() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            document.getElementById('status').innerText = "Stopped";
+        }
+    </script>
+</body>
+</html>
