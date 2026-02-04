@@ -4,12 +4,12 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
+from ..models.db_models import Question, Questions, QuestionPaper, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
 from ..schemas.requests import AnswerRequest
 from ..services import interview as interview_service, resume as resume_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
-from ..schemas.responses import JoinRoomResponse
+from ..schemas.responses import InterviewAccessResponse
 from pydantic import BaseModel
 import os
 import uuid
@@ -26,12 +26,9 @@ class EvaluateRequest(BaseModel):
     candidate_text: str
     reference_text: str
 
-@router.get("/general-questions")
-async def get_general_questions(session: Session = Depends(get_session)):
-    questions = session.exec(select(Question)).all()
-    return {"questions": [q.dict() for q in questions]}
 
-@router.get("/access/{token}", response_model=JoinRoomResponse)
+
+@router.get("/access/{token}", response_model=InterviewAccessResponse)
 async def access_interview(token: str, session_db: Session = Depends(get_session)):
     """
     Validates the interview link and checks time constraints.
@@ -49,8 +46,7 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     # 2. Start Time Check
     if now < session.schedule_time:
         # Too early
-        wait_seconds = (session.schedule_time - now).total_seconds()
-        return JoinRoomResponse(
+        return InterviewAccessResponse(
             session_id=session.id,
             message="WAIT",
             schedule_time=session.schedule_time.isoformat(),
@@ -66,7 +62,7 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
          raise HTTPException(status_code=403, detail="Interview link has expired")
          
     # 4. Success - Allow Entry
-    return JoinRoomResponse(
+    return InterviewAccessResponse(
             session_id=session.id,
             message="START",
             schedule_time=session.schedule_time.isoformat(),
@@ -81,7 +77,7 @@ async def start_session_logic(
     session_db: Session = Depends(get_session)
 ):
     """
-    Called when candidate actually enters the room (uploads selfie/audio).
+    Called when candidate actually enters the interview session (uploads selfie/audio).
     Sets status to LIVE.
     """
     session = session_db.get(InterviewSession, session_id)
@@ -138,18 +134,22 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
         ).first()
         question = session_q.question if session_q else None
     else:
-        # Fallback: Pull from the assigned Bank (if any) or General
+        # Fallback: Pull from the assigned Paper (if any) or General pool
         session_obj = session_db.get(InterviewSession, session_id)
-        if session_obj and session_obj.bank_id:
-             # Get random question from bank not answered
-             # Note: efficient random selection is complex in SQL, doing simple first()
+        if session_obj and session_obj.paper_id:
+             # Security Fix: Strictly scope to the assigned paper
              question = session_db.exec(
-                 select(Question)
-                 .where(Question.bank_id == session_obj.bank_id)
-                 .where(~Question.id.in_(answered_ids))
+                 select(Questions)
+                 .where(Questions.paper_id == session_obj.paper_id)
+                 .where(~Questions.id.in_(answered_ids))
              ).first()
         else:
-             question = session_db.exec(select(Question).where(~Question.id.in_(answered_ids))).first()
+             # Pull only from global/orphaned pool, never from other papers
+             question = session_db.exec(
+                 select(Questions)
+                 .where(Questions.paper_id == None)
+                 .where(~Questions.id.in_(answered_ids))
+             ).first()
     
     if not question: return {"status": "finished"}
     
@@ -164,8 +164,8 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
     
     if has_assignments:
         total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.session_id == session_id)).all())
-    elif session_obj and session_obj.bank_id:
-        total_questions = len(session_db.exec(select(Question).where(Question.bank_id == session_obj.bank_id)).all())
+    elif session_obj and session_obj.paper_id:
+        total_questions = len(session_db.exec(select(Question).where(Question.paper_id == session_obj.paper_id)).all())
     
     return {
         "question_id": question.id,

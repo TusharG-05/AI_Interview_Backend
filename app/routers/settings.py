@@ -9,38 +9,43 @@ camera_service = CameraService()
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: list[WebSocket] = []
+        # {session_id: [WebSocket]}
+        self.active_connections: dict[int, list[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, session_id: int):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        if session_id not in self.active_connections:
+            self.active_connections[session_id] = []
+        self.active_connections[session_id].append(websocket)
 
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+    def disconnect(self, websocket: WebSocket, session_id: int):
+        if session_id in self.active_connections:
+            if websocket in self.active_connections[session_id]:
+                self.active_connections[session_id].remove(websocket)
 
-    async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            try:
-                await connection.send_json({"warning": message})
-            except Exception:
-                pass
+    async def broadcast(self, session_id: int, message: str):
+        if session_id in self.active_connections:
+            for connection in self.active_connections[session_id]:
+                try:
+                    await connection.send_json({"warning": message})
+                except Exception:
+                    pass
 
 manager = ConnectionManager()
 _listener_registered = False
 
-def camera_status_callback(warning_key):
-    """Bridge for CameraService alerts to WebSockets."""
+def camera_status_callback(session_id: int, warning_key: str):
+    """Bridge for CameraService alerts to WebSockets (Filtered by Session)."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.run_coroutine_threadsafe(manager.broadcast(warning_key), loop)
+            asyncio.run_coroutine_threadsafe(manager.broadcast(session_id, warning_key), loop)
     except Exception:
         pass
 
 @router.get("/")
-async def get_system_status():
-    """Comprehensive health check for AI services and Hardware."""
+async def get_system_status(session_id: int):
+    """Comprehensive health check for AI services (Isolate by session)."""
     llm_status = "error"
     try:
         local_llm.invoke("ping")
@@ -58,27 +63,23 @@ async def get_system_status():
             "llm": llm_status,
             "proctoring_engine": "healthy" if camera_service._detectors_ready else "initializing/off",
             "camera_access": hw_status,
-            "current_warning": camera_service.get_current_warning()
-        },
-        "environment": {
-            "docker": os.path.exists("/.dockerenv"),
-            "database": "connected"
+            "current_warning": camera_service.get_current_warning(session_id)
         }
     }
 
 @router.websocket("/ws")
-async def websocket_status(websocket: WebSocket):
-    """Real-time proctoring alert feed for frontend integration."""
+async def websocket_status(websocket: WebSocket, session_id: int):
+    """Real-time proctoring alert feed (Isolate by Session)."""
     global _listener_registered
-    await manager.connect(websocket)
+    await manager.connect(websocket, session_id)
     
     if not _listener_registered:
         camera_service.add_listener(camera_status_callback)
         _listener_registered = True
         
     try:
-        await websocket.send_json({"warning": camera_service.get_current_warning()})
+        await websocket.send_json({"warning": camera_service.get_current_warning(session_id)})
         while True:
             await websocket.receive_text() # Keep-alive
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        manager.disconnect(websocket, session_id)

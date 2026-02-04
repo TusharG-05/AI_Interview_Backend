@@ -3,9 +3,7 @@ from pydantic import BaseModel
 from ..models.db_models import UserRole
 
 # Candidate Requests
-class JoinRoomRequest(BaseModel):
-    room_code: str
-    password: str
+
 
 class UserUpdate(BaseModel):
     email: Optional[str] = None
@@ -27,17 +25,26 @@ class UserCreate(BaseModel):
 # Admin Requests
 class InterviewScheduleCreate(BaseModel):
     candidate_id: int
-    bank_id: int
+    paper_id: int
     schedule_time: str # ISO format expected from frontend
     duration_minutes: int = 180
 
-# Removed: RoomCreate, BankCreate (handled in admin code), RoomUpdate
+
 
 # Interview Requests
 class AnswerRequest(BaseModel):
     question: str
     answer: str
 
+class PaperUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+class QuestionUpdate(BaseModel):
+    content: Optional[str] = None
+    topic: Optional[str] = None
+    difficulty: Optional[str] = None
+    marks: Optional[int] = None
 
 class LoginRequest(BaseModel):
     email: str
@@ -46,5 +53,4 @@ class QuestionCreate(BaseModel):
     content: str
     topic: Optional[str] = "General"
     difficulty: str = "Medium"
-    reference_answer: Optional[str] = None
     marks: int = 1

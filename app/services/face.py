@@ -105,96 +105,93 @@ class FaceRecognizer:
         return matches
 
 
-def face_worker_process(frame_queue, result_queue, known_encoding):
-    """Worker process logic encapsulated in a function."""
+def face_worker_process(frame_queue, result_queue):
+    """Worker process logic: Processes frames for multiple sessions."""
     from ..core.logger import setup_logging
     setup_logging()
     worker_logger = get_logger("face_worker")
 
     detector = MediaPipeDetector()
-    recognizer = FaceRecognizer(known_encoding)
+    recognizer = FaceRecognizer() # No global encoding
+    
+    # Cache for embeddings: {session_id: encoding_ndarray}
+    embedding_cache = {}
 
     while True:
         try:
-            frame_bgr = frame_queue.get(timeout=1)
+            item = frame_queue.get(timeout=1)
         except:
             continue
 
-        if frame_bgr is None:
+        if item is None:
             break
 
+        session_id, frame_bgr, encoding_json = item
+
         try:
-            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            # Sync session encoding if provided
+            if encoding_json and session_id not in embedding_cache:
+                import json
+                embedding_cache[session_id] = np.array(json.loads(encoding_json))
             
+            recognizer.known_encoding = embedding_cache.get(session_id)
+            
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             h, w = frame_rgb.shape[:2]
             target_h = 540
             s = target_h / h if h > target_h else 1.0
             img = cv2.resize(frame_rgb, (0,0), fx=s, fy=s) if s < 1.0 else frame_rgb
             
             locs = detector.detect(img)
-            
-            # Recognition
             matches = recognizer.recognize(img, locs)
-            
-            # Determine Authorization Status
-            # Logic: If at least one face matches the known person -> True
             is_authorized = any(matches) if matches else False
-            
-            # Map back coordinates
             final_locs = [(int(t/s), int(r/s), int(b/s), int(l/s)) for (t,r,b,l) in locs]
 
             if not result_queue.full():
-                result_queue.put((is_authorized, 1.0, len(final_locs), final_locs))
+                result_queue.put((session_id, is_authorized, 1.0, len(final_locs), final_locs))
         except Exception as e:
-            worker_logger.error(f"Face Worker Error: {e}")
+            worker_logger.error(f"Face Worker Error [Session {session_id}]: {e}")
 
 
 class FaceService:
-    """The main interface for face-related services."""
-    def __init__(self, known_person_path="known_person.jpg"):
-        logger.info("Starting Refactored Face Service (Detection + ArcFace)...")
+    """The main interface for face-related services (Multi-User Isolated)."""
+    def __init__(self):
+        logger.info("Starting Multi-User Face Service (Isolated Sessions)...")
         
-        self.known_encoding = None
-        
-        try:
-            if os.path.exists(known_person_path):
-                from deepface import DeepFace
-                objs = DeepFace.represent(
-                    img_path=known_person_path, 
-                    model_name="ArcFace", 
-                    enforce_detection=False
-                )
-                self.known_encoding = np.array(objs[0]["embedding"])
-                logger.info("Known Person Embedding Loaded via ArcFace.")
-            else:
-                logger.warning(f"Known person file not found at {known_person_path}")
-        except Exception as e:
-            logger.error(f"Known Person Load Error: {e}")
-
-        self.frame_queue = multiprocessing.Queue(maxsize=1)
-        self.result_queue = multiprocessing.Queue(maxsize=1)
+        self.frame_queue = multiprocessing.Queue(maxsize=10)
+        self.result_queue = multiprocessing.Queue(maxsize=10)
         self.worker = multiprocessing.Process(
             target=face_worker_process, 
-            args=(self.frame_queue, self.result_queue, self.known_encoding)
+            args=(self.frame_queue, self.result_queue)
         )
         self.worker.daemon = True
         self.worker.start()
-        self.last_result = (False, 1.0, 0, [])
-
-    def process_frame(self, frame_bgr):
-        img_rgb = convert_to_rgb(frame_bgr)
-        img_small, s = resize_with_aspect_ratio(img_rgb, target_height=360)
-
-        if not self.frame_queue.full():
-            self.frame_queue.put(img_small)
         
-        try:
-            match, conf, n_faces, locs = self.result_queue.get_nowait()
-            scaled_locs = [(int(t/s), int(r/s), int(b/s), int(l/s)) for (t,r,b,l) in locs]
-            self.last_result = (match, conf, n_faces, scaled_locs)
-            return self.last_result
-        except:
-            return self.last_result
+        # Results map: {session_id: latest_result}
+        self.session_results = {}
+        self.session_encodings = {}
+
+    def process_frame(self, frame_bgr, session_id: int):
+        # 1. Provide encoding to worker if not already sent
+        encoding = self.session_encodings.get(session_id)
+        
+        if not self.frame_queue.full():
+            img_small, _ = resize_with_aspect_ratio(frame_bgr, target_height=360)
+            self.frame_queue.put((session_id, img_small, encoding))
+        
+        # 2. Drain results and update map
+        while not self.result_queue.empty():
+            try:
+                sid, match, conf, n_faces, locs = self.result_queue.get_nowait()
+                self.session_results[sid] = (match, conf, n_faces, locs)
+            except:
+                break
+        
+        return self.session_results.get(session_id, (False, 1.0, 0, []))
+
+    def register_session_identity(self, session_id: int, encoding_json: str):
+        """Pre-cache the candidate encoding for a session."""
+        self.session_encodings[session_id] = encoding_json
 
     def close(self):
         try:
