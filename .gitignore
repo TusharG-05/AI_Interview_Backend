@@ -69,8 +69,11 @@ yarn-error.log*
 app/assets/audio/enrollment/*.wav
 app/assets/audio/responses/*.wav
 app/assets/proctoring_logs/*.json
-app/assets/known_person.jpg
+app/assets/images/*
+!app/assets/images/.gitkeep
 temp_uploads/
+*.pem
+*.key
 
 # === OS ===
 .DS_Store

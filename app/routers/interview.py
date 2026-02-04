@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import Question, Questions, QuestionPaper, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
 from ..schemas.requests import AnswerRequest
-from ..services import interview as interview_service, resume as resume_service
+from ..services import interview as interview_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
 from ..schemas.responses import InterviewAccessResponse
@@ -171,6 +171,7 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
         "question_id": question.id,
         "text": question.question_text or question.content,
         "audio_url": f"/interview/audio/question/{question.id}",
+        "response_type": question.response_type,
         "question_index": question_index,
         "total_questions": total_questions
     }
@@ -241,37 +242,6 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
         session_db.rollback()
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
-from ..auth.dependencies import get_current_user
-from ..models.db_models import User
-
-@router.post("/generate-resume-question")
-async def generate_resume_question(
-    context: str = Form(...), 
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
-):
-    if not current_user.resume_text:
-        raise HTTPException(status_code=400, detail="No resume found. Please upload a resume first.")
-        
-    return interview_service.generate_resume_question_content(context, current_user.resume_text)
-
-@router.post("/process-resume")
-async def process_resume(
-    resume: UploadFile = File(...), 
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_session)
-):
-    text = await resume_service.extract_text_from_pdf(resume)
-    if not text:
-         raise HTTPException(status_code=400, detail="Could not extract text from PDF.")
-    
-    # Persist to User Profile
-    current_user.resume_text = text
-    db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
-    
-    return {"message": "Resume processed and saved successfully.", "preview": text[:100] + "..."}
 
 # --- Background Unified Processor ---
 

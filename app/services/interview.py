@@ -2,37 +2,11 @@ import random
 import json
 from typing import Dict, Union, Optional
 from sqlmodel import Session, select
-from ..models.db_models import Question
+from ..models.db_models import Questions
 from ..core.config import local_llm
-from ..prompts.interview import interview_prompt
 from ..prompts.evaluation import evaluation_prompt
 
-# Constants
-RESUME_TOPICS = ["Data Structures & Algorithms", "System Design", "Database Management", "API Design", "Security", "Scalability", "DevOps"]
-
-# Chains
-interview_chain = interview_prompt | local_llm 
 evaluation_chain = evaluation_prompt | local_llm
-
-def generate_resume_question_content(context: str, resume_text: str) -> dict:
-    # Use a priority sub-set of topics if they appear in resume
-    keywords = ["React", "Python", "Kubernetes", "Docker", "Go", "AWS", "SQL", "NoSQL", "Redis"]
-    found_keywords = [k for k in keywords if k.lower() in resume_text.lower()]
-    
-    selected_topic = random.choice(found_keywords) if found_keywords else random.choice(RESUME_TOPICS)
-    
-    full_context = f"User Intent: {context}\n\nTECHNICAL RESUME DATA:\n{resume_text}"
-    
-    # We use the updated 'aggressive' prompt in the chain
-    response = interview_chain.invoke({
-        "context": full_context,
-        "topic": selected_topic
-    })
-    
-    return {
-        "question": response.content,
-        "topic": selected_topic
-    }
 
 def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, float]]:
     try:
@@ -80,13 +54,13 @@ def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, 
             "error": True
         }
 
-def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> Question:
+def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> Questions:
     """Finds a question by content or creates a new one."""
-    stmt = select(Question).where(Question.content == content)
+    stmt = select(Questions).where(Questions.content == content)
     question = session.exec(stmt).first()
     
     if not question:
-        question = Question(content=content, topic=topic, difficulty=difficulty)
+        question = Questions(content=content, topic=topic, difficulty=difficulty)
         session.add(question)
         session.flush() # Get ID but don't commit yet
         session.refresh(question)
