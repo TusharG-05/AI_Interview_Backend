@@ -9,13 +9,7 @@ class HistoryItem(BaseModel):
     score: float = None
 
 # Admin Responses
-class RoomRead(BaseModel):
-    id: int
-    room_code: str
-    password: str
-    is_active: bool
-    max_sessions: Optional[int]
-    active_sessions_count: int = 0
+# Removed RoomRead
 
 class BankRead(BaseModel):
     id: int
@@ -27,9 +21,9 @@ class BankRead(BaseModel):
 class SessionRead(BaseModel):
     id: int
     candidate_name: str
-    room_code: str
-    start_time: str
-    total_score: float = None
+    status: str
+    scheduled_at: str
+    score: float = None
 
 class UserRead(BaseModel):
     id: int
@@ -39,8 +33,9 @@ class UserRead(BaseModel):
 
 class JoinRoomResponse(BaseModel):
     session_id: int
-    room_code: str
     message: str
+    schedule_time: str
+    duration_minutes: int
 
 class Token(BaseModel):
     access_token: str
@@ -51,9 +46,11 @@ class Token(BaseModel):
     expires_at: str
 
 class InterviewLinkResponse(BaseModel):
-    url: str
-    room_code: str
-    password: str
+    session_id: int
+    access_token: str
+    link: str
+    scheduled_at: str
+    warning: Optional[str] = None
 
 class ProctoringLogItem(BaseModel):
     type: str

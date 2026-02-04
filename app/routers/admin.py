@@ -1,21 +1,24 @@
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, QuestionBank, QuestionGroup, InterviewRoom, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent
+from ..models.db_models import Question, QuestionBank, QuestionGroup, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
-from ..schemas.requests import RoomCreate, RoomUpdate, QuestionCreate, UserCreate
-from ..schemas.responses import RoomRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse
+from ..services.email import EmailService
+from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate
+from ..schemas.responses import BankRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse
 import os
 import shutil
 import uuid
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
+email_service = EmailService()
 
 # --- Question Bank & Question Management ---
 
@@ -30,6 +33,12 @@ async def list_banks(
         id=b.id, name=b.name, description=b.description, 
         question_count=len(b.questions), created_at=b.created_at.isoformat()
     ) for b in banks]
+
+class BankCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+
 
 @router.post("/banks", response_model=BankRead)
 async def create_bank(
@@ -132,47 +141,93 @@ async def delete_question(
     session.commit()
     return {"message": "Question deleted"}
 
-# --- Room Management ---
+# --- Interview Scheduling ---
 
-@router.post("/rooms", response_model=RoomRead)
-async def create_room(
-    room_data: RoomCreate, 
+@router.post("/interviews/schedule", response_model=InterviewLinkResponse)
+async def schedule_interview(
+    schedule_data: InterviewScheduleCreate, 
     current_user: User = Depends(get_admin_user), 
     session: Session = Depends(get_session)
 ):
+    """
+    Schedule a new one-to-one interview and email the link.
+    """
     # Validate Bank
-    bank = session.get(QuestionBank, room_data.bank_id)
+    bank = session.get(QuestionBank, schedule_data.bank_id)
     if not bank or bank.admin_id != current_user.id:
         raise HTTPException(status_code=400, detail="Invalid Question Bank ID")
-    
-    # Validate Question Count
-    if room_data.question_count > len(bank.questions):
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Bank only has {len(bank.questions)} questions. Cannot request {room_data.question_count}."
-        )
 
-    room_code = secrets.token_hex(3).upper()
-    while session.exec(select(InterviewRoom).where(InterviewRoom.room_code == room_code)).first():
-        room_code = secrets.token_hex(3).upper()
-        
-    new_room = InterviewRoom(
-        room_code=room_code,
-        password=room_data.password,
+    # Validate Candidate
+    candidate = session.get(User, schedule_data.candidate_id)
+    if not candidate or candidate.role != UserRole.CANDIDATE:
+         raise HTTPException(status_code=400, detail="Invalid Candidate ID")
+
+    # Availability Check (Optional - can be expanded later)
+    # Check if candidate has conflicting interview within + - 1 hour? SKIPPED for MVP.
+
+    new_session = InterviewSession(
         admin_id=current_user.id,
-        bank_id=room_data.bank_id,
-        question_count=room_data.question_count,
-        max_sessions=room_data.max_sessions or 30
+        candidate_id=schedule_data.candidate_id,
+        bank_id=schedule_data.bank_id,
+        schedule_time=schedule_data.schedule_time,
+        duration_minutes=schedule_data.duration_minutes,
+        status=InterviewStatus.SCHEDULED
     )
-    session.add(new_room)
+    
+    session.add(new_session)
     session.commit()
-    session.refresh(new_room)
-    return RoomRead(id=new_room.id, room_code=new_room.room_code, password=new_room.password, is_active=new_room.is_active, max_sessions=new_room.max_sessions, active_sessions_count=0)
+    session.refresh(new_session)
+    
+    # Generate Link
+    # Note: host needs to be configurable in real prod, assume localhost:8000 for now or passed in env
+    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
+    link = f"{base_url}/interview/access/{new_session.access_token}"
+    
+    # Send Email
+    success = email_service.send_interview_invitation(
+        to_email=candidate.email, 
+        candidate_name=candidate.full_name,
+        link=link,
+        time_str=new_session.schedule_time.isoformat(),
+        duration_minutes=new_session.duration_minutes
+    )
+    
+    warning = None if success else "Email failed to send. Check server logs for mock link."
+    
+    return InterviewLinkResponse(
+        session_id=new_session.id,
+        access_token=new_session.access_token,
+        link=link,
+        scheduled_at=new_session.schedule_time.isoformat(),
+        warning=warning
+    )
 
-@router.get("/rooms", response_model=List[RoomRead])
-async def list_rooms(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)).all()
-    return [RoomRead(id=r.id, room_code=r.room_code, password=r.password, is_active=r.is_active, max_sessions=r.max_sessions, active_sessions_count=len([s for s in r.sessions if s.end_time is None])) for r in rooms]
+@router.get("/interviews", response_model=List[SessionRead])
+async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+    """List interviews created by this admin."""
+    # Find sessions where admin_id matches current user
+    sessions = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.admin_id == current_user.id)
+        .order_by(InterviewSession.schedule_time.desc())
+    ).all()
+    
+    results = []
+    for s in sessions:
+        results.append(SessionRead(
+            id=s.id,
+            candidate_name=s.candidate.full_name if s.candidate else "Unknown",
+            status=s.status.value,
+            scheduled_at=s.schedule_time.isoformat(),
+            score=s.total_score
+        ))
+    return results
+
+@router.get("/candidates", response_model=List[UserRead])
+async def list_candidates(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+    """List all users with CANDIDATE role."""
+    candidates = session.exec(select(User).where(User.role == UserRole.CANDIDATE)).all()
+    return candidates
 
 
 # --- Results & Proctoring ---
@@ -180,9 +235,8 @@ async def list_rooms(current_user: User = Depends(get_admin_user), session: Sess
 @router.get("/users/results", response_model=List[DetailedResult])
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
-    rooms = session.exec(select(InterviewRoom).where(InterviewRoom.admin_id == current_user.id)).all()
-    room_ids = [r.id for r in rooms]
-    sessions = session.exec(select(InterviewSession).where(InterviewSession.room_id.in_(room_ids))).all()
+    # Only show sessions created by this admin
+    sessions = session.exec(select(InterviewSession).where(InterviewSession.admin_id == current_user.id)).all()
     
     results = []
     for s in sessions:
@@ -194,7 +248,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         results.append(DetailedResult(
             session_id=s.id,
             candidate=s.candidate.full_name if s.candidate else (s.candidate_name or "Unknown"),
-            date=s.start_time.strftime("%Y-%m-%d %H:%M"),
+            date=s.schedule_time.strftime("%Y-%m-%d %H:%M"),
             score=f"{round(avg_score * 100, 1)}%",
             flags=len(proctoring) > 0,
             details=[ResponseDetail(
