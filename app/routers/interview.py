@@ -4,16 +4,19 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
+from ..models.db_models import InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus, QuestionGroup
 from ..services import interview as interview_service, resume as resume_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
-from ..schemas.responses import JoinRoomResponse
+from ..schemas.responses import JoinRoomResponse, QuestionPublic
 from ..schemas.requests import TTSRange, TextAnswerRequest
 from pydantic import BaseModel
 import os
 import uuid
 from datetime import datetime, timedelta
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
 audio_service = AudioService()
@@ -153,7 +156,7 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
     if has_assignments:
         total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.session_id == session_id)).all())
     elif session_obj and session_obj.bank_id:
-        total_questions = len(session_db.exec(select(Question).where(Question.bank_id == session_obj.bank_id)).all())
+        total_questions = len(session_db.exec(select(QuestionGroup).where(QuestionGroup.bank_id == session_obj.bank_id)).all())
     
     return {
         "question_id": question.id,
@@ -259,10 +262,11 @@ async def process_session_results_unified(session_id: int):
             
             responses = db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
             for resp in responses:
+                # 1. Handle Audio if present and not processed
                 if resp.audio_path and not (resp.answer_text or resp.transcribed_text):
                     audio_service.cleanup_audio(resp.audio_path)
                     
-                    # 1. Verification & Transcription (Async)
+                    # Verification & Transcription (Async)
                     text = await audio_service.speech_to_text(resp.audio_path)
                     if session.enrollment_audio_path:
                         match, _ = audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path)
@@ -270,24 +274,32 @@ async def process_session_results_unified(session_id: int):
                     
                     resp.answer_text = text
                     resp.transcribed_text = text # Compatibility
-                    
-                    # 2. LLM Evaluation
+                
+                # 2. Evaluate if we have text (from Step 1 OR direct submission)
+                final_text = resp.answer_text or resp.transcribed_text
+                
+                # Evaluate if text exists AND it hasn't been scored yet (or re-evaluate? Let's assume once for now)
+                # Simpler: just ensure if we have text, we have a score.
+                if final_text and resp.score is None:
                     q_text = resp.question.question_text or resp.question.content or "General Question"
-                    evaluation = interview_service.evaluate_answer_content(q_text, text)
+                    evaluation = interview_service.evaluate_answer_content(q_text, final_text)
                     
                     resp.evaluation_text = evaluation["feedback"]
                     resp.score = evaluation["score"]
                     db.add(resp)
-                    db.commit()
+            
+            db.commit()
             
             # Final Score Aggregation
+            # Refresh to get updated scores
+            responses = db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
             all_scores = [r.score for r in responses if r.score is not None]
             session.total_score = sum(all_scores) / len(all_scores) if all_scores else 0
             db.add(session)
             db.commit()
-            print(f"DEBUG: Session {session_id} Unified Processing Complete.")
+            logger.info(f"Session {session_id} unified processing complete.")
         except Exception as e:
-            print(f"ERROR: Session {session_id} Processing Failed: {e}")
+            logger.error(f"Session {session_id} processing failed: {e}")
 
 # --- Standalone Testing ---
 
@@ -297,3 +309,38 @@ async def standalone_tts(req: TTSRange):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     await audio_service.text_to_speech(req.text, path)
     return FileResponse(path, media_type="audio/mpeg")
+
+@router.get("/session/{session_id}/questions", response_model=List[QuestionPublic])
+async def get_session_questions(
+    session_id: int, 
+    session_db: Session = Depends(get_session)
+):
+    """
+    Returns the list of questions assigned to this session.
+    """
+    session_obj = session_db.get(InterviewSession, session_id)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    # Security: In prod, check if current_user == session.candidate
+    
+    # Fetch questions linked via SessionQuestion, ordered by sort_order
+    # Using the relationship defined in db_models: session.selected_questions
+    
+    questions = []
+    # session_obj.selected_questions is a list of SessionQuestion
+    # We need to sort them and get the actual QuestionGroup objects
+    
+    sorted_sq = sorted(session_obj.selected_questions, key=lambda x: x.sort_order)
+    
+    for sq in sorted_sq:
+        if sq.question:
+            questions.append(QuestionPublic(
+                id=sq.question.id,
+                content=sq.question.content or sq.question.question_text or "Dynamic",
+                topic=sq.question.topic,
+                difficulty=sq.question.difficulty,
+                marks=sq.question.marks
+            ))
+            
+    return questions

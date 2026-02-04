@@ -6,6 +6,9 @@ from ..models.db_models import QuestionGroup
 from ..core.config import local_llm
 from ..prompts.interview import interview_prompt
 from ..prompts.evaluation import evaluation_prompt
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 # Constants
 RESUME_TOPICS = ["Data Structures & Algorithms", "System Design", "Database Management", "API Design", "Security", "Scalability", "DevOps"]
@@ -50,8 +53,8 @@ def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, 
             lines = lines[:-1]
         content = "\n".join(lines).strip()
 
-    print(f"DEBUG: LLM Evaluation Raw Response: '{response.content}'")
-    print(f"DEBUG: Cleaned Content for JSON: '{content}'")
+    logger.debug(f"LLM Evaluation Raw Response: '{response.content}'")
+    logger.debug(f"Cleaned Content for JSON: '{content}'")
     
     try:
         # Attempt to parse JSON from the cleaned content
@@ -62,28 +65,16 @@ def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, 
         if "score" not in result:
              result["score"] = 0.0
              
-        print(f"DEBUG: Parsed Score: {result['score']}")
+        logger.debug(f"Parsed Score: {result['score']}")
         return result
     except json.JSONDecodeError:
-        print("DEBUG: JSON parsing failed, returning fallback result.")
+        logger.debug("JSON parsing failed, returning fallback result.")
         # Fallback if LLM fails to return valid JSON
         return {
             "feedback": response.content,
             "score": 0.0
         }
 
-def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> QuestionGroup:
-    """Finds a question by content or creates a new one."""
-    stmt = select(Question).where(Question.content == content)
-    question = session.exec(stmt).first()
-    
-    if not question:
-        question = Question(content=content, topic=topic, difficulty=difficulty)
-        session.add(question)
-        session.flush() # Get ID but don't commit yet
-        session.refresh(question)
-        
-    return question
 
 def get_custom_response(prompt: str) -> str:
     response = local_llm.invoke(prompt)

@@ -70,3 +70,10 @@ class DetailedResult(BaseModel):
     flags: bool
     details: List[ResponseDetail]
     proctoring_logs: List[ProctoringLogItem]
+
+class QuestionPublic(BaseModel):
+    id: int
+    content: str
+    topic: Optional[str] = "General"
+    difficulty: str = "Medium"
+    marks: int = 1

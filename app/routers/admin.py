@@ -15,6 +15,9 @@ import shutil
 import uuid
 import secrets
 from datetime import datetime, timedelta
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
@@ -120,7 +123,7 @@ async def upload_document(
     try:
         qa_pairs = nlp_service.extract_qa_from_file(file_path)
         for pair in qa_pairs:
-            q = Question(content=pair['question'], question_text=pair['question'], reference_answer=pair['answer'], topic="Resume/Document")
+            q = QuestionGroup(content=pair['question'], question_text=pair['question'], reference_answer=pair['answer'], topic="Resume/Document")
             session.add(q)
         session.commit()
         return {"message": f"Successfully extracted {len(qa_pairs)} questions"}
@@ -133,7 +136,7 @@ async def delete_question(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    q = session.get(Question, q_id)
+    q = session.get(QuestionGroup, q_id)
     if not q: raise HTTPException(status_code=404, detail="Question not found")
     session.delete(q)
     session.commit()
@@ -160,29 +163,36 @@ async def schedule_interview(
     if not candidate or candidate.role != UserRole.CANDIDATE:
          raise HTTPException(status_code=400, detail="Invalid Candidate ID")
 
-    # Availability Check (Optional - can be expanded later)
-    # Check if candidate has conflicting interview within + - 1 hour? SKIPPED for MVP.
+    # Create Session
+    try:
+        schedule_time_val = schedule_data.schedule_time
+        if isinstance(schedule_time_val, str):
+             schedule_time_val = datetime.fromisoformat(schedule_time_val.replace("Z", "+00:00"))
 
-    new_session = InterviewSession(
-        admin_id=current_user.id,
-        candidate_id=schedule_data.candidate_id,
-        bank_id=schedule_data.bank_id,
-        schedule_time=schedule_data.schedule_time,
-        duration_minutes=schedule_data.duration_minutes,
-        status=InterviewStatus.SCHEDULED
-    )
-    
-    session.add(new_session)
-    session.commit()
-    session.refresh(new_session)
-    
+        new_session = InterviewSession(
+            admin_id=current_user.id,
+            candidate_id=schedule_data.candidate_id,
+            bank_id=schedule_data.bank_id,
+            schedule_time=schedule_time_val,
+            duration_minutes=schedule_data.duration_minutes,
+            status=InterviewStatus.SCHEDULED
+        )
+        
+        session.add(new_session)
+        session.commit()
+        session.refresh(new_session)
+    except Exception as e:
+        # Log and return 500
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to create session: {str(e)}")
+
     # Generate Link
-    # Note: host needs to be configurable in real prod, assume localhost:8000 for now or passed in env
     base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
     link = f"{base_url}/interview/access/{new_session.access_token}"
     
     # Send Email
-    success = email_service.send_interview_invitation(
+    email_success = email_service.send_interview_invitation(
         to_email=candidate.email, 
         candidate_name=candidate.full_name,
         link=link,
@@ -190,7 +200,7 @@ async def schedule_interview(
         duration_minutes=new_session.duration_minutes
     )
     
-    warning = None if success else "Email failed to send. Check server logs for mock link."
+    warning = None if email_success else "Email failed to send."
     
     return InterviewLinkResponse(
         session_id=new_session.id,
@@ -204,22 +214,35 @@ async def schedule_interview(
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
     # Find sessions where admin_id matches current user
-    sessions = session.exec(
-        select(InterviewSession)
-        .where(InterviewSession.admin_id == current_user.id)
-        .order_by(InterviewSession.schedule_time.desc())
-    ).all()
-    
-    results = []
-    for s in sessions:
-        results.append(SessionRead(
-            id=s.id,
-            candidate_name=s.candidate.full_name if s.candidate else "Unknown",
-            status=s.status.value,
-            scheduled_at=s.schedule_time.isoformat(),
-            score=s.total_score
-        ))
-    return results
+    try:
+        sessions = session.exec(
+            select(InterviewSession)
+            .where(InterviewSession.admin_id == current_user.id)
+            .order_by(InterviewSession.schedule_time.desc())
+        ).all()
+        
+        results = []
+        for s in sessions:
+            try:
+                # Safer status extraction
+                status_val = s.status.value if hasattr(s.status, "value") else str(s.status)
+                
+                results.append(SessionRead(
+                    id=s.id,
+                    candidate_name=s.candidate.full_name if s.candidate else (s.candidate_name or "Unknown"),
+                    status=status_val,
+                    scheduled_at=s.schedule_time.isoformat() if s.schedule_time else "Unknown",
+                    score=s.total_score
+                ))
+            except Exception as inner_e:
+                logger.warning(f"Skipping malformed session {s.id}: {inner_e}")
+                continue
+                
+        return results
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"List Interviews Failed: {str(e)}")
 
 @router.get("/candidates", response_model=List[UserRead])
 async def list_candidates(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
@@ -301,7 +324,23 @@ async def create_user(
 
 @router.get("/users", response_model=List[UserRead])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    return [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
+    try:
+        users = session.exec(select(User)).all()
+        result = []
+        for u in users:
+            try:
+                # Safer role extraction
+                role_val = u.role.value if hasattr(u.role, "value") else str(u.role)
+                result.append(UserRead(id=u.id, email=u.email, full_name=u.full_name, role=role_val))
+            except Exception as e:
+                logger.error(f"Error processing user {u.id}: {e}")
+                # Skip bad user or add with error?
+                pass
+        return result
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"List Users Failed: {str(e)}")
 
 @router.post("/shutdown")
 def shutdown(current_user: User = Depends(get_admin_user)):
