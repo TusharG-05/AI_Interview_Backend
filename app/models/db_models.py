@@ -23,45 +23,46 @@ class User(SQLModel, table=True):
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
     resume_text: Optional[str] = Field(default=None)  # Stored extracted text
-    profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie
+    profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
+    profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
+    face_embedding: Optional[str] = Field(default=None) # JSON/CSV string of the ArcFace vector
     
     # Relationships
-    question_banks: List["QuestionBank"] = Relationship(back_populates="admin")
+    question_papers: List["QuestionPaper"] = Relationship(back_populates="admin")
 
-class QuestionBank(SQLModel, table=True):
+class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = None
     admin_id: int = Field(foreign_key="user.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    admin: User = Relationship(back_populates="question_banks")
-    questions: List["QuestionGroup"] = Relationship(back_populates="bank")
-    sessions: List["InterviewSession"] = Relationship(back_populates="bank")
+    admin: User = Relationship(back_populates="question_papers")
+    questions: List["Questions"] = Relationship(back_populates="paper")
+    sessions: List["InterviewSession"] = Relationship(back_populates="paper")
 
-class QuestionGroup(SQLModel, table=True):
-    """Formerly named 'Question'"""
+class Questions(SQLModel, table=True):
+    """Formerly named 'QuestionGroup'"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    bank_id: Optional[int] = Field(default=None, foreign_key="questionbank.id")
+    paper_id: Optional[int] = Field(default=None, foreign_key="questionpaper.id")
     content: Optional[str] = None
     question_text: Optional[str] = None # Legacy support
     topic: Optional[str] = None
     difficulty: str = Field(default="Medium")
-    reference_answer: Optional[str] = None # Legacy support
     marks: int = Field(default=1)
     
-    bank: Optional[QuestionBank] = Relationship(back_populates="questions")
+    paper: Optional[QuestionPaper] = Relationship(back_populates="questions")
     responses: List["InterviewResponse"] = Relationship(back_populates="question")
     session_questions: List["SessionQuestion"] = Relationship(back_populates="question")
 
 class InterviewSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     
-    # Scheduler Info
+    # Scheduler Info 
     access_token: str = Field(unique=True, index=True, default_factory=lambda: uuid.uuid4().hex)
     admin_id: int = Field(foreign_key="user.id")
     candidate_id: int = Field(foreign_key="user.id")
-    bank_id: int = Field(foreign_key="questionbank.id")
+    paper_id: int = Field(foreign_key="questionpaper.id")
     
     # Timing
     schedule_time: datetime
@@ -76,12 +77,12 @@ class InterviewSession(SQLModel, table=True):
     # Legacy/Enrollment
     enrollment_audio_path: Optional[str] = None
     candidate_name: Optional[str] = None # Optional fallback
-    is_completed: bool = Field(default=False) # Keep for backward compatibility logic
+    is_completed: bool = Field(default=False) 
     
     # Relationships
     admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
     candidate: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
-    bank: QuestionBank = Relationship(back_populates="sessions")
+    paper: QuestionPaper = Relationship(back_populates="sessions")
     
     responses: List["InterviewResponse"] = Relationship(back_populates="session")
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session")
@@ -91,16 +92,16 @@ class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: int = Field(foreign_key="interviewsession.id")
-    question_id: int = Field(foreign_key="questiongroup.id")
+    question_id: int = Field(foreign_key="questions.id")
     sort_order: int = Field(default=0)
     
     session: InterviewSession = Relationship(back_populates="selected_questions")
-    question: QuestionGroup = Relationship(back_populates="session_questions")
+    question: Questions = Relationship(back_populates="session_questions")
 
 class ProctoringEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: int = Field(foreign_key="interviewsession.id")
-    event_type: str # e.g., "MULTIPLE_FACES", "Gaze Violation", "Unknown Person"
+    event_type: str 
     details: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
@@ -109,7 +110,7 @@ class ProctoringEvent(SQLModel, table=True):
 class InterviewResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     session_id: int = Field(foreign_key="interviewsession.id")
-    question_id: int = Field(foreign_key="questiongroup.id")
+    question_id: int = Field(foreign_key="questions.id")
     
     # Legacy fields
     audio_path: Optional[str] = None
@@ -123,17 +124,18 @@ class InterviewResponse(SQLModel, table=True):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     session: InterviewSession = Relationship(back_populates="responses")
-    question: QuestionGroup = Relationship(back_populates="responses")
+    question: Questions = Relationship(back_populates="responses")
 
 # Aliases for legacy code
-Question = QuestionGroup
+Question = Questions
+QuestionBank = QuestionPaper
+QuestionGroup = Questions
 CandidateResponse = InterviewResponse
-InterviewRoom = None # Explicitly Removed
 
-# Rebuild models to resolve forward references
+# Rebuild models
 User.model_rebuild()
-QuestionBank.model_rebuild()
-QuestionGroup.model_rebuild()
+QuestionPaper.model_rebuild()
+Questions.model_rebuild()
 InterviewSession.model_rebuild()
 SessionQuestion.model_rebuild()
 InterviewResponse.model_rebuild()

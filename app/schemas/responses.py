@@ -4,14 +4,17 @@ from pydantic import BaseModel
 # Candidate Responses
 class HistoryItem(BaseModel):
     session_id: int
-    room_code: str
+    paper_name: str
     date: str
-    score: float = None
+    score: Optional[float] = None
 
-# Admin Responses
-# Removed RoomRead
+class InterviewAccessResponse(BaseModel):
+    session_id: int
+    message: str # "START" or "WAIT"
+    schedule_time: Optional[str] = None
+    duration_minutes: Optional[int] = None
 
-class BankRead(BaseModel):
+class PaperRead(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
@@ -31,11 +34,7 @@ class UserRead(BaseModel):
     full_name: str
     role: str
 
-class JoinRoomResponse(BaseModel):
-    session_id: int
-    message: str
-    schedule_time: str
-    duration_minutes: int
+
 
 class Token(BaseModel):
     access_token: str
@@ -61,6 +60,7 @@ class ResponseDetail(BaseModel):
     question: str
     answer: str
     score: str
+    status: str # "Answered", "Skipped", "Pending AI"
 
 class DetailedResult(BaseModel):
     session_id: int
