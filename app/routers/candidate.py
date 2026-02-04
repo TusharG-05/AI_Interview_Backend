@@ -4,7 +4,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, InterviewRoom, InterviewSession, InterviewResponse, SessionQuestion
+from ..models.db_models import User, InterviewSession, InterviewResponse, SessionQuestion
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
 from datetime import datetime

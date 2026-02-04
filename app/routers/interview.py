@@ -4,12 +4,12 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
-from ..schemas.requests import AnswerRequest
+from ..models.db_models import InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
 from ..services import interview as interview_service, resume as resume_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
 from ..schemas.responses import JoinRoomResponse
+from ..schemas.requests import TTSRange, TextAnswerRequest
 from pydantic import BaseModel
 import os
 import uuid
@@ -18,18 +18,6 @@ from datetime import datetime, timedelta
 router = APIRouter(prefix="/interview", tags=["Interview"])
 audio_service = AudioService()
 nlp_service = NLPService()
-
-class TTSRange(BaseModel):
-    text: str
-
-class EvaluateRequest(BaseModel):
-    candidate_text: str
-    reference_text: str
-
-@router.get("/general-questions")
-async def get_general_questions(session: Session = Depends(get_session)):
-    questions = session.exec(select(Question)).all()
-    return {"questions": [q.dict() for q in questions]}
 
 @router.get("/access/{token}", response_model=JoinRoomResponse)
 async def access_interview(token: str, session_db: Session = Depends(get_session)):
@@ -181,7 +169,7 @@ async def stream_question_audio(q_id: int):
     if not os.path.exists(audio_path): raise HTTPException(status_code=404)
     return FileResponse(audio_path, media_type="audio/mpeg")
 
-@router.post("/submit-answer")
+@router.post("/submit-audio-answer")
 async def submit_answer(
     session_id: int = Form(...),
     question_id: int = Form(...),
@@ -194,6 +182,20 @@ async def submit_answer(
     audio_service.save_audio_blob(content, audio_path)
     
     response = InterviewResponse(session_id=session_id, question_id=question_id, audio_path=audio_path)
+    session_db.add(response)
+    session_db.commit()
+    return {"status": "saved"}
+
+@router.post("/submit-text-answer")
+async def submit_text_answer(
+    req: TextAnswerRequest,
+    session_db: Session = Depends(get_session)
+):
+    response = InterviewResponse(
+        session_id=req.session_id, 
+        question_id=req.question_id, 
+        answer_text=req.answer_text
+    )
     session_db.add(response)
     session_db.commit()
     return {"status": "saved"}
@@ -212,34 +214,6 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
     background_tasks.add_task(process_session_results_unified, session_id)
     return {"status": "finished", "message": "Results are being processed by AI."}
 
-# --- AI & Resume Specific ---
-
-@router.post("/evaluate-answer")
-async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: Session = Depends(get_session)):
-    interview_session = session_db.get(InterviewSession, session_id)
-    if not interview_session: raise HTTPException(status_code=404)
-
-    try:
-        evaluation = interview_service.evaluate_answer_content(request.question, request.answer)
-        
-        # This now only flushes, doesn't commit
-        db_question = interview_service.get_or_create_question(session_db, request.question, topic="Dynamic")
-
-        new_response = InterviewResponse(
-            session_id=session_id,
-            question_id=db_question.id,
-            answer_text=request.answer,
-            evaluation_text=evaluation["feedback"],
-            score=evaluation["score"]
-        )
-        session_db.add(new_response)
-        
-        # ATOMIC COMMIT: Both Question (if new) and Response are saved together
-        session_db.commit()
-        return evaluation
-    except Exception as e:
-        session_db.rollback()
-        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 from ..auth.dependencies import get_current_user
 from ..models.db_models import User
@@ -323,7 +297,3 @@ async def standalone_tts(req: TTSRange):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     await audio_service.text_to_speech(req.text, path)
     return FileResponse(path, media_type="audio/mpeg")
-
-@router.post("/evaluate")
-async def standalone_evaluate(req: EvaluateRequest):
-    return interview_service.evaluate_answer_content(req.reference_text, req.candidate_text)

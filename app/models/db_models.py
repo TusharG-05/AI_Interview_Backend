@@ -126,9 +126,7 @@ class InterviewResponse(SQLModel, table=True):
     question: QuestionGroup = Relationship(back_populates="responses")
 
 # Aliases for legacy code
-Question = QuestionGroup
 CandidateResponse = InterviewResponse
-InterviewRoom = None # Explicitly Removed
 
 # Rebuild models to resolve forward references
 User.model_rebuild()

@@ -2,7 +2,7 @@ import random
 import json
 from typing import Dict, Union, Optional
 from sqlmodel import Session, select
-from ..models.db_models import Question
+from ..models.db_models import QuestionGroup
 from ..core.config import local_llm
 from ..prompts.interview import interview_prompt
 from ..prompts.evaluation import evaluation_prompt
@@ -72,7 +72,7 @@ def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, 
             "score": 0.0
         }
 
-def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> Question:
+def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> QuestionGroup:
     """Finds a question by content or creates a new one."""
     stmt = select(Question).where(Question.content == content)
     question = session.exec(stmt).first()

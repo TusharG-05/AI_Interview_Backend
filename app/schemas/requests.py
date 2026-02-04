@@ -34,10 +34,6 @@ class InterviewScheduleCreate(BaseModel):
 # Removed: RoomCreate, BankCreate (handled in admin code), RoomUpdate
 
 # Interview Requests
-class AnswerRequest(BaseModel):
-    question: str
-    answer: str
-
 
 class LoginRequest(BaseModel):
     email: str
@@ -48,3 +44,11 @@ class QuestionCreate(BaseModel):
     difficulty: str = "Medium"
     reference_answer: Optional[str] = None
     marks: int = 1
+
+class TTSRange(BaseModel):
+    text: str
+
+class TextAnswerRequest(BaseModel):
+    session_id: int
+    question_id: int
+    answer_text: str

@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, QuestionBank, QuestionGroup, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
+from ..models.db_models import QuestionBank, QuestionGroup, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
@@ -38,8 +38,6 @@ class BankCreate(BaseModel):
     name: str
     description: Optional[str] = None
 
-
-
 @router.post("/banks", response_model=BankRead)
 async def create_bank(
     bank_data: BankCreate,
@@ -57,7 +55,7 @@ async def create_bank(
     session.refresh(new_bank)
     return BankRead(id=new_bank.id, name=new_bank.name, description=new_bank.description, question_count=0, created_at=new_bank.created_at.isoformat())
 
-@router.get("/banks/{bank_id}/questions", response_model=List[Question])
+@router.get("/banks/{bank_id}/questions", response_model=List[QuestionGroup])
 async def get_bank_questions(
     bank_id: int,
     current_user: User = Depends(get_admin_user),
@@ -69,7 +67,7 @@ async def get_bank_questions(
         raise HTTPException(status_code=404, detail="Bank not found")
     return bank.questions
 
-@router.post("/banks/{bank_id}/questions", response_model=Question)
+@router.post("/banks/{bank_id}/questions", response_model=QuestionGroup)
 async def add_question_to_bank(
     bank_id: int,
     q_data: QuestionCreate,
