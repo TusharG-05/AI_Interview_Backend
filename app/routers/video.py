@@ -119,8 +119,8 @@ async def watch(target_session_id: int, params: Offer):
     Admin Ghost Mode: Watch an active session.
     """
     if target_session_id not in active_sessions or not active_sessions[target_session_id]["track"]:
-        # Session not active or no video yet
-        return {"error": "Session Not Active"}
+        # Session not active or no video yet: Admin waits
+        return {"status": "WAITING_FOR_CANDIDATE", "message": "Admin Ghost Mode initialized. Waiting for candidate stream..."}
 
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     pc = RTCPeerConnection()

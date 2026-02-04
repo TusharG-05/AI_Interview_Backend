@@ -141,7 +141,8 @@ async def add_question_to_paper(
         question_text=q_data.content,
         topic=q_data.topic,
         difficulty=q_data.difficulty,
-        marks=q_data.marks
+        marks=q_data.marks,
+        response_type=q_data.response_type
     )
     session.add(new_q)
     session.commit()
@@ -188,7 +189,8 @@ async def upload_document(
                 paper_id=paper_id,
                 content=item['question'], 
                 question_text=item['question'], 
-                topic="Uploaded Document"
+                topic="Uploaded Document",
+                response_type="audio" # Default for extracted
             )
             session.add(q)
         session.commit()

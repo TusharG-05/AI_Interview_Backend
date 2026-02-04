@@ -50,7 +50,8 @@ class Questions(SQLModel, table=True):
     topic: Optional[str] = None
     difficulty: str = Field(default="Medium")
     marks: int = Field(default=1)
-    
+    response_type: str = Field(default="audio") # Options: audio, text, both
+
     paper: Optional[QuestionPaper] = Relationship(back_populates="questions")
     responses: List["InterviewResponse"] = Relationship(back_populates="question")
     session_questions: List["SessionQuestion"] = Relationship(back_populates="question")
@@ -126,11 +127,6 @@ class InterviewResponse(SQLModel, table=True):
     session: InterviewSession = Relationship(back_populates="responses")
     question: Questions = Relationship(back_populates="responses")
 
-# Aliases for legacy code
-Question = Questions
-QuestionBank = QuestionPaper
-QuestionGroup = Questions
-CandidateResponse = InterviewResponse
 
 # Rebuild models
 User.model_rebuild()

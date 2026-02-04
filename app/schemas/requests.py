@@ -45,6 +45,7 @@ class QuestionUpdate(BaseModel):
     topic: Optional[str] = None
     difficulty: Optional[str] = None
     marks: Optional[int] = None
+    response_type: Optional[str] = None
 
 class LoginRequest(BaseModel):
     email: str
@@ -54,3 +55,4 @@ class QuestionCreate(BaseModel):
     topic: Optional[str] = "General"
     difficulty: str = "Medium"
     marks: int = 1
+    response_type: str = "audio"

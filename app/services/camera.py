@@ -40,6 +40,7 @@ class CameraService:
         self.session_frames: dict[int, bytes] = {}
         self.session_frame_ids: dict[int, int] = {}
         self.session_warnings: dict[int, str] = {}
+        self.session_start_times: dict[int, float] = {} # {session_id: timestamp}
         
         self.frame_lock = threading.Lock()
         self._detectors_ready = False
@@ -124,9 +125,14 @@ class CameraService:
                 _, buffer = cv2.imencode('.jpg', frame)
                 self.session_frames[session_id] = buffer.tobytes()
                 self.session_frame_ids[session_id] = self.session_frame_ids.get(session_id, 0) + 1
+                if session_id not in self.session_start_times:
+                    self.session_start_times[session_id] = time.time()
 
-            # --- PERSIST PROCTORING EVENT ---
-            if warning:
+            # --- PERSIST PROCTORING EVENT (With Grace Period) ---
+            GRACE_PERIOD = 30 # Seconds
+            in_grace_period = (time.time() - self.session_start_times.get(session_id, time.time())) < GRACE_PERIOD
+            
+            if warning and not in_grace_period:
                 from ..core.database import engine
                 from sqlmodel import Session
                 from ..models.db_models import ProctoringEvent
@@ -139,6 +145,8 @@ class CameraService:
                     )
                     db_session.add(event)
                     db_session.commit()
+            elif warning and in_grace_period:
+                logger.debug(f"Proctoring: Alert suppressed during grace period for Session {session_id}")
 
             # Update state for external status calls (Isolate by session)
             self.session_warnings[session_id] = warning if warning else "No Issues"
