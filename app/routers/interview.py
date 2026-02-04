@@ -1,18 +1,19 @@
 from typing import List, Optional, Dict, Union
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, InterviewSession, InterviewResponse, SessionQuestion
+from ..models.db_models import Question, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
 from ..schemas.requests import AnswerRequest
 from ..services import interview as interview_service, resume as resume_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
+from ..schemas.responses import JoinRoomResponse
 from pydantic import BaseModel
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
 audio_service = AudioService()
@@ -30,22 +31,72 @@ async def get_general_questions(session: Session = Depends(get_session)):
     questions = session.exec(select(Question)).all()
     return {"questions": [q.dict() for q in questions]}
 
-@router.post("/start")
-async def start_interview(
-    candidate_name: str = Form("Candidate"), 
+@router.get("/access/{token}", response_model=JoinRoomResponse)
+async def access_interview(token: str, session_db: Session = Depends(get_session)):
+    """
+    Validates the interview link and checks time constraints.
+    """
+    session = session_db.exec(select(InterviewSession).where(InterviewSession.access_token == token)).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Invalid Interview Link")
+        
+    now = datetime.utcnow()
+    
+    # 1. Status Check
+    if session.status in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
+        raise HTTPException(status_code=403, detail=f"Interview is {session.status.value}")
+        
+    # 2. Start Time Check
+    if now < session.schedule_time:
+        # Too early
+        wait_seconds = (session.schedule_time - now).total_seconds()
+        return JoinRoomResponse(
+            session_id=session.id,
+            message="WAIT",
+            schedule_time=session.schedule_time.isoformat(),
+            duration_minutes=session.duration_minutes
+        )
+        
+    # 3. Expiration Check
+    expiration_time = session.schedule_time + timedelta(minutes=session.duration_minutes)
+    if now > expiration_time:
+         session.status = InterviewStatus.EXPIRED
+         session_db.add(session)
+         session_db.commit()
+         raise HTTPException(status_code=403, detail="Interview link has expired")
+         
+    # 4. Success - Allow Entry
+    return JoinRoomResponse(
+            session_id=session.id,
+            message="START",
+            schedule_time=session.schedule_time.isoformat(),
+            duration_minutes=session.duration_minutes
+    )
+
+
+@router.post("/start-session/{session_id}")
+async def start_session_logic(
+    session_id: int,
     enrollment_audio: UploadFile = File(None),
     session_db: Session = Depends(get_session)
 ):
-    new_session = InterviewSession(candidate_name=candidate_name, start_time=datetime.utcnow())
-    session_db.add(new_session)
-    session_db.flush() # Get ID
-    session_db.refresh(new_session)
+    """
+    Called when candidate actually enters the room (uploads selfie/audio).
+    Sets status to LIVE.
+    """
+    session = session_db.get(InterviewSession, session_id)
+    if not session: raise HTTPException(status_code=404)
+    
+    # Update Status
+    if session.status == InterviewStatus.SCHEDULED:
+        session.status = InterviewStatus.LIVE
+        session.start_time = datetime.utcnow()
     
     warning = None
     try:
         if enrollment_audio:
             os.makedirs("app/assets/audio/enrollment", exist_ok=True)
-            enrollment_path = f"app/assets/audio/enrollment/enroll_{new_session.id}.wav"
+            enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
             content = await enrollment_audio.read()
             audio_service.save_audio_blob(content, enrollment_path)
             audio_service.cleanup_audio(enrollment_path)
@@ -54,15 +105,15 @@ async def start_interview(
             if audio_service.calculate_energy(enrollment_path) < 50:
                  warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
             
-            new_session.enrollment_audio_path = enrollment_path
-            session_db.add(new_session)
+            session.enrollment_audio_path = enrollment_path
+            session_db.add(session)
             
         session_db.commit()
     except Exception as e:
         session_db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to start interview: {str(e)}")
         
-    return {"session_id": new_session.id, "warning": warning}
+    return {"session_id": session.id, "status": "LIVE", "warning": warning}
 
 @router.get("/next-question/{session_id}")
 async def get_next_question(session_id: int, session_db: Session = Depends(get_session)):
@@ -74,6 +125,9 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
         select(SessionQuestion).where(SessionQuestion.session_id == session_id)
     ).first() is not None
     
+    # Logic Update: If Bank is assigned, we should pull from Bank if no session_questions pre-assigned?
+    # For now, sticking to logic:
+    
     if has_assignments:
         # Campaign mode: Strictly follow assigned questions
         session_q = session_db.exec(
@@ -84,8 +138,18 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
         ).first()
         question = session_q.question if session_q else None
     else:
-        # Legacy mode: Use general pool
-        question = session_db.exec(select(Question).where(~Question.id.in_(answered_ids))).first()
+        # Fallback: Pull from the assigned Bank (if any) or General
+        session_obj = session_db.get(InterviewSession, session_id)
+        if session_obj and session_obj.bank_id:
+             # Get random question from bank not answered
+             # Note: efficient random selection is complex in SQL, doing simple first()
+             question = session_db.exec(
+                 select(Question)
+                 .where(Question.bank_id == session_obj.bank_id)
+                 .where(~Question.id.in_(answered_ids))
+             ).first()
+        else:
+             question = session_db.exec(select(Question).where(~Question.id.in_(answered_ids))).first()
     
     if not question: return {"status": "finished"}
     
@@ -94,10 +158,21 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
     if not os.path.exists(audio_path):
         await audio_service.text_to_speech(question.question_text or question.content, audio_path)
     
+    # Calculate progress
+    total_questions = 0
+    question_index = len(answered_ids) + 1
+    
+    if has_assignments:
+        total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.session_id == session_id)).all())
+    elif session_obj and session_obj.bank_id:
+        total_questions = len(session_db.exec(select(Question).where(Question.bank_id == session_obj.bank_id)).all())
+    
     return {
         "question_id": question.id,
         "text": question.question_text or question.content,
-        "audio_url": f"/interview/audio/question/{question.id}"
+        "audio_url": f"/interview/audio/question/{question.id}",
+        "question_index": question_index,
+        "total_questions": total_questions
     }
 
 @router.get("/audio/question/{q_id}")
@@ -130,6 +205,7 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
     
     interview_session.end_time = datetime.utcnow()
     interview_session.is_completed = True
+    interview_session.status = InterviewStatus.COMPLETED
     session_db.add(interview_session)
     session_db.commit()
     

@@ -1,12 +1,20 @@
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlmodel import Field, SQLModel, Relationship
 from enum import Enum
+import uuid
 
 class UserRole(str, Enum):
     ADMIN = "admin"
     SUPER_ADMIN = "super_admin"
     CANDIDATE = "candidate"
+
+class InterviewStatus(str, Enum):
+    SCHEDULED = "scheduled"
+    LIVE = "live"
+    COMPLETED = "completed"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -17,8 +25,7 @@ class User(SQLModel, table=True):
     resume_text: Optional[str] = Field(default=None)  # Stored extracted text
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie
     
-    rooms_created: List["InterviewRoom"] = Relationship(back_populates="admin")
-    sessions: List["InterviewSession"] = Relationship(back_populates="candidate")
+    # Relationships
     question_banks: List["QuestionBank"] = Relationship(back_populates="admin")
 
 class QuestionBank(SQLModel, table=True):
@@ -30,7 +37,7 @@ class QuestionBank(SQLModel, table=True):
     
     admin: User = Relationship(back_populates="question_banks")
     questions: List["QuestionGroup"] = Relationship(back_populates="bank")
-    rooms: List["InterviewRoom"] = Relationship(back_populates="bank")
+    sessions: List["InterviewSession"] = Relationship(back_populates="bank")
 
 class QuestionGroup(SQLModel, table=True):
     """Formerly named 'Question'"""
@@ -47,38 +54,35 @@ class QuestionGroup(SQLModel, table=True):
     responses: List["InterviewResponse"] = Relationship(back_populates="question")
     session_questions: List["SessionQuestion"] = Relationship(back_populates="question")
 
-class InterviewRoom(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    room_code: str = Field(unique=True, index=True)
-    password: str
-    admin_id: int = Field(foreign_key="user.id")
-    bank_id: Optional[int] = Field(default=None, foreign_key="questionbank.id")
-    question_count: int = Field(default=5) # How many random questions to pick
-    is_active: bool = Field(default=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    max_sessions: Optional[int] = Field(default=None)
-    
-    admin: User = Relationship(back_populates="rooms_created")
-    bank: Optional[QuestionBank] = Relationship(back_populates="rooms")
-    sessions: List["InterviewSession"] = Relationship(back_populates="room")
-
 class InterviewSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    room_id: Optional[int] = Field(default=None, foreign_key="interviewroom.id")
-    candidate_id: Optional[int] = Field(default=None, foreign_key="user.id")
     
-    # Legacy fields
-    candidate_name: Optional[str] = None
-    enrollment_audio_path: Optional[str] = None
-    is_completed: bool = Field(default=False)
+    # Scheduler Info
+    access_token: str = Field(unique=True, index=True, default_factory=lambda: uuid.uuid4().hex)
+    admin_id: int = Field(foreign_key="user.id")
+    candidate_id: int = Field(foreign_key="user.id")
+    bank_id: int = Field(foreign_key="questionbank.id")
     
-    # Shared/New fields
-    start_time: datetime = Field(default_factory=datetime.utcnow)
+    # Timing
+    schedule_time: datetime
+    duration_minutes: int = Field(default=180) # 3 Hours default
+    start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    
+    # State
+    status: InterviewStatus = Field(default=InterviewStatus.SCHEDULED)
     total_score: Optional[float] = None
     
-    room: Optional["InterviewRoom"] = Relationship(back_populates="sessions")
-    candidate: Optional["User"] = Relationship(back_populates="sessions")
+    # Legacy/Enrollment
+    enrollment_audio_path: Optional[str] = None
+    candidate_name: Optional[str] = None # Optional fallback
+    is_completed: bool = Field(default=False) # Keep for backward compatibility logic
+    
+    # Relationships
+    admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
+    candidate: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
+    bank: QuestionBank = Relationship(back_populates="sessions")
+    
     responses: List["InterviewResponse"] = Relationship(back_populates="session")
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session")
     selected_questions: List["SessionQuestion"] = Relationship(back_populates="session")
@@ -124,12 +128,12 @@ class InterviewResponse(SQLModel, table=True):
 # Aliases for legacy code
 Question = QuestionGroup
 CandidateResponse = InterviewResponse
+InterviewRoom = None # Explicitly Removed
 
 # Rebuild models to resolve forward references
 User.model_rebuild()
 QuestionBank.model_rebuild()
 QuestionGroup.model_rebuild()
-InterviewRoom.model_rebuild()
 InterviewSession.model_rebuild()
 SessionQuestion.model_rebuild()
 InterviewResponse.model_rebuild()

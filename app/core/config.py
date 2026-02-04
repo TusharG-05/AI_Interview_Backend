@@ -49,6 +49,10 @@ if not SECRET_KEY:
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
+# Email Configuration
+MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
+MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
+
 # Assets and Paths
 ASSETS_DIR = "app/assets"
 AUDIO_DIR = os.path.join(ASSETS_DIR, "audio")

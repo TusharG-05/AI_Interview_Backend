@@ -25,22 +25,13 @@ class UserCreate(BaseModel):
     role: UserRole = UserRole.CANDIDATE
 
 # Admin Requests
-class RoomCreate(BaseModel):
-    password: str
+class InterviewScheduleCreate(BaseModel):
+    candidate_id: int
     bank_id: int
-    question_count: int = 5
-    max_sessions: Optional[int] = 30
+    schedule_time: str # ISO format expected from frontend
+    duration_minutes: int = 180
 
-
-class BankCreate(BaseModel):
-    name: str
-    description: Optional[str] = None
-
-
-class RoomUpdate(BaseModel):
-    password: Optional[str] = None
-    max_sessions: Optional[int] = None
-    is_active: Optional[bool] = None
+# Removed: RoomCreate, BankCreate (handled in admin code), RoomUpdate
 
 # Interview Requests
 class AnswerRequest(BaseModel):
