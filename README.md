@@ -40,6 +40,12 @@ The project is structured as a modular API service containerized with Docker.
 └── tests/            # Integration Tests
 ```
 
+To enable camera access on non-localhost devices, run the cert generator:
+   ```bash
+   python3 scripts/generate_cert.py
+   ```
+   For detailed instructions on trusting certificates or using Ngrok, see the [SSL Configuration Guide](docs/SSL_GUIDE.md).
+
 ---
 
 ## Quick Start
