@@ -26,7 +26,7 @@ class SessionRead(BaseModel):
     candidate_name: str
     status: str
     scheduled_at: str
-    score: float = None
+    score: Optional[float] = None
 
 class UserRead(BaseModel):
     id: int
