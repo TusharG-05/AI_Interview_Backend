@@ -4,7 +4,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, Questions, QuestionPaper, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
+from ..models.db_models import Questions, QuestionPaper, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
 from ..schemas.requests import AnswerRequest
 from ..services import interview as interview_service
 from ..services.audio import AudioService
@@ -165,7 +165,7 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
     if has_assignments:
         total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.session_id == session_id)).all())
     elif session_obj and session_obj.paper_id:
-        total_questions = len(session_db.exec(select(Question).where(Question.paper_id == session_obj.paper_id)).all())
+        total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
     
     return {
         "question_id": question.id,

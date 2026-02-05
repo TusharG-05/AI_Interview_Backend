@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Question, QuestionPaper, Questions, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
+from ..models.db_models import QuestionPaper, Questions, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
@@ -111,7 +111,7 @@ async def delete_paper(
     session.commit()
     return {"message": "Paper and all associated questions deleted"}
 
-@router.get("/papers/{paper_id}/questions", response_model=List[Question])
+@router.get("/papers/{paper_id}/questions", response_model=List[Questions])
 async def get_paper_questions(
     paper_id: int,
     current_user: User = Depends(get_admin_user),
@@ -123,7 +123,7 @@ async def get_paper_questions(
         raise HTTPException(status_code=404, detail="Paper not found")
     return paper.questions
 
-@router.post("/papers/{paper_id}/questions", response_model=Question)
+@router.post("/papers/{paper_id}/questions", response_model=Questions)
 async def add_question_to_paper(
     paper_id: int,
     q_data: QuestionCreate,
@@ -204,13 +204,13 @@ async def delete_question(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    q = session.get(Question, q_id)
+    q = session.get(Questions, q_id)
     if not q: raise HTTPException(status_code=404, detail="Question not found")
     session.delete(q)
     session.commit()
     return {"message": "Question deleted"}
 
-@router.get("/questions", response_model=List[Question])
+@router.get("/questions", response_model=List[Questions])
 async def list_all_questions(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
@@ -225,7 +225,7 @@ async def list_all_questions(
     questions = session.exec(stmt).all()
     return questions
 
-@router.get("/questions/{q_id}", response_model=Question)
+@router.get("/questions/{q_id}", response_model=Questions)
 async def get_question(
     q_id: int,
     current_user: User = Depends(get_admin_user),
@@ -240,7 +240,7 @@ async def get_question(
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
     return q
 
-@router.patch("/questions/{q_id}", response_model=Question)
+@router.patch("/questions/{q_id}", response_model=Questions)
 async def update_question(
     q_id: int,
     q_update: QuestionUpdate,
@@ -416,6 +416,13 @@ async def create_user(
     existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Permission Check: Only Super Admin can create another Super Admin
+    if user_data.role == UserRole.SUPER_ADMIN and current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=403, 
+            detail="Only Super Admins can create other Super Admins"
+        )
     
     new_user = User(
         email=user_data.email,
