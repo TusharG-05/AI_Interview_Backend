@@ -8,8 +8,8 @@ from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
-from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate
-from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse
+from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
+from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead
 import os
 import shutil
 import uuid
@@ -297,12 +297,53 @@ async def schedule_interview(
         paper_id=schedule_data.paper_id,
         schedule_time=schedule_data.schedule_time,
         duration_minutes=schedule_data.duration_minutes,
+        max_questions=schedule_data.max_questions,
         status=InterviewStatus.SCHEDULED
     )
     
     session.add(new_session)
     session.commit()
     session.refresh(new_session)
+    
+    # Random Question Selection
+    import random
+    from ..models.db_models import SessionQuestion
+    
+    # Get all questions from the paper
+    available_questions = session.exec(
+        select(Questions).where(Questions.paper_id == schedule_data.paper_id)
+    ).all()
+    
+    if not available_questions:
+        raise HTTPException(status_code=400, detail="Question paper has no questions")
+    
+    # Apply question limit if specified
+    if schedule_data.max_questions:
+        if schedule_data.max_questions <= 0:
+            raise HTTPException(status_code=400, detail="max_questions must be greater than 0")
+        
+        if schedule_data.max_questions > len(available_questions):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Requested {schedule_data.max_questions} questions but only {len(available_questions)} available in this paper"
+            )
+        
+        # Random selection
+        selected_questions = random.sample(available_questions, schedule_data.max_questions)
+    else:
+        # Use all questions
+        selected_questions = available_questions
+    
+    # Create SessionQuestion records with sort order
+    for idx, question in enumerate(selected_questions):
+        session_question = SessionQuestion(
+            session_id=new_session.id,
+            question_id=question.id,
+            sort_order=idx
+        )
+        session.add(session_question)
+    
+    session.commit()
     
     # Generate Link
     # Note: host needs to be configurable in real prod, assume localhost:8000 for now or passed in env
@@ -348,6 +389,205 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             score=s.total_score
         ))
     return results
+
+@router.get("/interviews/{session_id}", response_model=InterviewDetailRead)
+async def get_interview(
+    session_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Get detailed information about a specific interview session."""
+    # Retrieve the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: verify the session belongs to the requesting admin
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403, 
+            detail="Not authorized to access this interview session"
+        )
+    
+    # Build detailed response
+    return InterviewDetailRead(
+        id=interview_session.id,
+        candidate_id=interview_session.candidate_id,
+        candidate_name=interview_session.candidate.full_name if interview_session.candidate else "Unknown",
+        candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+        paper_id=interview_session.paper_id,
+        paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
+        schedule_time=interview_session.schedule_time.isoformat(),
+        duration_minutes=interview_session.duration_minutes,
+        status=interview_session.status.value,
+        total_score=interview_session.total_score,
+        start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
+        end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
+        access_token=interview_session.access_token,
+        response_count=len(interview_session.responses),
+        proctoring_event_count=len(interview_session.proctoring_events)
+    )
+
+@router.patch("/interviews/{session_id}", response_model=InterviewDetailRead)
+async def update_interview(
+    session_id: int,
+    update_data: InterviewUpdate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Update interview session details (schedule_time, duration, status, paper)."""
+    # Retrieve the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: verify the session belongs to the requesting admin
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403, 
+            detail="Not authorized to modify this interview session"
+        )
+    
+    # Prevent updates to live or completed interviews (business rule)
+    if interview_session.status in [InterviewStatus.LIVE, InterviewStatus.COMPLETED]:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot update interview with status '{interview_session.status.value}'. Only scheduled interviews can be modified."
+        )
+    
+    # Apply updates
+    update_dict = update_data.dict(exclude_unset=True)
+    
+    # Validate paper_id if provided
+    if "paper_id" in update_dict:
+        paper = session.get(QuestionPaper, update_dict["paper_id"])
+        if not paper or paper.admin_id != current_user.id:
+            raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
+    
+    # Validate and convert schedule_time if provided
+    if "schedule_time" in update_dict:
+        from datetime import datetime
+        try:
+            update_dict["schedule_time"] = datetime.fromisoformat(update_dict["schedule_time"])
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid schedule_time format. Use ISO format.")
+    
+    # Validate status if provided
+    if "status" in update_dict:
+        try:
+            update_dict["status"] = InterviewStatus(update_dict["status"])
+        except ValueError:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Invalid status. Must be one of: {', '.join([s.value for s in InterviewStatus])}"
+            )
+    
+    # Handle max_questions update (re-select questions if changed)
+    if "max_questions" in update_dict:
+        import random
+        from ..models.db_models import SessionQuestion
+        
+        new_max = update_dict["max_questions"]
+        
+        # Validation
+        if new_max is not None and new_max <= 0:
+            raise HTTPException(status_code=400, detail="max_questions must be greater than 0")
+        
+        # Get available questions
+        available_questions = session.exec(
+            select(Questions).where(Questions.paper_id == interview_session.paper_id)
+        ).all()
+        
+        if new_max and new_max > len(available_questions):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Requested {new_max} questions but only {len(available_questions)} available"
+            )
+        
+        # Delete existing SessionQuestion records
+        existing_session_questions = session.exec(
+            select(SessionQuestion).where(SessionQuestion.session_id == session_id)
+        ).all()
+        
+        for sq in existing_session_questions:
+            session.delete(sq)
+        
+        # Re-select questions
+        if new_max:
+            selected_questions = random.sample(available_questions, new_max)
+        else:
+            selected_questions = available_questions
+        
+        # Create new SessionQuestion records
+        for idx, question in enumerate(selected_questions):
+            session_question = SessionQuestion(
+                session_id=session_id,
+                question_id=question.id,
+                sort_order=idx
+            )
+            session.add(session_question)
+    
+    # Update the session
+    for key, value in update_dict.items():
+        setattr(interview_session, key, value)
+    
+    session.add(interview_session)
+    session.commit()
+    session.refresh(interview_session)
+    
+    # Return updated interview details
+    return InterviewDetailRead(
+        id=interview_session.id,
+        candidate_id=interview_session.candidate_id,
+        candidate_name=interview_session.candidate.full_name if interview_session.candidate else "Unknown",
+        candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+        paper_id=interview_session.paper_id,
+        paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
+        schedule_time=interview_session.schedule_time.isoformat(),
+        duration_minutes=interview_session.duration_minutes,
+        status=interview_session.status.value,
+        total_score=interview_session.total_score,
+        start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
+        end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
+        access_token=interview_session.access_token,
+        response_count=len(interview_session.responses),
+        proctoring_event_count=len(interview_session.proctoring_events)
+    )
+
+@router.delete("/interviews/{session_id}")
+async def delete_interview(
+    session_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Cancel/delete an interview session (soft delete by setting status to CANCELLED)."""
+    # Retrieve the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: verify the session belongs to the requesting admin
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403, 
+            detail="Not authorized to delete this interview session"
+        )
+    
+    # Soft delete: set status to CANCELLED instead of hard deleting
+    # This preserves audit trail and allows for potential recovery
+    interview_session.status = InterviewStatus.CANCELLED
+    session.add(interview_session)
+    session.commit()
+    
+    return {
+        "message": "Interview session cancelled successfully",
+        "session_id": session_id,
+        "candidate": interview_session.candidate.full_name if interview_session.candidate else "Unknown",
+        "scheduled_time": interview_session.schedule_time.isoformat()
+    }
 
 @router.get("/candidates", response_model=List[UserRead])
 async def list_candidates(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
@@ -402,6 +642,182 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         ))
     return results
 
+@router.get("/results/{session_id}", response_model=DetailedResult)
+async def get_result(
+    session_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Get detailed result for a specific interview session."""
+    # Get the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: Only admin who created the interview
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this result"
+        )
+    
+    # Build detailed result (reuse logic from get_all_results)
+    responses = interview_session.responses
+    proctoring = interview_session.proctoring_events
+    
+    valid_scores = [r.score for r in responses if r.score is not None]
+    avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
+    
+    details = []
+    for r in responses:
+        res_status = "Skipped"
+        if r.score is not None:
+            res_status = "Answered"
+        elif r.answer_text or r.transcribed_text or r.audio_path:
+            res_status = "Pending AI"
+            
+        details.append(ResponseDetail(
+            question=r.question.question_text or r.question.content or "Dynamic",
+            answer=r.answer_text or r.transcribed_text or "[No Answer]",
+            score=f"{round(r.score * 100, 1) if r.score is not None else 0}%",
+            status=res_status
+        ))
+    
+    return DetailedResult(
+        session_id=interview_session.id,
+        candidate=interview_session.candidate.full_name if interview_session.candidate else (interview_session.candidate_name or "Unknown"),
+        date=interview_session.schedule_time.strftime("%Y-%m-%d %H:%M"),
+        score=f"{round(avg_score * 100, 1)}%",
+        flags=len(proctoring) > 0,
+        details=details,
+        proctoring_logs=[ProctoringLogItem(
+            type=e.event_type,
+            time=e.timestamp.strftime("%H:%M:%S"),
+            details=e.details
+        ) for e in proctoring]
+    )
+
+@router.patch("/results/{session_id}", response_model=DetailedResult)
+async def update_result(
+    session_id: int,
+    update_data: ResultUpdate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Update result scores and evaluations."""
+    # Get the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: Only admin who created the interview
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to modify this result"
+        )
+    
+    # Business rule: Cannot update SCHEDULED interviews (no results yet)
+    if interview_session.status == InterviewStatus.SCHEDULED:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot update results for scheduled interviews. Interview must be in progress or completed."
+        )
+    
+    # Business rule: Cannot update CANCELLED interviews
+    if interview_session.status == InterviewStatus.CANCELLED:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot update results for cancelled interviews."
+        )
+    
+    update_dict = update_data.dict(exclude_unset=True)
+    
+    # Update total score if provided
+    if "total_score" in update_dict:
+        interview_session.total_score = update_dict["total_score"]
+    
+    # Update individual responses if provided
+    if "responses" in update_dict and update_dict["responses"]:
+        for resp_update in update_dict["responses"]:
+            response_id = resp_update.get("response_id")
+            
+            # Get the response
+            interview_response = session.get(InterviewResponse, response_id)
+            
+            if not interview_response:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Response with ID {response_id} not found"
+                )
+            
+            # Verify response belongs to this session
+            if interview_response.session_id != session_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Response {response_id} does not belong to session {session_id}"
+                )
+            
+            # Update score if provided
+            if "score" in resp_update and resp_update["score"] is not None:
+                interview_response.score = resp_update["score"]
+            
+            # Update evaluation text if provided
+            if "evaluation_text" in resp_update and resp_update["evaluation_text"] is not None:
+                interview_response.evaluation_text = resp_update["evaluation_text"]
+            
+            session.add(interview_response)
+    
+    # Save changes
+    session.add(interview_session)
+    session.commit()
+    session.refresh(interview_session)
+    
+    # Return updated result using GET logic
+    return await get_result(session_id, current_user, session)
+
+@router.delete("/results/{session_id}")
+async def delete_result(
+    session_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Delete all result data for an interview session (hard delete responses, keep session)."""
+    # Get the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: Only admin who created the interview
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to delete this result"
+        )
+    
+    # Count responses before deletion
+    response_count = len(interview_session.responses)
+    
+    # Delete all responses for this session
+    for response in interview_session.responses:
+        session.delete(response)
+    
+    # Clear total score
+    interview_session.total_score = None
+    
+    session.add(interview_session)
+    session.commit()
+    
+    return {
+        "message": "Result data deleted successfully",
+        "session_id": session_id,
+        "responses_deleted": response_count,
+        "note": "Interview session preserved, only result data removed"
+    }
+
 # --- Identity & System ---
 
 
@@ -444,6 +860,179 @@ async def create_user(
 @router.get("/users", response_model=List[UserRead])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     return [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
+
+@router.get("/users/{user_id}", response_model=UserDetailRead)
+async def get_user(
+    user_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Get detailed information about a specific user."""
+    user = session.get(User, user_id)
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Count interviews created as admin
+    created_interviews = session.exec(
+        select(InterviewSession).where(InterviewSession.admin_id == user_id)
+    ).all()
+    
+    # Count interviews participated as candidate
+    participated_interviews = session.exec(
+        select(InterviewSession).where(InterviewSession.candidate_id == user_id)
+    ).all()
+    
+    return UserDetailRead(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role.value,
+        is_active=user.is_active,
+        resume_text=user.resume_text,
+        has_profile_image=user.profile_image_bytes is not None,
+        has_face_embedding=user.face_embedding is not None,
+        created_interviews_count=len(created_interviews),
+        participated_interviews_count=len(participated_interviews)
+    )
+
+@router.patch("/users/{user_id}", response_model=UserDetailRead)
+async def update_user(
+    user_id: int,
+    update_data: UserUpdate,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Update user details with role change protections."""
+    user = session.get(User, user_id)
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    update_dict = update_data.dict(exclude_unset=True)
+    
+    # Email uniqueness validation
+    if "email" in update_dict and update_dict["email"] != user.email:
+        existing_user = session.exec(
+            select(User).where(User.email == update_dict["email"])
+        ).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Password hashing
+    if "password" in update_dict:
+        update_dict["password_hash"] = get_password_hash(update_dict.pop("password"))
+    
+    # Role change validation
+    if "role" in update_dict:
+        try:
+            new_role = UserRole(update_dict["role"])
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid role. Must be one of: {', '.join([r.value for r in UserRole])}"
+            )
+        
+        # Protection 1: Only SUPER_ADMIN can promote to SUPER_ADMIN
+        if new_role == UserRole.SUPER_ADMIN and current_user.role != UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Only Super Admins can promote users to Super Admin"
+            )
+        
+        # Protection 2: Prevent demoting the last SUPER_ADMIN
+        if user.role == UserRole.SUPER_ADMIN and new_role != UserRole.SUPER_ADMIN:
+            # Count active SUPER_ADMINs
+            super_admin_count = session.exec(
+                select(User).where(User.role == UserRole.SUPER_ADMIN, User.is_active == True)
+            ).all()
+            
+            if len(super_admin_count) <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot demote the last Super Admin. Promote another user first."
+                )
+        
+        # Protection 3: Prevent self-demotion from SUPER_ADMIN
+        if user.id == current_user.id and user.role == UserRole.SUPER_ADMIN and new_role != UserRole.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot demote yourself from Super Admin role"
+            )
+        
+        update_dict["role"] = new_role
+    
+    # Apply updates
+    for key, value in update_dict.items():
+        setattr(user, key, value)
+    
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    
+    # Return updated user details
+    created_interviews = session.exec(
+        select(InterviewSession).where(InterviewSession.admin_id == user_id)
+    ).all()
+    participated_interviews = session.exec(
+        select(InterviewSession).where(InterviewSession.candidate_id == user_id)
+    ).all()
+    
+    return UserDetailRead(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=user.role.value,
+        is_active=user.is_active,
+        resume_text=user.resume_text,
+        has_profile_image=user.profile_image_bytes is not None,
+        has_face_embedding=user.face_embedding is not None,
+        created_interviews_count=len(created_interviews),
+        participated_interviews_count=len(participated_interviews)
+    )
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Soft delete a user by setting is_active to False."""
+    user = session.get(User, user_id)
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Protection 1: Prevent self-deletion
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete your own account"
+        )
+    
+    # Protection 2: Prevent deleting the last SUPER_ADMIN
+    if user.role == UserRole.SUPER_ADMIN:
+        super_admin_count = session.exec(
+            select(User).where(User.role == UserRole.SUPER_ADMIN, User.is_active == True)
+        ).all()
+        
+        if len(super_admin_count) <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete the last Super Admin. Promote another user first."
+            )
+    
+    # Soft delete: set is_active to False
+    user.is_active = False
+    session.add(user)
+    session.commit()
+    
+    return {
+        "message": "User deactivated successfully",
+        "user_id": user_id,
+        "email": user.email,
+        "full_name": user.full_name
+    }
 
 @router.post("/shutdown")
 def shutdown(current_user: User = Depends(get_admin_user)):
