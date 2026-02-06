@@ -49,6 +49,35 @@ class InterviewLinkResponse(BaseModel):
     scheduled_at: str
     warning: Optional[str] = None
 
+class InterviewDetailRead(BaseModel):
+    id: int
+    candidate_id: int
+    candidate_name: str
+    candidate_email: str
+    paper_id: int
+    paper_name: str
+    schedule_time: str
+    duration_minutes: int
+    status: str
+    total_score: Optional[float] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    access_token: str
+    response_count: int
+    proctoring_event_count: int
+
+class UserDetailRead(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    role: str
+    is_active: bool
+    resume_text: Optional[str] = None
+    has_profile_image: bool
+    has_face_embedding: bool
+    created_interviews_count: int  # As admin
+    participated_interviews_count: int  # As candidate
+
 class ProctoringLogItem(BaseModel):
     type: str
     time: str

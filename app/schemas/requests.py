@@ -3,12 +3,12 @@ from pydantic import BaseModel
 from ..models.db_models import UserRole
 
 # Candidate Requests
-
-
 class UserUpdate(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
     full_name: Optional[str] = None
+    role: Optional[str] = None  # String, will be converted to UserRole
+    resume_text: Optional[str] = None
 
 class AdminCreate(BaseModel):
     email: str
@@ -28,8 +28,25 @@ class InterviewScheduleCreate(BaseModel):
     paper_id: int
     schedule_time: str # ISO format expected from frontend
     duration_minutes: int = 180
+    max_questions: Optional[int] = None  # Limit questions, None = use all
 
+class InterviewUpdate(BaseModel):
+    schedule_time: Optional[str] = None  # ISO format
+    duration_minutes: Optional[int] = None
+    status: Optional[str] = None  # 'scheduled', 'cancelled', etc.
+    paper_id: Optional[int] = None  # Allow changing question paper
+    max_questions: Optional[int] = None  # Update question limit
 
+class ResponseUpdate(BaseModel):
+    """Update individual response within a result"""
+    response_id: int
+    score: Optional[float] = None
+    evaluation_text: Optional[str] = None
+
+class ResultUpdate(BaseModel):
+    """Update overall result and individual responses"""
+    total_score: Optional[float] = None
+    responses: Optional[list] = None  # List of ResponseUpdate dicts
 
 # Interview Requests
 class AnswerRequest(BaseModel):
