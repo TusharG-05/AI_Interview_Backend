@@ -22,9 +22,6 @@ nlp_service = NLPService()
 class TTSRange(BaseModel):
     text: str
 
-class EvaluateRequest(BaseModel):
-    candidate_text: str
-    reference_text: str
 
 
 
@@ -293,7 +290,3 @@ async def standalone_tts(req: TTSRange):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     await audio_service.text_to_speech(req.text, path)
     return FileResponse(path, media_type="audio/mpeg")
-
-@router.post("/evaluate")
-async def standalone_evaluate(req: EvaluateRequest):
-    return interview_service.evaluate_answer_content(req.reference_text, req.candidate_text)

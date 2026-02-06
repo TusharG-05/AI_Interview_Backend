@@ -28,16 +28,21 @@ def test_ai_accuracy():
     
     # 3. Use a small real WAV file if possible, otherwise we just verify the LLM error is gone
     # I'll create a 1-second silent but VALID wav file using a trick or just check the LLM call directly
-    print("Testing LLM Evaluation directly...")
-    r = session.post(f"{BASE_URL}/interview/evaluate", json={
-        "reference_text": "The capital of France is Paris.",
-        "candidate_text": "Paris is the capital city of France."
-    }, headers=headers)
     
-    if r.status_code == 200:
-        print(f"[PASS] LLM Evaluation result: {r.json()}")
-    else:
-        print(f"[FAIL] LLM Evaluation failed: {r.text}")
+    # NOTE: /interview/evaluate endpoint was removed - test disabled
+    # LLM evaluation is tested through the regular interview flow
+    print("LLM Evaluation: Tested through interview flow, standalone endpoint removed")
+    
+    # print("Testing LLM Evaluation directly...")
+    # r = session.post(f"{BASE_URL}/interview/evaluate", json={
+    #     "reference_text": "The capital of France is Paris.",
+    #     "candidate_text": "Paris is the capital city of France."
+    # }, headers=headers)
+    
+    # if r.status_code == 200:
+    #     print(f"[PASS] LLM Evaluation result: {r.json()}")
+    # else:
+    #     print(f"[FAIL] LLM Evaluation failed: {r.text}")
 
 if __name__ == "__main__":
     test_ai_accuracy()
