@@ -50,3 +50,26 @@ def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
             detail="The user doesn't have enough privileges"
         )
     return current_user
+
+def get_current_user_optional(
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme), 
+    session: Session = Depends(get_session)
+) -> Optional[User]:
+    """Returns current user if authenticated, else None."""
+    if not token:
+        token = request.cookies.get("access_token")
+    
+    if not token:
+        return None
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            return None
+    except JWTError:
+        return None
+    
+    user = session.query(User).filter(User.email == email).first()
+    return user

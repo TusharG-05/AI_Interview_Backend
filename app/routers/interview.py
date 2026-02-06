@@ -182,8 +182,8 @@ async def stream_question_audio(q_id: int):
     if not os.path.exists(audio_path): raise HTTPException(status_code=404)
     return FileResponse(audio_path, media_type="audio/mpeg")
 
-@router.post("/submit-answer")
-async def submit_answer(
+@router.post("/submit-answer-audio")
+async def submit_answer_audio(
     session_id: int = Form(...),
     question_id: int = Form(...),
     audio: UploadFile = File(...),
@@ -195,6 +195,31 @@ async def submit_answer(
     audio_service.save_audio_blob(content, audio_path)
     
     response = InterviewResponse(session_id=session_id, question_id=question_id, audio_path=audio_path)
+    session_db.add(response)
+    session_db.commit()
+    return {"status": "saved"}
+
+@router.post("/submit-answer-text")
+async def submit_answer_text(
+    session_id: int = Form(...),
+    question_id: int = Form(...),
+    answer_text: str = Form(...),
+    session_db: Session = Depends(get_session)
+):
+    """
+    Submits a text answer for a question.
+    Saves the response but delays evaluation until the interview finishes.
+    """
+    # Verify session exists
+    session = session_db.get(InterviewSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    response = InterviewResponse(
+        session_id=session_id,
+        question_id=question_id,
+        answer_text=answer_text
+    )
     session_db.add(response)
     session_db.commit()
     return {"status": "saved"}
@@ -255,6 +280,7 @@ async def process_session_results_unified(session_id: int):
             
             responses = db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
             for resp in responses:
+                # Process Audio Responses
                 if resp.audio_path and not (resp.answer_text or resp.transcribed_text):
                     audio_service.cleanup_audio(resp.audio_path)
                     
@@ -266,10 +292,11 @@ async def process_session_results_unified(session_id: int):
                     
                     resp.answer_text = text
                     resp.transcribed_text = text # Compatibility
-                    
-                    # 2. LLM Evaluation
+                
+                # Evaluation (for both Audio and Text responses)
+                if resp.answer_text and not resp.evaluation_text:
                     q_text = resp.question.question_text or resp.question.content or "General Question"
-                    evaluation = interview_service.evaluate_answer_content(q_text, text)
+                    evaluation = interview_service.evaluate_answer_content(q_text, resp.answer_text)
                     
                     resp.evaluation_text = evaluation["feedback"]
                     resp.score = evaluation["score"]
@@ -285,7 +312,36 @@ async def process_session_results_unified(session_id: int):
         except Exception as e:
             print(f"ERROR: Session {session_id} Processing Failed: {e}")
 
-# --- Standalone Testing ---
+# --- Standalone Tools ---
+
+@router.post("/tools/speech-to-text")
+async def speech_to_text_tool(audio: UploadFile = File(...)):
+    """
+    Public standalone tool to convert speech to text.
+    No authentication required.
+    """
+    try:
+        # Create a temp file to process
+        temp_filename = f"temp_stt_{uuid.uuid4().hex}.wav"
+        content = await audio.read()
+        
+        # Using a temporary path, but reusing audio service logic
+        # Note: In a real prod env, might want a specific temp dir
+        temp_path = f"app/assets/audio/standalone/{temp_filename}" 
+        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+        
+        audio_service.save_audio_blob(content, temp_path)
+        
+        # Perform STT
+        text = await audio_service.speech_to_text(temp_path)
+        
+        # Cleanup
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        return {"text": text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
 
 @router.post("/tts")
 async def standalone_tts(req: TTSRange):
