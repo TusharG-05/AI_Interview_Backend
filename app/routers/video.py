@@ -33,18 +33,7 @@ async def video_feed(session_id: int):
     if not camera_service.running: camera_service.start()
     return StreamingResponse(frame_generator(session_id), media_type="multipart/x-mixed-replace; boundary=frame")
 
-@router.websocket("/ws/video")
-async def video_websocket(websocket: WebSocket, session_id: Optional[int] = None):
-    """Handles external frame processing from candidates (Candidate Side)."""
-    await websocket.accept()
-    if not camera_service.running: camera_service.start(video_source=None)
-    try:
-        while True:
-            data = await websocket.receive_bytes()
-            result = camera_service.process_external_frame(data, session_id=session_id)
-            await websocket.send_text(json.dumps(result))
-    except WebSocketDisconnect: pass
-    except Exception as e: print(f"Video WebSocket Error: {e}")
+
 
 # --- WebRTC Signaling ---
 from aiortc import RTCPeerConnection, RTCSessionDescription
