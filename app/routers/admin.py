@@ -84,7 +84,7 @@ async def update_paper(
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     
-    update_data = paper_update.dict(exclude_unset=True)
+    update_data = paper_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(paper, key, value)
     
@@ -235,8 +235,8 @@ async def get_question(
     q = session.get(Questions, q_id)
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
-    # Verify the question belongs to a paper owned by the admin
-    if q.paper.admin_id != current_user.id:
+    # Verify the question belongs to a paper owned by the admin (or is orphaned)
+    if q.paper and q.paper.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
     return q
 
@@ -251,11 +251,11 @@ async def update_question(
     q = session.get(Questions, q_id)
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
-    # Verify the question belongs to a paper owned by the admin
-    if q.paper.admin_id != current_user.id:
+    # Verify the question belongs to a paper owned by the admin (or is orphaned)
+    if q.paper and q.paper.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this question")
     
-    update_data = q_update.dict(exclude_unset=True)
+    update_data = q_update.model_dump(exclude_unset=True)
     if "content" in update_data:
         q.question_text = update_data["content"] # Keep legacy text in sync
         
@@ -458,7 +458,7 @@ async def update_interview(
         )
     
     # Apply updates
-    update_dict = update_data.dict(exclude_unset=True)
+    update_dict = update_data.model_dump(exclude_unset=True)
     
     # Validate paper_id if provided
     if "paper_id" in update_dict:
@@ -609,8 +609,9 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         responses = s.responses
         proctoring = s.proctoring_events
         
+        from ..utils import calculate_average_score
         valid_scores = [r.score for r in responses if r.score is not None]
-        avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
+        avg_score = calculate_average_score(valid_scores)
         
         details = []
         for r in responses:
@@ -666,8 +667,9 @@ async def get_result(
     responses = interview_session.responses
     proctoring = interview_session.proctoring_events
     
+    from ..utils import calculate_average_score
     valid_scores = [r.score for r in responses if r.score is not None]
-    avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
+    avg_score = calculate_average_score(valid_scores)
     
     details = []
     for r in responses:
@@ -733,7 +735,7 @@ async def update_result(
             detail="Cannot update results for cancelled interviews."
         )
     
-    update_dict = update_data.dict(exclude_unset=True)
+    update_dict = update_data.model_dump(exclude_unset=True)
     
     # Update total score if provided
     if "total_score" in update_dict:
@@ -909,7 +911,7 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    update_dict = update_data.dict(exclude_unset=True)
+    update_dict = update_data.model_dump(exclude_unset=True)
     
     # Email uniqueness validation
     if "email" in update_dict and update_dict["email"] != user.email:

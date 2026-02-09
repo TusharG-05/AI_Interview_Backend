@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlmodel import Session
+from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User
 from ..auth.security import (
@@ -12,12 +12,12 @@ from ..auth.security import (
 )
 from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token
-from ..auth.security import verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
+    from ..core.config import ENV
     response.set_cookie(
         key="access_token",
         value=token,
@@ -25,13 +25,13 @@ def set_auth_cookie(response: Response, token: str):
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="lax",
-        secure=True  # Ensure this is True in production (HTTPS)
+        secure=(ENV == "production")  # Only secure in production (HTTPS)
     )
 
 @router.post("/login", response_model=Token)
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
-    user = session.query(User).filter(User.email == login_data.email).first()
+    user = session.exec(select(User).where(User.email == login_data.email)).first()
     if not user or not verify_password(login_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -62,7 +62,7 @@ async def login_for_access_token(
     session: Session = Depends(get_session)
 ):
     """Standard OAuth2 token endpoint for Swagger UI (Authorize button)."""
-    user = session.query(User).filter(User.email == form_data.username).first()
+    user = session.exec(select(User).where(User.email == form_data.username)).first()
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -88,13 +88,14 @@ async def login_for_access_token(
 @router.post("/logout")
 async def logout(response: Response):
     """Clears the authentication cookie."""
-    response.delete_cookie(key="access_token", samesite="lax", secure=True)
+    from ..core.config import ENV
+    response.delete_cookie(key="access_token", samesite="lax", secure=(ENV == "production"))
     return {"message": "Logged out successfully"}
 
 @router.post("/register", response_model=Token)
 async def register(response: Response, user_data: UserCreate, session: Session = Depends(get_session)):
     """Pure API registration. Sets secure HttpOnly cookie and returns token."""
-    existing_user = session.query(User).filter(User.email == user_data.email).first()
+    existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
