@@ -181,3 +181,14 @@ class AudioService:
         except Exception as e:
             logger.error(f"Energy Check Error: {e}")
             return 0
+
+    def convert_to_wav(self, input_path):
+        """Converts any audio file to WAV format and returns the path."""
+        try:
+            output_path = input_path.rsplit(".", 1)[0] + ".wav"
+            audio = AudioSegment.from_file(input_path)
+            audio.export(output_path, format="wav")
+            return output_path
+        except Exception as e:
+            logger.error(f"WAV Conversion Error: {e}")
+            return None

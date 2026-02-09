@@ -56,8 +56,10 @@ class FaceRecognizer:
         try:
             from deepface import DeepFace
             DeepFace.build_model(self.model_name)
-        except:
-            pass
+        except ImportError:
+            logger.warning("DeepFace not installed - face recognition disabled")
+        except Exception as e:
+            logger.warning(f"DeepFace model build failed: {e} - face recognition may not work")
 
     def recognize(self, img_rgb, locs):
         """
@@ -120,7 +122,7 @@ def face_worker_process(frame_queue, result_queue):
     while True:
         try:
             item = frame_queue.get(timeout=1)
-        except:
+        except multiprocessing.queues.Empty:
             continue
 
         if item is None:
@@ -184,7 +186,7 @@ class FaceService:
             try:
                 sid, match, conf, n_faces, locs = self.result_queue.get_nowait()
                 self.session_results[sid] = (match, conf, n_faces, locs)
-            except:
+            except multiprocessing.queues.Empty:
                 break
         
         return self.session_results.get(session_id, (False, 1.0, 0, []))
@@ -196,8 +198,9 @@ class FaceService:
     def close(self):
         try:
             self.frame_queue.put(None)
-            self.worker.join()
-        except:
+            self.worker.join(timeout=5)
+        except Exception as e:
+            logger.warning(f"Error closing face worker gracefully: {e}")
             self.worker.terminate()
 
 
