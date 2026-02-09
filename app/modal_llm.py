@@ -30,7 +30,7 @@ Do not include any text outside the JSON object."""
     image=llm_image,
     gpu="A10G",  # 24GB VRAM - good for Llama 3 8B
     timeout=120,
-    secrets=[modal.Secret.from_name("huggingface-secret", required=False)],
+    secrets=[modal.Secret.from_name("huggingface-secret")],
     container_idle_timeout=300,  # Keep warm for 5 mins
 )
 class LLMEvaluator:
