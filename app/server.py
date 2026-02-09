@@ -1,5 +1,6 @@
-import contextlib
 import os
+import shutil
+import contextlib
 from fastapi import FastAPI
 from .core.database import init_db
 from .core.logger import setup_logging, get_logger
@@ -13,6 +14,16 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Lifespan: Starting Application (API-Only Mode)...")
+    
+    # Ensure ffmpeg is available for local environments (port 8001)
+    if not shutil.which("ffmpeg"):
+        try:
+            import static_ffmpeg
+            static_ffmpeg.add_paths()
+            logger.info("Lifespan: static_ffmpeg initialized.")
+        except ImportError:
+            logger.warning("Lifespan: static_ffmpeg not installed on host.")
+
     logger.info("PRE-INIT: Initializing database...")
     init_db()
     

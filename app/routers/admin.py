@@ -426,7 +426,8 @@ async def get_interview(
         end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
         access_token=interview_session.access_token,
         response_count=len(interview_session.responses),
-        proctoring_event_count=len(interview_session.proctoring_events)
+        proctoring_event_count=len(interview_session.proctoring_events),
+        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
 
 @router.patch("/interviews/{session_id}", response_model=InterviewDetailRead)
@@ -553,7 +554,8 @@ async def update_interview(
         end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
         access_token=interview_session.access_token,
         response_count=len(interview_session.responses),
-        proctoring_event_count=len(interview_session.proctoring_events)
+        proctoring_event_count=len(interview_session.proctoring_events),
+        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
 
 @router.delete("/interviews/{session_id}")
@@ -624,7 +626,8 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
                 question=r.question.question_text or r.question.content or "Dynamic",
                 answer=r.answer_text or r.transcribed_text or "[No Answer]",
                 score=f"{round(r.score * 100, 1) if r.score is not None else 0}%",
-                status=res_status
+                status=res_status,
+                audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
             ))
 
         results.append(DetailedResult(
@@ -681,7 +684,8 @@ async def get_result(
             question=r.question.question_text or r.question.content or "Dynamic",
             answer=r.answer_text or r.transcribed_text or "[No Answer]",
             score=f"{round(r.score * 100, 1) if r.score is not None else 0}%",
-            status=res_status
+            status=res_status,
+            audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
         ))
     
     return DetailedResult(
@@ -785,38 +789,66 @@ async def delete_result(
     session: Session = Depends(get_session)
 ):
     """Delete all result data for an interview session (hard delete responses, keep session)."""
-    # Get the interview session
     interview_session = session.get(InterviewSession, session_id)
-    
-    if not interview_session:
+    if not interview_session or interview_session.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    # Authorization: Only admin who created the interview
-    if interview_session.admin_id != current_user.id:
-        raise HTTPException(
-            status_code=403,
-            detail="Not authorized to delete this result"
-        )
+    # Hard delete responses to keep session history but clear results
+    responses = interview_session.responses
+    for r in responses:
+        session.delete(r)
     
-    # Count responses before deletion
-    response_count = len(interview_session.responses)
-    
-    # Delete all responses for this session
-    for response in interview_session.responses:
-        session.delete(response)
-    
-    # Clear total score
     interview_session.total_score = None
-    
     session.add(interview_session)
     session.commit()
     
-    return {
-        "message": "Result data deleted successfully",
-        "session_id": session_id,
-        "responses_deleted": response_count,
-        "note": "Interview session preserved, only result data removed"
-    }
+    return {"message": "Results deleted, interview session preserved."}
+
+@router.get("/results/audio/{response_id}")
+async def get_response_audio(
+    response_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Streams a candidate's audio response for review."""
+    response = session.get(InterviewResponse, response_id)
+    if not response or not response.audio_path:
+        raise HTTPException(status_code=404, detail="Audio response not found")
+        
+    if response.session.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this audio")
+        
+    if not os.path.exists(response.audio_path):
+        raise HTTPException(status_code=404, detail="Audio file missing on server")
+        
+    return FileResponse(
+        response.audio_path,
+        media_type="audio/wav",
+        content_disposition_type="inline"
+    )
+
+@router.get("/interviews/enrollment-audio/{session_id}")
+async def get_enrollment_audio(
+    session_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """Streams the candidate's enrollment audio for verification."""
+    interview_session = session.get(InterviewSession, session_id)
+    if not interview_session or not interview_session.enrollment_audio_path:
+        raise HTTPException(status_code=404, detail="Enrollment audio not found")
+        
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this audio")
+        
+    if not os.path.exists(interview_session.enrollment_audio_path):
+        raise HTTPException(status_code=404, detail="Enrollment audio file missing on server")
+        
+    return FileResponse(
+        interview_session.enrollment_audio_path,
+        media_type="audio/wav",
+        content_disposition_type="inline"
+    )
 
 # --- Identity & System ---
 
@@ -893,7 +925,8 @@ async def get_user(
         has_profile_image=user.profile_image_bytes is not None,
         has_face_embedding=user.face_embedding is not None,
         created_interviews_count=len(created_interviews),
-        participated_interviews_count=len(participated_interviews)
+        participated_interviews_count=len(participated_interviews),
+        profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
     )
 
 @router.patch("/users/{user_id}", response_model=UserDetailRead)
@@ -988,7 +1021,8 @@ async def update_user(
         has_profile_image=user.profile_image_bytes is not None,
         has_face_embedding=user.face_embedding is not None,
         created_interviews_count=len(created_interviews),
-        participated_interviews_count=len(participated_interviews)
+        participated_interviews_count=len(participated_interviews),
+        profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
     )
 
 @router.delete("/users/{user_id}")

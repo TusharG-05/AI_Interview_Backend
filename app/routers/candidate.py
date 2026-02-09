@@ -1,7 +1,6 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 import random
@@ -99,4 +98,28 @@ async def upload_selfie(
     session.commit()
     session.refresh(current_user)
     
-    return {"message": "Selfie uploaded and identity verified (DB Sync)", "user_id": current_user.id}
+    return {
+        "message": "Selfie uploaded and identity verified (DB Sync)", 
+        "user_id": current_user.id,
+        "profile_image_url": f"/api/candidate/profile-image/{current_user.id}"
+    }
+
+@router.get("/profile-image/{user_id}")
+async def get_profile_image(user_id: int, session: Session = Depends(get_session)):
+    """Streams the user's profile image (selfie) directly to the browser."""
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # 1. Try DB Bytes
+    if user.profile_image_bytes:
+        from fastapi.responses import Response
+        import imghdr
+        ext = imghdr.what(None, h=user.profile_image_bytes) or "jpeg"
+        return Response(content=user.profile_image_bytes, media_type=f"image/{ext}")
+        
+    # 2. Try Disk Fallback
+    if user.profile_image and os.path.exists(user.profile_image):
+        return FileResponse(user.profile_image)
+        
+    raise HTTPException(status_code=404, detail="No profile image found for this user")

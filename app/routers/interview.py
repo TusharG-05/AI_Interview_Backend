@@ -1,7 +1,6 @@
 from typing import List, Optional, Dict, Union
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import Questions, QuestionPaper, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
@@ -15,9 +14,12 @@ import os
 import uuid
 from datetime import datetime, timedelta
 
+from pydub import AudioSegment
+import logging
+
 router = APIRouter(prefix="/interview", tags=["Interview"])
+logger = logging.getLogger(__name__)
 audio_service = AudioService()
-nlp_service = NLPService()
 
 class TTSRange(BaseModel):
     text: str
@@ -305,9 +307,19 @@ async def process_session_results_unified(session_id: int):
             session.total_score = sum(all_scores) / len(all_scores) if all_scores else 0
             db.add(session)
             db.commit()
-            print(f"DEBUG: Session {session_id} Unified Processing Complete.")
+            logger.info(f"Session {session_id} processing complete. Score: {session.total_score}")
         except Exception as e:
-            print(f"ERROR: Session {session_id} Processing Failed: {e}")
+            logger.error(f"Session {session_id} processing failed: {e}")
+            # Mark session with error state so frontend can show appropriate message
+            try:
+                session = db.get(InterviewSession, session_id)
+                if session:
+                    session.status = InterviewStatus.COMPLETED  # Keep as completed but log error
+                    db.add(session)
+                    db.commit()
+            except Exception:
+                db.rollback()
+
 
 # --- Standalone Tools ---
 
@@ -340,9 +352,50 @@ async def speech_to_text_tool(audio: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
 
-@router.post("/tts")
-async def standalone_tts(req: TTSRange):
-    path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex[:8]}.mp3"
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    await audio_service.text_to_speech(req.text, path)
-    return FileResponse(path, media_type="audio/mpeg")
+@router.get("/tts")
+async def standalone_tts(text: str, background_tasks: BackgroundTasks):
+    """
+    Generate Text-to-Speech (TTS) audio for the provided text via GET.
+    Enables direct browser playback in HTML <audio> tags via query parameters.
+    """
+    temp_mp3 = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.mp3"
+    wav_path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.wav"
+    
+    try:
+        os.makedirs(os.path.dirname(temp_mp3), exist_ok=True)
+        
+        # 1. Generate MP3 stream
+        await audio_service.text_to_speech(text, temp_mp3)
+        
+        # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
+        audio = AudioSegment.from_file(temp_mp3)
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        audio.export(wav_path, format="wav")
+        
+        # 3. Cleanup intermediate MP3
+        if os.path.exists(temp_mp3):
+            os.remove(temp_mp3)
+
+        # 4. Return FileResponse and schedule cleanup
+        def cleanup():
+            if os.path.exists(wav_path):
+                try: os.remove(wav_path)
+                except Exception as e:
+                    logger.error(f"TTS Cleanup Error: {e}")
+
+        background_tasks.add_task(cleanup)
+        
+        return FileResponse(
+            wav_path,
+            media_type="audio/wav",
+            content_disposition_type="inline"
+        )
+
+    except Exception as e:
+        logger.error(f"TTS Generation Error: {e}")
+        # Final safety cleanup
+        for p in [temp_mp3, wav_path]:
+            if os.path.exists(p): 
+                try: os.remove(p)
+                except: pass
+        raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")

@@ -65,6 +65,7 @@ class InterviewDetailRead(BaseModel):
     access_token: str
     response_count: int
     proctoring_event_count: int
+    enrollment_audio_url: Optional[str] = None
 
 class UserDetailRead(BaseModel):
     id: int
@@ -77,6 +78,7 @@ class UserDetailRead(BaseModel):
     has_face_embedding: bool
     created_interviews_count: int  # As admin
     participated_interviews_count: int  # As candidate
+    profile_image_url: Optional[str] = None
 
 class ProctoringLogItem(BaseModel):
     type: str
@@ -88,6 +90,7 @@ class ResponseDetail(BaseModel):
     answer: str
     score: str
     status: str # "Answered", "Skipped", "Pending AI"
+    audio_url: Optional[str] = None
 
 class DetailedResult(BaseModel):
     session_id: int

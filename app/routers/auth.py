@@ -1,7 +1,7 @@
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlmodel import Session
+from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User
 from ..auth.security import (
@@ -34,7 +34,7 @@ def set_auth_cookie(response: Response, token: str):
 @router.post("/login", response_model=Token)
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
-    user = session.query(User).filter(User.email == login_data.email).first()
+    user = session.exec(select(User).where(User.email == login_data.email)).first()
     if not user or not verify_password(login_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -65,7 +65,7 @@ async def login_for_access_token(
     session: Session = Depends(get_session)
 ):
     """Standard OAuth2 token endpoint for Swagger UI (Authorize button)."""
-    user = session.query(User).filter(User.email == form_data.username).first()
+    user = session.exec(select(User).where(User.email == form_data.username)).first()
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -95,7 +95,6 @@ async def logout(response: Response):
     return {"message": "Logged out successfully"}
 
 @router.post("/register", response_model=Token)
-@router.post("/register", response_model=Token)
 async def register(
     response: Response, 
     user_data: UserCreate, 
@@ -108,7 +107,7 @@ async def register(
     - Subsequent users must be registered by an Admin.
     """
     # Bootstrap Check
-    user_count = session.query(User).count()
+    user_count = len(session.exec(select(User)).all())
     if user_count > 0:
         # Require Admin Auth
         if not current_user or current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
@@ -117,7 +116,7 @@ async def register(
                 detail="Registration is restricted to Admins. Please contact an administrator."
             )
 
-    existing_user = session.query(User).filter(User.email == user_data.email).first()
+    existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
