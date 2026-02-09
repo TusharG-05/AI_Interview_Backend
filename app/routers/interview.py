@@ -1,7 +1,6 @@
 from typing import List, Optional, Dict, Union
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
-from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import Questions, QuestionPaper, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
@@ -244,11 +243,17 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
 
 async def process_session_results_unified(session_id: int):
     from ..core.database import engine
+    from ..core.logger import get_logger
     from sqlmodel import Session, select
+    
+    logger = get_logger(__name__)
+    
     with Session(engine) as db:
         try:
             session = db.get(InterviewSession, session_id)
-            if not session: return
+            if not session: 
+                logger.warning(f"Session {session_id} not found for processing")
+                return
             
             responses = db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
             for resp in responses:
@@ -274,13 +279,15 @@ async def process_session_results_unified(session_id: int):
                     db.commit()
             
             # Final Score Aggregation
+            from ..utils import calculate_average_score
             all_scores = [r.score for r in responses if r.score is not None]
-            session.total_score = sum(all_scores) / len(all_scores) if all_scores else 0
+            session.total_score = calculate_average_score(all_scores)
             db.add(session)
             db.commit()
-            print(f"DEBUG: Session {session_id} Unified Processing Complete.")
+            logger.info(f"Session {session_id} processing completed successfully")
         except Exception as e:
-            print(f"ERROR: Session {session_id} Processing Failed: {e}")
+            logger.error(f"Session {session_id} processing failed: {e}", exc_info=True)
+            # Optionally: send notification to admin about processing failure
 
 # --- Standalone Testing ---
 

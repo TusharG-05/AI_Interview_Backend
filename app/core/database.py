@@ -2,10 +2,22 @@ from sqlmodel import SQLModel, create_engine, Session
 from typing import Generator
 from .config import DATABASE_URL
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {})
+# Configure connection args based on database type
+if "sqlite" in DATABASE_URL:
+    connect_args = {"check_same_thread": False}
+elif "postgresql" in DATABASE_URL:
+    connect_args = {"pool_pre_ping": True}
+else:
+    connect_args = {}
+
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
 def init_db():
-    from ..models.db_models import User, QuestionPaper, Questions, InterviewSession, InterviewResponse
+    from ..models.db_models import (
+        User, QuestionPaper, Questions, 
+        InterviewSession, InterviewResponse,
+        SessionQuestion, ProctoringEvent
+    )
     SQLModel.metadata.create_all(engine)
 
 def get_db() -> Generator[Session, None, None]:

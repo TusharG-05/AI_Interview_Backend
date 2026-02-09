@@ -41,10 +41,11 @@ if not SECRET_KEY:
         # FATAL: Never allow production start without secret
         raise ValueError("CRITICAL SECURITY ERROR: SECRET_KEY is missing in production environment.")
     else:
-        # Dev specific fallback
+        # Dev: Generate random key instead of using predictable default
+        import secrets
         logger = logging.getLogger("uvicorn")
-        logger.warning("Using INSECURE default SECRET_KEY for development only.")
-        SECRET_KEY = "dev-insecure-secret-key-do-not-use-in-prod"
+        SECRET_KEY = secrets.token_urlsafe(32)
+        logger.warning(f"Generated random SECRET_KEY for development: {SECRET_KEY[:10]}...")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
