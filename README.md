@@ -85,9 +85,13 @@ pip install modal
 modal token new
 ```
 
-### 2. Deploy Whisper Function
+### 2. Deploy Modal Functions
 ```bash
+# Whisper STT
 modal deploy app/modal_whisper.py
+
+# LLM Evaluation
+modal deploy app/modal_llm.py
 ```
 
 ### 3. Enable Modal in Your App
