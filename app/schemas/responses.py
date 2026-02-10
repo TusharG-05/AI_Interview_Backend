@@ -97,3 +97,55 @@ class DetailedResult(BaseModel):
     flags: bool
     details: List[ResponseDetail]
     proctoring_logs: List[ProctoringLogItem]
+
+# Candidate Status Tracking Responses
+class TimelineItem(BaseModel):
+    """Single status change in the timeline"""
+    status: str
+    timestamp: str
+    metadata: Optional[dict] = None
+
+class ViolationSummary(BaseModel):
+    """Details of a single violation"""
+    type: str
+    severity: str
+    timestamp: str
+    details: Optional[str] = None
+
+class WarningInfo(BaseModel):
+    """Warning system information"""
+    total_warnings: int
+    warnings_remaining: int
+    max_warnings: int
+    violations: List[ViolationSummary]
+
+class ProgressInfo(BaseModel):
+    """Interview progress information"""
+    questions_answered: int
+    total_questions: int
+    current_question_id: Optional[int] = None
+
+class CandidateStatusResponse(BaseModel):
+    """Complete status response for a single interview"""
+    session_id: int
+    candidate_email: str
+    current_status: Optional[str] = None
+    timeline: List[TimelineItem]
+    warnings: WarningInfo
+    progress: ProgressInfo
+    is_suspended: bool
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[str] = None
+    last_activity: Optional[str] = None
+
+class LiveStatusItem(BaseModel):
+    """Lightweight status item for batch live status view"""
+    session_id: int
+    candidate_email: str
+    current_status: Optional[str] = None
+    warning_count: int
+    warnings_remaining: int
+    is_suspended: bool
+    last_activity: Optional[str] = None
+    progress_percent: float  # Calculated as (answered/total) * 100
+

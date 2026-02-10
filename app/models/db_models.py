@@ -16,6 +16,18 @@ class InterviewStatus(str, Enum):
     EXPIRED = "expired"
     CANCELLED = "cancelled"
 
+class CandidateStatus(str, Enum):
+    """Tracks detailed lifecycle status of a candidate through the interview process"""
+    INVITED = "invited"  # Email sent
+    LINK_ACCESSED = "link_accessed"  # Candidate opened interview link
+    AUTHENTICATED = "authenticated"  # Candidate logged in (future use)
+    ENROLLMENT_STARTED = "enrollment_started"  # Selfie/enrollment in progress
+    ENROLLMENT_COMPLETED = "enrollment_completed"  # Ready to start interview
+    INTERVIEW_ACTIVE = "interview_active"  # Currently answering questions
+    INTERVIEW_PAUSED = "interview_paused"  # Disconnected/paused
+    INTERVIEW_COMPLETED = "interview_completed"  # Successfully finished
+    SUSPENDED = "suspended"  # Suspended due to violations
+
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
@@ -77,6 +89,17 @@ class InterviewSession(SQLModel, table=True):
     status: InterviewStatus = Field(default=InterviewStatus.SCHEDULED)
     total_score: Optional[float] = None
     
+    # Candidate Status Tracking (NEW)
+    current_status: Optional[CandidateStatus] = Field(default=None)  # Detailed lifecycle status
+    last_activity: Optional[datetime] = None  # Last activity timestamp
+    
+    # Warning System (NEW)
+    warning_count: int = Field(default=0)  # Current warning count
+    max_warnings: int = Field(default=3)  # Maximum warnings before suspension
+    is_suspended: bool = Field(default=False)  # Suspension flag
+    suspension_reason: Optional[str] = None  # Reason for suspension
+    suspended_at: Optional[datetime] = None  # Suspension timestamp
+    
     # Legacy/Enrollment
     enrollment_audio_path: Optional[str] = None
     candidate_name: Optional[str] = None # Optional fallback
@@ -90,6 +113,7 @@ class InterviewSession(SQLModel, table=True):
     responses: List["InterviewResponse"] = Relationship(back_populates="session")
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session")
     selected_questions: List["SessionQuestion"] = Relationship(back_populates="session")
+    status_timeline: List["StatusTimeline"] = Relationship(back_populates="session")
 
 class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
@@ -108,7 +132,21 @@ class ProctoringEvent(SQLModel, table=True):
     details: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
+    # Severity and Warning Tracking (NEW)
+    severity: str = Field(default="info")  # Options: "info", "warning", "critical"
+    triggered_warning: bool = Field(default=False)  # Whether this event added a warning
+    
     session: InterviewSession = Relationship(back_populates="proctoring_events")
+
+class StatusTimeline(SQLModel, table=True):
+    """Tracks status changes throughout the interview lifecycle"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(foreign_key="interviewsession.id")
+    status: CandidateStatus
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    context_data: Optional[str] = None  # JSON string for additional context (renamed from metadata)
+    
+    session: InterviewSession = Relationship(back_populates="status_timeline")
 
 class InterviewResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -138,3 +176,4 @@ InterviewSession.model_rebuild()
 SessionQuestion.model_rebuild()
 InterviewResponse.model_rebuild()
 ProctoringEvent.model_rebuild()
+StatusTimeline.model_rebuild()

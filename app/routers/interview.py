@@ -57,7 +57,19 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
          session_db.commit()
          raise HTTPException(status_code=403, detail="Interview link has expired")
          
-    # 4. Success - Allow Entry
+    # 4. Track link access
+    from ..services.status_manager import record_status_change
+    from ..models.db_models import CandidateStatus
+    
+    # Only record if not already accessed
+    if session.current_status == CandidateStatus.INVITED:
+        record_status_change(
+            session=session_db,
+            interview_session=session,
+            new_status=CandidateStatus.LINK_ACCESSED
+        )
+    
+    # 5. Success - Allow Entry
     return InterviewAccessResponse(
             session_id=session.id,
             message="START",
@@ -76,8 +88,26 @@ async def start_session_logic(
     Called when candidate actually enters the interview session (uploads selfie/audio).
     Sets status to LIVE.
     """
+    from ..services.status_manager import record_status_change
+    from ..models.db_models import CandidateStatus
+    
     session = session_db.get(InterviewSession, session_id)
     if not session: raise HTTPException(status_code=404)
+    
+    # Check if suspended
+    if session.is_suspended:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"Interview suspended: {session.suspension_reason}"
+        )
+    
+    # Track enrollment start
+    if enrollment_audio and session.current_status != CandidateStatus.ENROLLMENT_STARTED:
+        record_status_change(
+            session=session_db,
+            interview_session=session,
+            new_status=CandidateStatus.ENROLLMENT_STARTED
+        )
     
     # Update Status
     if session.status == InterviewStatus.SCHEDULED:
@@ -100,6 +130,13 @@ async def start_session_logic(
             session.enrollment_audio_path = enrollment_path
             session_db.add(session)
             
+            # Track enrollment completion
+            record_status_change(
+                session=session_db,
+                interview_session=session,
+                new_status=CandidateStatus.ENROLLMENT_COMPLETED
+            )
+            
         session_db.commit()
     except Exception as e:
         session_db.rollback()
@@ -109,6 +146,31 @@ async def start_session_logic(
 
 @router.get("/next-question/{session_id}")
 async def get_next_question(session_id: int, session_db: Session = Depends(get_session)):
+    from ..services.status_manager import record_status_change, update_last_activity
+    from ..models.db_models import CandidateStatus
+    
+    # Get session and check suspension
+    session_obj = session_db.get(InterviewSession, session_id)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session_obj.is_suspended:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Interview suspended: {session_obj.suspension_reason}"
+        )
+    
+    # Track interview active status (on first question fetch)
+    if session_obj.current_status == CandidateStatus.ENROLLMENT_COMPLETED:
+        record_status_change(
+            session=session_db,
+            interview_session=session_obj,
+            new_status=CandidateStatus.INTERVIEW_ACTIVE
+        )
+    
+    # Update last activity
+    update_last_activity(session_db, session_obj)
+    
     # 1. Get answered questions
     answered_ids = [r.question_id for r in session_db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()]
     
@@ -131,7 +193,6 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
         question = session_q.question if session_q else None
     else:
         # Fallback: Pull from the assigned Paper (if any) or General pool
-        session_obj = session_db.get(InterviewSession, session_id)
         if session_obj and session_obj.paper_id:
              # Security Fix: Strictly scope to the assigned paper
              question = session_db.exec(
@@ -185,6 +246,19 @@ async def submit_answer(
     audio: UploadFile = File(...),
     session_db: Session = Depends(get_session)
 ):
+    from ..services.status_manager import update_last_activity
+    
+    # Check if session exists and is not suspended
+    session_obj = session_db.get(InterviewSession, session_id)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if session_obj.is_suspended:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Interview suspended: {session_obj.suspension_reason}"
+        )
+    
     os.makedirs("app/assets/audio/responses", exist_ok=True)
     audio_path = f"app/assets/audio/responses/resp_{session_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
@@ -192,17 +266,33 @@ async def submit_answer(
     
     response = InterviewResponse(session_id=session_id, question_id=question_id, audio_path=audio_path)
     session_db.add(response)
+    
+    # Update last activity
+    update_last_activity(session_db, session_obj)
+    
     session_db.commit()
     return {"status": "saved"}
 
 @router.post("/finish/{session_id}")
 async def finish_interview(session_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session)):
+    from ..services.status_manager import record_status_change
+    from ..models.db_models import CandidateStatus
+    
     interview_session = session_db.get(InterviewSession, session_id)
     if not interview_session: raise HTTPException(status_code=404)
     
     interview_session.end_time = datetime.utcnow()
     interview_session.is_completed = True
     interview_session.status = InterviewStatus.COMPLETED
+    
+    # Track completion status
+    record_status_change(
+        session=session_db,
+        interview_session=interview_session,
+        new_status=CandidateStatus.INTERVIEW_COMPLETED,
+        metadata={"completed_at": datetime.utcnow().isoformat()}
+    )
+    
     session_db.add(interview_session)
     session_db.commit()
     
