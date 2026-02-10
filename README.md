@@ -92,6 +92,9 @@ modal deploy app/modal_whisper.py
 
 # LLM Evaluation
 modal deploy app/modal_llm.py
+
+# DeepFace Recognition
+modal deploy app/modal_deepface.py
 ```
 
 ### 3. Enable Modal in Your App

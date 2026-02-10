@@ -1,10 +1,6 @@
-"""
-Modal.com app for GPU-accelerated DeepFace face recognition.
-
-Deploy: modal deploy app/modal_deepface.py
-Test:   modal run app/modal_deepface.py --image-path /path/to/face.jpg
-"""
 import modal
+import numpy as np
+from PIL import Image
 import io
 
 app = modal.App("interview-deepface")
@@ -46,7 +42,6 @@ def get_embedding(image_bytes: bytes) -> dict:
     from deepface import DeepFace
     from PIL import Image
     
-    temp_path = None
     try:
         # First try to validate and convert image
         img = Image.open(io.BytesIO(image_bytes))
@@ -99,7 +94,7 @@ def get_embedding(image_bytes: bytes) -> dict:
                 "error": f"Primary error: {str(e)}, Fallback error: {str(e2)}"
             }
     finally:
-        if temp_path and os.path.exists(temp_path):
+        if os.path.exists(temp_path):
             os.remove(temp_path)
 
 
