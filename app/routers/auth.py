@@ -12,6 +12,8 @@ from ..auth.security import (
 )
 from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token, UserRead
+from ..schemas.api_response import ApiResponse
+from ..utils.response_helpers import success_response
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
 from ..models.db_models import User, UserRole
@@ -32,7 +34,7 @@ def set_auth_cookie(response: Response, token: str):
         secure=(ENV == "production")  # Only secure in production (HTTPS)
     )
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=ApiResponse[Token])
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
     user = session.exec(select(User).where(User.email == login_data.email)).first()
@@ -50,7 +52,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     set_auth_cookie(response, token)
     expire_time = datetime.utcnow() + access_token_expires
     
-    return {
+    token_data = {
         "access_token": token, 
         "token_type": "bearer", 
         "role": user.role,
@@ -58,6 +60,12 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "full_name": user.full_name,
         "expires_at": expire_time.isoformat()
     }
+    
+    return ApiResponse(
+        status_code=200,
+        data=token_data,
+        message="Login successful"
+    )
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
@@ -96,7 +104,7 @@ async def logout(response: Response):
     response.delete_cookie(key="access_token", samesite="lax", secure=(ENV == "production"))
     return {"message": "Logged out successfully"}
 
-@router.post("/register", response_model=Token)
+@router.post("/register", response_model=ApiResponse[Token])
 async def register(
     response: Response, 
     user_data: UserCreate, 
@@ -141,7 +149,7 @@ async def register(
     set_auth_cookie(response, token)
     expire_time = datetime.utcnow() + access_token_expires
     
-    return {
+    token_data = {
         "access_token": token, 
         "token_type": "bearer", 
         "role": new_user.role,
@@ -149,8 +157,15 @@ async def register(
         "full_name": new_user.full_name,
         "expires_at": expire_time.isoformat()
     }
+    
+    return ApiResponse(
+        status_code=201,
+        data=token_data,
+        message="User registered successfully"
+    )
 
 @router.get("/me", response_model=UserRead)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     """Get current logged in user details."""
     return current_user
+
