@@ -75,6 +75,35 @@ Endpoints are documented via Swagger UI:
 
 ---
 
+## Modal Cloud (Optional GPU Acceleration)
+
+For faster speech-to-text processing, you can offload Whisper to Modal's GPU cloud:
+
+### 1. Install Modal CLI
+```bash
+pip install modal
+modal token new
+```
+
+### 2. Deploy Modal Functions
+```bash
+# Whisper STT
+modal deploy app/modal_whisper.py
+
+# LLM Evaluation
+modal deploy app/modal_llm.py
+```
+
+### 3. Enable Modal in Your App
+```bash
+export USE_MODAL=true
+uvicorn main:app --port 8001
+```
+
+> **Note:** By default `USE_MODAL=false`, so Docker/local uses CPU-based Whisper. Set `USE_MODAL=true` only when Modal is deployed.
+
+---
+
 ## Testing
 
 Run the integration test suite:

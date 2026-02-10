@@ -14,9 +14,12 @@ import os
 import uuid
 from datetime import datetime, timedelta
 
+from pydub import AudioSegment
+import logging
+
 router = APIRouter(prefix="/interview", tags=["Interview"])
+logger = logging.getLogger(__name__)
 audio_service = AudioService()
-nlp_service = NLPService()
 
 class TTSRange(BaseModel):
     text: str
@@ -239,8 +242,8 @@ async def stream_question_audio(q_id: int):
     if not os.path.exists(audio_path): raise HTTPException(status_code=404)
     return FileResponse(audio_path, media_type="audio/mpeg")
 
-@router.post("/submit-answer")
-async def submit_answer(
+@router.post("/submit-answer-audio")
+async def submit_answer_audio(
     session_id: int = Form(...),
     question_id: int = Form(...),
     audio: UploadFile = File(...),
@@ -270,6 +273,56 @@ async def submit_answer(
     # Update last activity
     update_last_activity(session_db, session_obj)
     
+    session_db.commit()
+    return {"status": "saved"}
+
+@router.post("/submit-answer-text")
+async def submit_answer_text(
+    session_id: int = Form(...),
+    question_id: int = Form(...),
+    answer_text: str = Form(...),
+    session_db: Session = Depends(get_session)
+):
+    """
+    Submits a text answer for a question.
+    Saves the response but delays evaluation until the interview finishes.
+    """
+    # Verify session exists
+    session = session_db.get(InterviewSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    response = InterviewResponse(
+        session_id=session_id,
+        question_id=question_id,
+        answer_text=answer_text
+    )
+    session_db.add(response)
+    session_db.commit()
+    return {"status": "saved"}
+
+@router.post("/submit-answer-text")
+async def submit_answer_text(
+    session_id: int = Form(...),
+    question_id: int = Form(...),
+    answer_text: str = Form(...),
+    session_db: Session = Depends(get_session)
+):
+    """
+    Submits a text answer for a question.
+    Saves the response but delays evaluation until the interview finishes.
+    """
+    # Verify session exists
+    session = session_db.get(InterviewSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    response = InterviewResponse(
+        session_id=session_id,
+        question_id=question_id,
+        answer_text=answer_text
+    )
+    session_db.add(response)
     session_db.commit()
     return {"status": "saved"}
 
@@ -347,6 +400,7 @@ async def process_session_results_unified(session_id: int):
             
             responses = db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
             for resp in responses:
+                # Process Audio Responses
                 if resp.audio_path and not (resp.answer_text or resp.transcribed_text):
                     audio_service.cleanup_audio(resp.audio_path)
                     
@@ -358,10 +412,11 @@ async def process_session_results_unified(session_id: int):
                     
                     resp.answer_text = text
                     resp.transcribed_text = text # Compatibility
-                    
-                    # 2. LLM Evaluation
+                
+                # Evaluation (for both Audio and Text responses)
+                if resp.answer_text and not resp.evaluation_text:
                     q_text = resp.question.question_text or resp.question.content or "General Question"
-                    evaluation = interview_service.evaluate_answer_content(q_text, text)
+                    evaluation = interview_service.evaluate_answer_content(q_text, resp.answer_text)
                     
                     resp.evaluation_text = evaluation["feedback"]
                     resp.score = evaluation["score"]
@@ -374,16 +429,95 @@ async def process_session_results_unified(session_id: int):
             session.total_score = calculate_average_score(all_scores)
             db.add(session)
             db.commit()
-            logger.info(f"Session {session_id} processing completed successfully")
+            logger.info(f"Session {session_id} processing complete. Score: {session.total_score}")
         except Exception as e:
-            logger.error(f"Session {session_id} processing failed: {e}", exc_info=True)
-            # Optionally: send notification to admin about processing failure
+            logger.error(f"Session {session_id} processing failed: {e}")
+            # Mark session with error state so frontend can show appropriate message
+            try:
+                session = db.get(InterviewSession, session_id)
+                if session:
+                    session.status = InterviewStatus.COMPLETED  # Keep as completed but log error
+                    db.add(session)
+                    db.commit()
+            except Exception:
+                db.rollback()
 
-# --- Standalone Testing ---
 
-@router.post("/tts")
-async def standalone_tts(req: TTSRange):
-    path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex[:8]}.mp3"
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    await audio_service.text_to_speech(req.text, path)
-    return FileResponse(path, media_type="audio/mpeg")
+# --- Standalone Tools ---
+
+@router.post("/tools/speech-to-text")
+async def speech_to_text_tool(audio: UploadFile = File(...)):
+    """
+    Public standalone tool to convert speech to text.
+    No authentication required.
+    """
+    try:
+        # Create a temp file to process
+        temp_filename = f"temp_stt_{uuid.uuid4().hex}.wav"
+        content = await audio.read()
+        
+        # Using a temporary path, but reusing audio service logic
+        # Note: In a real prod env, might want a specific temp dir
+        temp_path = f"app/assets/audio/standalone/{temp_filename}" 
+        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+        
+        audio_service.save_audio_blob(content, temp_path)
+        
+        # Perform STT
+        text = await audio_service.speech_to_text(temp_path)
+        
+        # Cleanup
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        return {"text": text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
+
+@router.get("/tts")
+async def standalone_tts(text: str, background_tasks: BackgroundTasks):
+    """
+    Generate Text-to-Speech (TTS) audio for the provided text via GET.
+    Enables direct browser playback in HTML <audio> tags via query parameters.
+    """
+    temp_mp3 = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.mp3"
+    wav_path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.wav"
+    
+    try:
+        os.makedirs(os.path.dirname(temp_mp3), exist_ok=True)
+        
+        # 1. Generate MP3 stream
+        await audio_service.text_to_speech(text, temp_mp3)
+        
+        # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
+        audio = AudioSegment.from_file(temp_mp3)
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        audio.export(wav_path, format="wav")
+        
+        # 3. Cleanup intermediate MP3
+        if os.path.exists(temp_mp3):
+            os.remove(temp_mp3)
+
+        # 4. Return FileResponse and schedule cleanup
+        def cleanup():
+            if os.path.exists(wav_path):
+                try: os.remove(wav_path)
+                except Exception as e:
+                    logger.error(f"TTS Cleanup Error: {e}")
+
+        background_tasks.add_task(cleanup)
+        
+        return FileResponse(
+            wav_path,
+            media_type="audio/wav",
+            content_disposition_type="inline"
+        )
+
+    except Exception as e:
+        logger.error(f"TTS Generation Error: {e}")
+        # Final safety cleanup
+        for p in [temp_mp3, wav_path]:
+            if os.path.exists(p): 
+                try: os.remove(p)
+                except: pass
+        raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")

@@ -9,6 +9,25 @@ from ..core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Modal integration flag
+USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
+
+# Lazy import Modal DeepFace
+_modal_get_embedding = None
+
+def get_modal_embedding():
+    """Lazy load Modal DeepFace function to avoid import errors when Modal not installed."""
+    global _modal_get_embedding
+    if _modal_get_embedding is None:
+        try:
+            from ..modal_deepface import get_embedding
+            _modal_get_embedding = get_embedding
+            logger.info("Modal DeepFace function loaded successfully")
+        except ImportError as e:
+            logger.warning(f"Modal DeepFace not available: {e}")
+            return None
+    return _modal_get_embedding
+
 
 class MediaPipeDetector:
     """Handles face detection using MediaPipe."""
@@ -56,13 +75,16 @@ class FaceRecognizer:
         try:
             from deepface import DeepFace
             DeepFace.build_model(self.model_name)
-        except:
-            pass
+        except ImportError:
+            logger.warning("DeepFace not installed - face recognition disabled")
+        except Exception as e:
+            logger.warning(f"DeepFace model build failed: {e} - face recognition may not work")
 
     def recognize(self, img_rgb, locs):
         """
         Returns list of booleans indicating matches for each face location.
         Uses Cosine Similarity on ArcFace embeddings.
+        Routes to Modal GPU if USE_MODAL=true.
         """
         matches = []
         if self.known_encoding is None: return [False] * len(locs)
@@ -78,17 +100,30 @@ class FaceRecognizer:
                 continue
             
             try:
-                # Extract embedding for the cropped face
-                # normalization='ArcFace' is handled by DeepFace internally if model_name is ArcFace
-                from deepface import DeepFace
-                objs = DeepFace.represent(
-                    img_path=face, 
-                    model_name=self.model_name, 
-                    enforce_detection=False, 
-                    detector_backend="skip",
-                    align=False # MediaPipe crop is already "aligned" enough for basic check
-                )
-                curr_emb = objs[0]["embedding"]
+                curr_emb = None
+                
+                # Try Modal if enabled
+                if USE_MODAL:
+                    modal_fn = get_modal_embedding()
+                    if modal_fn:
+                        # Convert face crop to bytes
+                        import cv2
+                        _, img_encoded = cv2.imencode('.jpg', cv2.cvtColor(face, cv2.COLOR_RGB2BGR))
+                        result = modal_fn.remote(img_encoded.tobytes())
+                        if result.get("success"):
+                            curr_emb = result["embedding"]
+                
+                # Local fallback if Modal didn't work
+                if curr_emb is None:
+                    from deepface import DeepFace
+                    objs = DeepFace.represent(
+                        img_path=face, 
+                        model_name=self.model_name, 
+                        enforce_detection=False, 
+                        detector_backend="skip",
+                        align=False
+                    )
+                    curr_emb = objs[0]["embedding"]
                 
                 # Cosine Similarity
                 a = np.array(self.known_encoding)
@@ -99,10 +134,11 @@ class FaceRecognizer:
                 matches.append(bool(cos_sim > 0.40))
                 
             except Exception as e:
-                # print(f"Rec Error: {e}")
+                logger.debug(f"Face recognition error: {e}")
                 matches.append(False)
         
         return matches
+
 
 
 def face_worker_process(frame_queue, result_queue):
@@ -120,7 +156,7 @@ def face_worker_process(frame_queue, result_queue):
     while True:
         try:
             item = frame_queue.get(timeout=1)
-        except:
+        except multiprocessing.queues.Empty:
             continue
 
         if item is None:
@@ -184,7 +220,7 @@ class FaceService:
             try:
                 sid, match, conf, n_faces, locs = self.result_queue.get_nowait()
                 self.session_results[sid] = (match, conf, n_faces, locs)
-            except:
+            except multiprocessing.queues.Empty:
                 break
         
         return self.session_results.get(session_id, (False, 1.0, 0, []))
@@ -196,8 +232,9 @@ class FaceService:
     def close(self):
         try:
             self.frame_queue.put(None)
-            self.worker.join()
-        except:
+            self.worker.join(timeout=5)
+        except Exception as e:
+            logger.warning(f"Error closing face worker gracefully: {e}")
             self.worker.terminate()
 
 
