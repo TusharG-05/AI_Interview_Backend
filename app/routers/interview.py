@@ -301,30 +301,6 @@ async def submit_answer_text(
     session_db.commit()
     return {"status": "saved"}
 
-@router.post("/submit-answer-text")
-async def submit_answer_text(
-    session_id: int = Form(...),
-    question_id: int = Form(...),
-    answer_text: str = Form(...),
-    session_db: Session = Depends(get_session)
-):
-    """
-    Submits a text answer for a question.
-    Saves the response but delays evaluation until the interview finishes.
-    """
-    # Verify session exists
-    session = session_db.get(InterviewSession, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    response = InterviewResponse(
-        session_id=session_id,
-        question_id=question_id,
-        answer_text=answer_text
-    )
-    session_db.add(response)
-    session_db.commit()
-    return {"status": "saved"}
 
 @router.post("/finish/{session_id}")
 async def finish_interview(session_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session)):
