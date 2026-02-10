@@ -11,7 +11,11 @@ from ..auth.security import (
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
 from ..schemas.requests import UserCreate, LoginRequest
-from ..schemas.responses import Token
+from ..schemas.responses import Token, UserRead
+from typing import Optional
+from ..auth.dependencies import get_current_user, get_current_user_optional
+from ..models.db_models import User, UserRole
+from ..auth.security import verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -93,8 +97,27 @@ async def logout(response: Response):
     return {"message": "Logged out successfully"}
 
 @router.post("/register", response_model=Token)
-async def register(response: Response, user_data: UserCreate, session: Session = Depends(get_session)):
-    """Pure API registration. Sets secure HttpOnly cookie and returns token."""
+async def register(
+    response: Response, 
+    user_data: UserCreate, 
+    session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
+    """
+    Register a new user. 
+    - First user can register freely (Bootstrap).
+    - Subsequent users must be registered by an Admin.
+    """
+    # Bootstrap Check
+    user_count = len(session.exec(select(User)).all())
+    if user_count > 0:
+        # Require Admin Auth
+        if not current_user or current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+            raise HTTPException(
+                status_code=403, 
+                detail="Registration is restricted to Admins. Please contact an administrator."
+            )
+
     existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -126,3 +149,8 @@ async def register(response: Response, user_data: UserCreate, session: Session =
         "full_name": new_user.full_name,
         "expires_at": expire_time.isoformat()
     }
+
+@router.get("/me", response_model=UserRead)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    """Get current logged in user details."""
+    return current_user

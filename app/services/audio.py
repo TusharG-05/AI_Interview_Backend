@@ -12,10 +12,30 @@ from ..core.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Modal integration flag
+USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
+
+# Lazy import Modal only when needed
+_modal_transcribe = None
+
+def get_modal_transcribe():
+    """Lazy load Modal function to avoid import errors when Modal not installed."""
+    global _modal_transcribe
+    if _modal_transcribe is None:
+        try:
+            from ..modal_whisper import transcribe
+            _modal_transcribe = transcribe
+            logger.info("Modal Whisper function loaded successfully")
+        except ImportError as e:
+            logger.warning(f"Modal not available: {e}")
+            return None
+    return _modal_transcribe
+
 
 class AudioService:
     def __init__(self, stt_model_size="base.en"):
         logger.info(f"Initializing AudioService (Lazy Loading enabled)...")
+        logger.info(f"Modal STT: {'ENABLED' if USE_MODAL else 'DISABLED (local)'}")
         self.stt_model_size = stt_model_size
         self.female_voice = "en-US-AvaNeural"
         
@@ -23,6 +43,7 @@ class AudioService:
         self._stt_model = None
         self._speaker_model = None
         self.verification_threshold = 0.25
+
 
     @property
     def stt_model(self):
@@ -143,26 +164,42 @@ class AudioService:
         if not os.path.exists(audio_path):
             return ""
 
-        # Assumes audio_path is already cleaned if desired
         try:
+            # Try Modal if enabled
+            if USE_MODAL:
+                modal_fn = get_modal_transcribe()
+                if modal_fn:
+                    logger.info(f"Using Modal for STT: {audio_path}")
+                    loop = asyncio.get_running_loop()
+                    
+                    def _modal_transcribe():
+                        with open(audio_path, "rb") as f:
+                            audio_bytes = f.read()
+                        result = modal_fn.remote(audio_bytes, self.stt_model_size)
+                        return result.get("text", "")
+                    
+                    text = await loop.run_in_executor(None, _modal_transcribe)
+                    return text if text else "[Silence/No Speech Detected]"
+                else:
+                    logger.warning("Modal unavailable, falling back to local STT")
+            
+            # Local fallback (or when USE_MODAL=false)
             loop = asyncio.get_running_loop()
             
-            # Non-blocking wrapper for heavy STT
             def _transcribe():
                 segments, info = self.stt_model.transcribe(
                     audio_path, 
                     beam_size=1, 
                     vad_filter=True,
                     vad_parameters=dict(min_silence_duration_ms=500),
-                    no_speech_threshold=0.5, # Stops "bathroom" hallucinations
+                    no_speech_threshold=0.5,
                     initial_prompt="Interview answer about technology and programming."
                 )
                 return " ".join(seg.text for seg in segments).strip()
 
             text = await loop.run_in_executor(None, _transcribe)
-            
-            # If still nothing, return a clean string
             return text if text else "[Silence/No Speech Detected]"
+            
         except Exception as e:
             logger.error(f"STT Error: {e}")
             return ""
@@ -181,3 +218,14 @@ class AudioService:
         except Exception as e:
             logger.error(f"Energy Check Error: {e}")
             return 0
+
+    def convert_to_wav(self, input_path):
+        """Converts any audio file to WAV format and returns the path."""
+        try:
+            output_path = input_path.rsplit(".", 1)[0] + ".wav"
+            audio = AudioSegment.from_file(input_path)
+            audio.export(output_path, format="wav")
+            return output_path
+        except Exception as e:
+            logger.error(f"WAV Conversion Error: {e}")
+            return None
