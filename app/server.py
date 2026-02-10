@@ -49,8 +49,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"Warm-up failed: {e}")
     
+    # Warm-up disabled for stability - enable via feature flag if needed
     # threading.Thread(target=warm_up, daemon=True).start()
-    logger.info("Warm-up: Validation skipped for stability.")
+    logger.info("Model warm-up: Deferred to first request for stability.")
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()
@@ -82,10 +83,14 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 from fastapi.middleware.cors import CORSMiddleware
+import os
+
+# SECURITY: Use environment-based CORS origins, never "*" with credentials
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

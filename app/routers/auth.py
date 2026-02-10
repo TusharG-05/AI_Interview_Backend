@@ -21,6 +21,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
+    from ..core.config import ENV
     response.set_cookie(
         key="access_token",
         value=token,
@@ -28,7 +29,7 @@ def set_auth_cookie(response: Response, token: str):
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         samesite="lax",
-        secure=True  # Ensure this is True in production (HTTPS)
+        secure=(ENV == "production")  # Only secure in production (HTTPS)
     )
 
 @router.post("/login", response_model=Token)
@@ -91,7 +92,8 @@ async def login_for_access_token(
 @router.post("/logout")
 async def logout(response: Response):
     """Clears the authentication cookie."""
-    response.delete_cookie(key="access_token", samesite="lax", secure=True)
+    from ..core.config import ENV
+    response.delete_cookie(key="access_token", samesite="lax", secure=(ENV == "production"))
     return {"message": "Logged out successfully"}
 
 @router.post("/register", response_model=Token)
