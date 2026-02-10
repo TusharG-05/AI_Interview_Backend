@@ -65,7 +65,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     return ApiResponse(
         status_code=200,
         data=token_data,
-        message="Login successful"
+        message="Login successfully"
     )
 
 @router.post("/token", response_model=Token)
