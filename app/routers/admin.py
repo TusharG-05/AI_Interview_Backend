@@ -1,6 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import QuestionPaper, Questions, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
@@ -404,6 +405,55 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             score=s.total_score
         ))
     return results
+
+@router.get("/interviews/live-status", response_model=List[LiveStatusItem])
+async def get_live_status_dashboard(
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Get lightweight status summary for all active interviews.
+    
+    Shows all interviews that are NOT completed/cancelled/expired.
+    Useful for admin dashboard to monitor multiple concurrent interviews.
+    
+    Returns:
+        List of active interviews with basic status, warnings, and progress
+    """
+    from ..models.db_models import CandidateStatus
+    
+    # Get all active interviews for this admin
+    # Active = not completed/cancelled/suspended permanently
+    stmt = select(InterviewSession).where(
+        InterviewSession.admin_id == current_user.id,
+        InterviewSession.status.in_([
+            InterviewStatus.SCHEDULED,
+            InterviewStatus.LIVE
+        ])
+    ).order_by(InterviewSession.last_activity.desc())
+    
+    active_sessions = session.exec(stmt).all()
+    
+    results = []
+    for interview_session in active_sessions:
+        # Calculate progress
+        total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
+        answered_questions = len(interview_session.responses)
+        progress_percent = (answered_questions / total_questions * 100) if total_questions > 0 else 0
+        
+        results.append(LiveStatusItem(
+            session_id=interview_session.id,
+            candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+            current_status=interview_session.current_status.value if interview_session.current_status else None,
+            warning_count=interview_session.warning_count,
+            warnings_remaining=max(0, interview_session.max_warnings - interview_session.warning_count),
+            is_suspended=interview_session.is_suspended,
+            last_activity=interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+            progress_percent=round(progress_percent, 1)
+        ))
+    
+    return results
+
 
 @router.get("/interviews/{session_id}", response_model=InterviewDetailRead)
 async def get_interview(
@@ -1097,6 +1147,7 @@ def shutdown(current_user: User = Depends(get_admin_user)):
 
 # --- Candidate Status Tracking ---
 
+
 @router.get("/interviews/{session_id}/status", response_model=CandidateStatusResponse)
 async def get_candidate_status(
     session_id: int,
@@ -1132,53 +1183,4 @@ async def get_candidate_status(
     status_data = get_status_summary(session, interview_session)
     
     return CandidateStatusResponse(**status_data)
-
-
-@router.get("/interviews/live-status", response_model=List[LiveStatusItem])
-async def get_live_status_dashboard(
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
-):
-    """
-    Get lightweight status summary for all active interviews.
-    
-    Shows all interviews that are NOT completed/cancelled/expired.
-    Useful for admin dashboard to monitor multiple concurrent interviews.
-    
-    Returns:
-        List of active interviews with basic status, warnings, and progress
-    """
-    from ..models.db_models import CandidateStatus
-    
-    # Get all active interviews for this admin
-    # Active = not completed/cancelled/suspended permanently
-    stmt = select(InterviewSession).where(
-        InterviewSession.admin_id == current_user.id,
-        InterviewSession.status.in_([
-            InterviewStatus.SCHEDULED,
-            InterviewStatus.LIVE
-        ])
-    ).order_by(InterviewSession.last_activity.desc())
-    
-    active_sessions = session.exec(stmt).all()
-    
-    results = []
-    for interview_session in active_sessions:
-        # Calculate progress
-        total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
-        answered_questions = len(interview_session.responses)
-        progress_percent = (answered_questions / total_questions * 100) if total_questions > 0 else 0
-        
-        results.append(LiveStatusItem(
-            session_id=interview_session.id,
-            candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
-            current_status=interview_session.current_status.value if interview_session.current_status else None,
-            warning_count=interview_session.warning_count,
-            warnings_remaining=max(0, interview_session.max_warnings - interview_session.warning_count),
-            is_suspended=interview_session.is_suspended,
-            last_activity=interview_session.last_activity.isoformat() if interview_session.last_activity else None,
-            progress_percent=round(progress_percent, 1)
-        ))
-    
-    return results
 
