@@ -9,7 +9,7 @@ from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
-from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead
+from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
 import os
 import shutil
 import uuid
@@ -304,6 +304,21 @@ async def schedule_interview(
     session.add(new_session)
     session.commit()
     session.refresh(new_session)
+    
+    # Track initial status - INVITED
+    from ..services.status_manager import record_status_change
+    from ..models.db_models import CandidateStatus
+    
+    record_status_change(
+        session=session,
+        interview_session=new_session,
+        new_status=CandidateStatus.INVITED,
+        metadata={
+            "admin_id": current_user.id,
+            "candidate_id": schedule_data.candidate_id,
+            "email_sent": True
+        }
+    )
     
     # Random Question Selection
     import random
@@ -1045,3 +1060,91 @@ def shutdown(current_user: User = Depends(get_admin_user)):
     import signal
     os.kill(os.getpid(), signal.SIGTERM) # SIGTERM allows cleaning up
     return {"message": "Server shutting down..."}
+
+# --- Candidate Status Tracking ---
+
+@router.get("/interviews/{session_id}/status", response_model=CandidateStatusResponse)
+async def get_candidate_status(
+    session_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Get comprehensive status tracking for a single interview candidate.
+    
+    Returns:
+        - Full timeline of status changes
+        - Warning count and violation details
+        - Interview progress (questions answered/total)
+        - Suspension status and reason
+        - Last activity timestamp
+    """
+    from ..services.status_manager import get_status_summary
+    
+    # Get the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: Only admin who created the interview
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this interview status"
+        )
+    
+    # Generate comprehensive status summary
+    status_data = get_status_summary(session, interview_session)
+    
+    return CandidateStatusResponse(**status_data)
+
+
+@router.get("/interviews/live-status", response_model=List[LiveStatusItem])
+async def get_live_status_dashboard(
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Get lightweight status summary for all active interviews.
+    
+    Shows all interviews that are NOT completed/cancelled/expired.
+    Useful for admin dashboard to monitor multiple concurrent interviews.
+    
+    Returns:
+        List of active interviews with basic status, warnings, and progress
+    """
+    from ..models.db_models import CandidateStatus
+    
+    # Get all active interviews for this admin
+    # Active = not completed/cancelled/suspended permanently
+    stmt = select(InterviewSession).where(
+        InterviewSession.admin_id == current_user.id,
+        InterviewSession.status.in_([
+            InterviewStatus.SCHEDULED,
+            InterviewStatus.LIVE
+        ])
+    ).order_by(InterviewSession.last_activity.desc())
+    
+    active_sessions = session.exec(stmt).all()
+    
+    results = []
+    for interview_session in active_sessions:
+        # Calculate progress
+        total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
+        answered_questions = len(interview_session.responses)
+        progress_percent = (answered_questions / total_questions * 100) if total_questions > 0 else 0
+        
+        results.append(LiveStatusItem(
+            session_id=interview_session.id,
+            candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+            current_status=interview_session.current_status.value if interview_session.current_status else None,
+            warning_count=interview_session.warning_count,
+            warnings_remaining=max(0, interview_session.max_warnings - interview_session.warning_count),
+            is_suspended=interview_session.is_suspended,
+            last_activity=interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+            progress_percent=round(progress_percent, 1)
+        ))
+    
+    return results
+
