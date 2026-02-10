@@ -54,10 +54,11 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     
     token_data = {
         "access_token": token, 
-        "token_type": "bearer", 
-        "role": user.role,
+        "token_type": "bearer",
+        "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
+        "role": user.role,
         "expires_at": expire_time.isoformat()
     }
     
@@ -151,10 +152,11 @@ async def register(
     
     token_data = {
         "access_token": token, 
-        "token_type": "bearer", 
-        "role": new_user.role,
+        "token_type": "bearer",
+        "id": new_user.id,
         "email": new_user.email,
         "full_name": new_user.full_name,
+        "role": new_user.role,
         "expires_at": expire_time.isoformat()
     }
     

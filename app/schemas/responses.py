@@ -37,9 +37,10 @@ class UserRead(BaseModel):
 class Token(BaseModel):
     access_token: str
     token_type: str
-    role: str
+    id: int
     email: str
     full_name: str
+    role: str
     expires_at: str
 
 class InterviewLinkResponse(BaseModel):
