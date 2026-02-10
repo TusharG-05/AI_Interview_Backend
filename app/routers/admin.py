@@ -1,6 +1,7 @@
 from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import QuestionPaper, Questions, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
@@ -9,7 +10,7 @@ from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
-from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead
+from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
 import os
 import shutil
 import uuid
@@ -84,7 +85,7 @@ async def update_paper(
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     
-    update_data = paper_update.dict(exclude_unset=True)
+    update_data = paper_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(paper, key, value)
     
@@ -235,8 +236,8 @@ async def get_question(
     q = session.get(Questions, q_id)
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
-    # Verify the question belongs to a paper owned by the admin
-    if q.paper.admin_id != current_user.id:
+    # Verify the question belongs to a paper owned by the admin (or is orphaned)
+    if q.paper and q.paper.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
     return q
 
@@ -251,11 +252,11 @@ async def update_question(
     q = session.get(Questions, q_id)
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
-    # Verify the question belongs to a paper owned by the admin
-    if q.paper.admin_id != current_user.id:
+    # Verify the question belongs to a paper owned by the admin (or is orphaned)
+    if q.paper and q.paper.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this question")
     
-    update_data = q_update.dict(exclude_unset=True)
+    update_data = q_update.model_dump(exclude_unset=True)
     if "content" in update_data:
         q.question_text = update_data["content"] # Keep legacy text in sync
         
@@ -304,6 +305,21 @@ async def schedule_interview(
     session.add(new_session)
     session.commit()
     session.refresh(new_session)
+    
+    # Track initial status - INVITED
+    from ..services.status_manager import record_status_change
+    from ..models.db_models import CandidateStatus
+    
+    record_status_change(
+        session=session,
+        interview_session=new_session,
+        new_status=CandidateStatus.INVITED,
+        metadata={
+            "admin_id": current_user.id,
+            "candidate_id": schedule_data.candidate_id,
+            "email_sent": True
+        }
+    )
     
     # Random Question Selection
     import random
@@ -390,6 +406,55 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
         ))
     return results
 
+@router.get("/interviews/live-status", response_model=List[LiveStatusItem])
+async def get_live_status_dashboard(
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Get lightweight status summary for all active interviews.
+    
+    Shows all interviews that are NOT completed/cancelled/expired.
+    Useful for admin dashboard to monitor multiple concurrent interviews.
+    
+    Returns:
+        List of active interviews with basic status, warnings, and progress
+    """
+    from ..models.db_models import CandidateStatus
+    
+    # Get all active interviews for this admin
+    # Active = not completed/cancelled/suspended permanently
+    stmt = select(InterviewSession).where(
+        InterviewSession.admin_id == current_user.id,
+        InterviewSession.status.in_([
+            InterviewStatus.SCHEDULED,
+            InterviewStatus.LIVE
+        ])
+    ).order_by(InterviewSession.last_activity.desc())
+    
+    active_sessions = session.exec(stmt).all()
+    
+    results = []
+    for interview_session in active_sessions:
+        # Calculate progress
+        total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
+        answered_questions = len(interview_session.responses)
+        progress_percent = (answered_questions / total_questions * 100) if total_questions > 0 else 0
+        
+        results.append(LiveStatusItem(
+            session_id=interview_session.id,
+            candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+            current_status=interview_session.current_status.value if interview_session.current_status else None,
+            warning_count=interview_session.warning_count,
+            warnings_remaining=max(0, interview_session.max_warnings - interview_session.warning_count),
+            is_suspended=interview_session.is_suspended,
+            last_activity=interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+            progress_percent=round(progress_percent, 1)
+        ))
+    
+    return results
+
+
 @router.get("/interviews/{session_id}", response_model=InterviewDetailRead)
 async def get_interview(
     session_id: int,
@@ -459,7 +524,7 @@ async def update_interview(
         )
     
     # Apply updates
-    update_dict = update_data.dict(exclude_unset=True)
+    update_dict = update_data.model_dump(exclude_unset=True)
     
     # Validate paper_id if provided
     if "paper_id" in update_dict:
@@ -611,8 +676,9 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         responses = s.responses
         proctoring = s.proctoring_events
         
+        from ..utils import calculate_average_score
         valid_scores = [r.score for r in responses if r.score is not None]
-        avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
+        avg_score = calculate_average_score(valid_scores)
         
         details = []
         for r in responses:
@@ -669,8 +735,9 @@ async def get_result(
     responses = interview_session.responses
     proctoring = interview_session.proctoring_events
     
+    from ..utils import calculate_average_score
     valid_scores = [r.score for r in responses if r.score is not None]
-    avg_score = sum(valid_scores) / len(valid_scores) if valid_scores else 0
+    avg_score = calculate_average_score(valid_scores)
     
     details = []
     for r in responses:
@@ -737,7 +804,7 @@ async def update_result(
             detail="Cannot update results for cancelled interviews."
         )
     
-    update_dict = update_data.dict(exclude_unset=True)
+    update_dict = update_data.model_dump(exclude_unset=True)
     
     # Update total score if provided
     if "total_score" in update_dict:
@@ -942,7 +1009,7 @@ async def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    update_dict = update_data.dict(exclude_unset=True)
+    update_dict = update_data.model_dump(exclude_unset=True)
     
     # Email uniqueness validation
     if "email" in update_dict and update_dict["email"] != user.email:
@@ -1077,3 +1144,43 @@ def shutdown(current_user: User = Depends(get_admin_user)):
     import signal
     os.kill(os.getpid(), signal.SIGTERM) # SIGTERM allows cleaning up
     return {"message": "Server shutting down..."}
+
+# --- Candidate Status Tracking ---
+
+
+@router.get("/interviews/{session_id}/status", response_model=CandidateStatusResponse)
+async def get_candidate_status(
+    session_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Get comprehensive status tracking for a single interview candidate.
+    
+    Returns:
+        - Full timeline of status changes
+        - Warning count and violation details
+        - Interview progress (questions answered/total)
+        - Suspension status and reason
+        - Last activity timestamp
+    """
+    from ..services.status_manager import get_status_summary
+    
+    # Get the interview session
+    interview_session = session.get(InterviewSession, session_id)
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: Only admin who created the interview
+    if interview_session.admin_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Not authorized to view this interview status"
+        )
+    
+    # Generate comprehensive status summary
+    status_data = get_status_summary(session, interview_session)
+    
+    return CandidateStatusResponse(**status_data)
+

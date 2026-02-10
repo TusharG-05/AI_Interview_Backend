@@ -58,6 +58,7 @@ def test_access_interview_valid(client, test_setup):
     assert response.status_code == 200
     assert response.json()["message"] == "START"
 
+# @pytest.mark.skip(reason="Requires ffmpeg/real audio processing - skip in CI")
 @pytest.mark.skip(reason="Requires ffmpeg/real audio processing - skip in CI")
 def test_start_session(client, session, test_setup):
     """Test requires real audio processing. Skip in headless environments."""

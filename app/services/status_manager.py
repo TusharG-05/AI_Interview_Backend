@@ -1,0 +1,317 @@
+"""
+Status Manager Service - Centralized candidate status tracking and warning management.
+
+This service handles:
+- Status lifecycle transitions
+- Warning accumulation and auto-suspension
+- Violation categorization (soft vs hard)
+- Status timeline recording
+"""
+
+from typing import Optional, Dict, Any
+from datetime import datetime
+from sqlmodel import Session, select
+from ..models.db_models import (
+    InterviewSession, 
+    StatusTimeline, 
+    ProctoringEvent,
+    CandidateStatus,
+    InterviewResponse
+)
+import json
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
+
+# Violation severity mapping
+VIOLATION_SEVERITY = {
+    # Soft violations - accumulate warnings
+    "gaze_away": "warning",
+    "brief_disconnect": "warning",
+    "low_audio": "info",
+    "connection_unstable": "info",
+    
+    # Hard violations - immediate suspension
+    "multiple_faces": "critical",
+    "tab_switch": "critical",
+    "face_not_detected_extended": "critical",
+    "unauthorized_device": "critical",
+}
+
+
+def record_status_change(
+    session: Session,
+    interview_session: InterviewSession,
+    new_status: CandidateStatus,
+    metadata: Optional[Dict[str, Any]] = None
+) -> StatusTimeline:
+    """
+    Record a status change in the timeline and update session's current status.
+    
+    Args:
+        session: Database session
+        interview_session: The interview session to update
+        new_status: The new status to transition to
+        metadata: Optional additional context (stored as JSON)
+    
+    Returns:
+        The created StatusTimeline entry
+    """
+    # Create timeline entry
+    timeline_entry = StatusTimeline(
+        session_id=interview_session.id,
+        status=new_status,
+        timestamp=datetime.utcnow(),
+        context_data=json.dumps(metadata) if metadata else None
+    )
+    
+    # Update session current status
+    interview_session.current_status = new_status
+    interview_session.last_activity = datetime.utcnow()
+    
+    session.add(timeline_entry)
+    session.add(interview_session)
+    session.commit()
+    session.refresh(timeline_entry)
+    
+    logger.info(
+        f"Status change recorded for session {interview_session.id}: "
+        f"{new_status.value} | Metadata: {metadata}"
+    )
+    
+    return timeline_entry
+
+
+def add_violation(
+    session: Session,
+    interview_session: InterviewSession,
+    event_type: str,
+    details: Optional[str] = None,
+    force_severity: Optional[str] = None
+) -> ProctoringEvent:
+    """
+    Add a proctoring violation and potentially trigger warnings/suspension.
+    
+    Args:
+        session: Database session
+        interview_session: The interview session
+        event_type: Type of violation (e.g., "gaze_away", "multiple_faces")
+        details: Additional details about the violation
+        force_severity: Override automatic severity determination
+    
+    Returns:
+        The created ProctoringEvent
+    """
+    # Determine severity
+    severity = force_severity or VIOLATION_SEVERITY.get(event_type, "info")
+    
+    # Create proctoring event
+    event = ProctoringEvent(
+        session_id=interview_session.id,
+        event_type=event_type,
+        details=details,
+        severity=severity,
+        triggered_warning=False,
+        timestamp=datetime.utcnow()
+    )
+    
+    # Handle critical violations - immediate suspension
+    if severity == "critical":
+        event.triggered_warning = True
+        interview_session.is_suspended = True
+        interview_session.suspension_reason = f"Critical violation: {event_type}"
+        interview_session.suspended_at = datetime.utcnow()
+        
+        # Record status change to SUSPENDED
+        record_status_change(
+            session=session,
+            interview_session=interview_session,
+            new_status=CandidateStatus.SUSPENDED,
+            metadata={
+                "reason": event_type,
+                "details": details,
+                "auto_suspended": True
+            }
+        )
+        
+        logger.warning(
+            f"Session {interview_session.id} SUSPENDED due to critical violation: {event_type}"
+        )
+    
+    # Handle warning-level violations
+    elif severity == "warning":
+        interview_session.warning_count += 1
+        event.triggered_warning = True
+        
+        logger.info(
+            f"Warning added to session {interview_session.id}. "
+            f"Count: {interview_session.warning_count}/{interview_session.max_warnings}"
+        )
+        
+        # Check if warnings exceeded
+        if interview_session.warning_count >= interview_session.max_warnings:
+            interview_session.is_suspended = True
+            interview_session.suspension_reason = f"Exceeded maximum warnings ({interview_session.max_warnings})"
+            interview_session.suspended_at = datetime.utcnow()
+            
+            # Record status change to SUSPENDED
+            record_status_change(
+                session=session,
+                interview_session=interview_session,
+                new_status=CandidateStatus.SUSPENDED,
+                metadata={
+                    "reason": "max_warnings_exceeded",
+                    "warning_count": interview_session.warning_count,
+                    "last_violation": event_type
+                }
+            )
+            
+            logger.warning(
+                f"Session {interview_session.id} AUTO-SUSPENDED: "
+                f"Exceeded {interview_session.max_warnings} warnings"
+            )
+    
+    session.add(event)
+    session.add(interview_session)
+    session.commit()
+    session.refresh(event)
+    
+    return event
+
+
+def check_and_suspend(
+    session: Session,
+    interview_session: InterviewSession,
+    reason: str
+) -> bool:
+    """
+    Manually suspend an interview session.
+    
+    Args:
+        session: Database session
+        interview_session: The interview session to suspend
+        reason: Reason for suspension
+    
+    Returns:
+        True if suspended successfully, False if already suspended
+    """
+    if interview_session.is_suspended:
+        logger.warning(f"Session {interview_session.id} is already suspended")
+        return False
+    
+    interview_session.is_suspended = True
+    interview_session.suspension_reason = reason
+    interview_session.suspended_at = datetime.utcnow()
+    
+    record_status_change(
+        session=session,
+        interview_session=interview_session,
+        new_status=CandidateStatus.SUSPENDED,
+        metadata={"reason": reason, "manual_suspension": True}
+    )
+    
+    session.add(interview_session)
+    session.commit()
+    
+    logger.info(f"Session {interview_session.id} manually suspended: {reason}")
+    return True
+
+
+def get_status_summary(
+    session: Session,
+    interview_session: InterviewSession
+) -> Dict[str, Any]:
+    """
+    Generate a comprehensive status summary for admin viewing.
+    
+    Args:
+        session: Database session
+        interview_session: The interview session
+    
+    Returns:
+        Dictionary with timeline, warnings, progress, and current status
+    """
+    # Get timeline
+    timeline_stmt = select(StatusTimeline).where(
+        StatusTimeline.session_id == interview_session.id
+    ).order_by(StatusTimeline.timestamp)
+    timeline_entries = session.exec(timeline_stmt).all()
+    
+    # Get violations
+    violations_stmt = select(ProctoringEvent).where(
+        ProctoringEvent.session_id == interview_session.id,
+        ProctoringEvent.triggered_warning == True
+    ).order_by(ProctoringEvent.timestamp)
+    violations = session.exec(violations_stmt).all()
+    
+    # Get progress
+    responses_stmt = select(InterviewResponse).where(
+        InterviewResponse.session_id == interview_session.id
+    )
+    responses = session.exec(responses_stmt).all()
+    
+    total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
+    answered_questions = len(responses)
+    
+    # Get current question (if any)
+    current_question_id = None
+    if answered_questions < total_questions and interview_session.selected_questions:
+        # Next unanswered question
+        answered_ids = {r.question_id for r in responses}
+        for sq in sorted(interview_session.selected_questions, key=lambda x: x.sort_order):
+            if sq.question_id not in answered_ids:
+                current_question_id = sq.question_id
+                break
+    
+    return {
+        "session_id": interview_session.id,
+        "candidate_email": interview_session.candidate.email,
+        "current_status": interview_session.current_status.value if interview_session.current_status else None,
+        "timeline": [
+            {
+                "status": entry.status.value,
+                "timestamp": entry.timestamp.isoformat(),
+                "metadata": json.loads(entry.context_data) if entry.context_data else None
+            }
+            for entry in timeline_entries
+        ],
+        "warnings": {
+            "total_warnings": interview_session.warning_count,
+            "warnings_remaining": max(0, interview_session.max_warnings - interview_session.warning_count),
+            "max_warnings": interview_session.max_warnings,
+            "violations": [
+                {
+                    "type": v.event_type,
+                    "severity": v.severity,
+                    "timestamp": v.timestamp.isoformat(),
+                    "details": v.details
+                }
+                for v in violations
+            ]
+        },
+        "progress": {
+            "questions_answered": answered_questions,
+            "total_questions": total_questions,
+            "current_question_id": current_question_id
+        },
+        "is_suspended": interview_session.is_suspended,
+        "suspension_reason": interview_session.suspension_reason,
+        "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
+        "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None
+    }
+
+
+def update_last_activity(
+    session: Session,
+    interview_session: InterviewSession
+) -> None:
+    """
+    Update the last activity timestamp for a session.
+    
+    Args:
+        session: Database session
+        interview_session: The interview session
+    """
+    interview_session.last_activity = datetime.utcnow()
+    session.add(interview_session)
+    session.commit()
