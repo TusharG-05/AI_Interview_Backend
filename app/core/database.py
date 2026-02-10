@@ -3,14 +3,15 @@ from typing import Generator
 from .config import DATABASE_URL
 
 # Configure connection args based on database type
+engine_args = {}
+connect_args = {}
+
 if "sqlite" in DATABASE_URL:
     connect_args = {"check_same_thread": False}
 elif "postgresql" in DATABASE_URL:
-    connect_args = {"pool_pre_ping": True}
-else:
-    connect_args = {}
+    engine_args = {"pool_pre_ping": True}
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+engine = create_engine(DATABASE_URL, connect_args=connect_args, **engine_args)
 
 def init_db():
     from ..models.db_models import (
