@@ -84,6 +84,8 @@ class ProctoringLogItem(BaseModel):
     type: str
     time: str
     details: Optional[str] = None
+    severity: Optional[str] = "info"
+    triggered_warning: bool = False
 
 class ResponseDetail(BaseModel):
     question: str
