@@ -11,6 +11,7 @@ from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
 from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
+from ..schemas.api_response import ApiResponse
 import os
 import shutil
 import uuid
@@ -23,17 +24,22 @@ email_service = EmailService()
 
 # --- Question Paper & Question Management ---
 
-@router.get("/papers", response_model=List[PaperRead])
+@router.get("/papers", response_model=ApiResponse[List[PaperRead]])
 async def list_papers(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """List all question papers created by the admin."""
     papers = session.exec(select(QuestionPaper).where(QuestionPaper.admin_id == current_user.id)).all()
-    return [PaperRead(
+    papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
         question_count=len(p.questions), created_at=p.created_at.isoformat()
     ) for p in papers]
+    return ApiResponse(
+        status_code=200,
+        data=papers_data,
+        message="Question papers retrieved successfully"
+    )
 
 class PaperCreate(BaseModel):
     name: str
@@ -41,7 +47,7 @@ class PaperCreate(BaseModel):
 
 
 
-@router.post("/papers", response_model=PaperRead)
+@router.post("/papers", response_model=ApiResponse[PaperRead])
 async def create_paper(
     paper_data: PaperCreate,
     current_user: User = Depends(get_admin_user),
@@ -56,9 +62,14 @@ async def create_paper(
     session.add(new_paper)
     session.commit()
     session.refresh(new_paper)
-    return PaperRead(id=new_paper.id, name=new_paper.name, description=new_paper.description, question_count=0, created_at=new_paper.created_at.isoformat())
+    paper_read = PaperRead(id=new_paper.id, name=new_paper.name, description=new_paper.description, question_count=0, created_at=new_paper.created_at.isoformat())
+    return ApiResponse(
+        status_code=201,
+        data=paper_read,
+        message="Question paper created successfully"
+    )
 
-@router.get("/papers/{paper_id}", response_model=PaperRead)
+@router.get("/papers/{paper_id}", response_model=ApiResponse[PaperRead])
 async def get_paper(
     paper_id: int,
     current_user: User = Depends(get_admin_user),
@@ -68,14 +79,19 @@ async def get_paper(
     paper = session.get(QuestionPaper, paper_id)
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
-    return PaperRead(
+    paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions), created_at=paper.created_at.isoformat()
     )
+    return ApiResponse(
+        status_code=200,
+        data=paper_read,
+        message="Question paper retrieved successfully"
+    )
 
-@router.patch("/papers/{paper_id}", response_model=PaperRead)
+@router.patch("/papers/{paper_id}", response_model=ApiResponse[PaperRead])
 async def update_paper(
-    paper_id: int,
+    paper_id:int,
     paper_update: PaperUpdate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
@@ -92,12 +108,17 @@ async def update_paper(
     session.add(paper)
     session.commit()
     session.refresh(paper)
-    return PaperRead(
+    paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions), created_at=paper.created_at.isoformat()
     )
+    return ApiResponse(
+        status_code=200,
+        data=paper_read,
+        message="Question paper updated successfully"
+    )
 
-@router.delete("/papers/{paper_id}")
+@router.delete("/papers/{paper_id}", response_model=ApiResponse[dict])
 async def delete_paper(
     paper_id: int,
     current_user: User = Depends(get_admin_user),
@@ -110,9 +131,13 @@ async def delete_paper(
     
     session.delete(paper)
     session.commit()
-    return {"message": "Paper and all associated questions deleted"}
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Paper and all associated questions deleted successfully"
+    )
 
-@router.get("/papers/{paper_id}/questions", response_model=List[Questions])
+@router.get("/papers/{paper_id}/questions", response_model=ApiResponse[List[Questions]])
 async def get_paper_questions(
     paper_id: int,
     current_user: User = Depends(get_admin_user),
@@ -122,9 +147,13 @@ async def get_paper_questions(
     paper = session.get(QuestionPaper, paper_id)
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
-    return paper.questions
+    return ApiResponse(
+        status_code=200,
+        data=paper.questions,
+        message="Paper questions retrieved successfully"
+    )
 
-@router.post("/papers/{paper_id}/questions", response_model=Questions)
+@router.post("/papers/{paper_id}/questions", response_model=ApiResponse[Questions])
 async def add_question_to_paper(
     paper_id: int,
     q_data: QuestionCreate,
@@ -148,9 +177,13 @@ async def add_question_to_paper(
     session.add(new_q)
     session.commit()
     session.refresh(new_q)
-    return new_q
+    return ApiResponse(
+        status_code=201,
+        data=new_q,
+        message="Question added to paper successfully"
+    )
 
-@router.post("/upload-doc")
+@router.post("/upload-doc", response_model=ApiResponse[dict])
 async def upload_document(
     paper_id: int,
     file: UploadFile = File(...), 
@@ -195,11 +228,15 @@ async def upload_document(
             )
             session.add(q)
         session.commit()
-        return {"message": f"Successfully extracted and added {len(extracted_data)} questions to paper {paper_id if paper_id else 'General'}"}
+        return ApiResponse(
+            status_code=200,
+            data={"questions_count": len(extracted_data)},
+            message=f"Successfully extracted and added {len(extracted_data)} questions to paper"
+        )
     finally:
         if os.path.exists(file_path): os.remove(file_path)
 
-@router.delete("/questions/{q_id}")
+@router.delete("/questions/{q_id}", response_model=ApiResponse[dict])
 async def delete_question(
     q_id: int, 
     current_user: User = Depends(get_admin_user),
@@ -209,9 +246,13 @@ async def delete_question(
     if not q: raise HTTPException(status_code=404, detail="Question not found")
     session.delete(q)
     session.commit()
-    return {"message": "Question deleted"}
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Question deleted successfully"
+    )
 
-@router.get("/questions", response_model=List[Questions])
+@router.get("/questions", response_model=ApiResponse[List[Questions]])
 async def list_all_questions(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
@@ -224,9 +265,13 @@ async def list_all_questions(
         .where((QuestionPaper.admin_id == current_user.id) | (Questions.paper_id == None))
     )
     questions = session.exec(stmt).all()
-    return questions
+    return ApiResponse(
+        status_code=200,
+        data=questions,
+        message="Questions retrieved successfully"
+    )
 
-@router.get("/questions/{q_id}", response_model=Questions)
+@router.get("/questions/{q_id}", response_model=ApiResponse[Questions])
 async def get_question(
     q_id: int,
     current_user: User = Depends(get_admin_user),
@@ -239,9 +284,13 @@ async def get_question(
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
     if q.paper and q.paper.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
-    return q
+    return ApiResponse(
+        status_code=200,
+        data=q,
+        message="Question retrieved successfully"
+    )
 
-@router.patch("/questions/{q_id}", response_model=Questions)
+@router.patch("/questions/{q_id}", response_model=ApiResponse[Questions])
 async def update_question(
     q_id: int,
     q_update: QuestionUpdate,
@@ -266,11 +315,15 @@ async def update_question(
     session.add(q)
     session.commit()
     session.refresh(q)
-    return q
+    return ApiResponse(
+        status_code=200,
+        data=q,
+        message="Question updated successfully"
+    )
 
 # --- Interview Scheduling ---
 
-@router.post("/interviews/schedule", response_model=InterviewLinkResponse)
+@router.post("/interviews/schedule", response_model=ApiResponse[InterviewLinkResponse])
 async def schedule_interview(
     schedule_data: InterviewScheduleCreate, 
     current_user: User = Depends(get_admin_user), 
@@ -377,15 +430,20 @@ async def schedule_interview(
     
     warning = None if success else "Email failed to send. Check server logs for mock link."
     
-    return InterviewLinkResponse(
+    link_response = InterviewLinkResponse(
         session_id=new_session.id,
         access_token=new_session.access_token,
         link=link,
         scheduled_at=new_session.schedule_time.isoformat(),
         warning=warning
     )
+    return ApiResponse(
+        status_code=201,
+        data=link_response,
+        message="Interview scheduled successfully"
+    )
 
-@router.get("/interviews", response_model=List[SessionRead])
+@router.get("/interviews", response_model=ApiResponse[List[SessionRead]])
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
     # Find sessions where admin_id matches current user
@@ -404,9 +462,13 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             scheduled_at=s.schedule_time.isoformat(),
             score=s.total_score
         ))
-    return results
+    return ApiResponse(
+        status_code=200,
+        data=results,
+        message="Interviews retrieved successfully"
+    )
 
-@router.get("/interviews/live-status", response_model=List[LiveStatusItem])
+@router.get("/interviews/live-status", response_model=ApiResponse[List[LiveStatusItem]])
 async def get_live_status_dashboard(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
@@ -452,10 +514,14 @@ async def get_live_status_dashboard(
             progress_percent=round(progress_percent, 1)
         ))
     
-    return results
+    return ApiResponse(
+        status_code=200,
+        data=results,
+        message="Live interview status retrieved successfully"
+    )
 
 
-@router.get("/interviews/{session_id}", response_model=InterviewDetailRead)
+@router.get("/interviews/{session_id}", response_model=ApiResponse[InterviewDetailRead])
 async def get_interview(
     session_id: int,
     current_user: User = Depends(get_admin_user),
@@ -476,7 +542,7 @@ async def get_interview(
         )
     
     # Build detailed response
-    return InterviewDetailRead(
+    detail_read = InterviewDetailRead(
         id=interview_session.id,
         candidate_id=interview_session.candidate_id,
         candidate_name=interview_session.candidate.full_name if interview_session.candidate else "Unknown",
@@ -494,8 +560,13 @@ async def get_interview(
         proctoring_event_count=len(interview_session.proctoring_events),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
+    return ApiResponse(
+        status_code=200,
+        data=detail_read,
+        message="Interview details retrieved successfully"
+    )
 
-@router.patch("/interviews/{session_id}", response_model=InterviewDetailRead)
+@router.patch("/interviews/{session_id}", response_model=ApiResponse[InterviewDetailRead])
 async def update_interview(
     session_id: int,
     update_data: InterviewUpdate,
@@ -604,7 +675,7 @@ async def update_interview(
     session.refresh(interview_session)
     
     # Return updated interview details
-    return InterviewDetailRead(
+    detail_read = InterviewDetailRead(
         id=interview_session.id,
         candidate_id=interview_session.candidate_id,
         candidate_name=interview_session.candidate.full_name if interview_session.candidate else "Unknown",
@@ -622,8 +693,13 @@ async def update_interview(
         proctoring_event_count=len(interview_session.proctoring_events),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
+    return ApiResponse(
+        status_code=200,
+        data=detail_read,
+        message="Interview session updated successfully"
+    )
 
-@router.delete("/interviews/{session_id}")
+@router.delete("/interviews/{session_id}", response_model=ApiResponse[dict])
 async def delete_interview(
     session_id: int,
     current_user: User = Depends(get_admin_user),
@@ -649,23 +725,30 @@ async def delete_interview(
     session.add(interview_session)
     session.commit()
     
-    return {
-        "message": "Interview session cancelled successfully",
-        "session_id": session_id,
-        "candidate": interview_session.candidate.full_name if interview_session.candidate else "Unknown",
-        "scheduled_time": interview_session.schedule_time.isoformat()
-    }
+    return ApiResponse(
+        status_code=200,
+        data={
+            "session_id": session_id,
+            "candidate": interview_session.candidate.full_name if interview_session.candidate else "Unknown",
+            "scheduled_time": interview_session.schedule_time.isoformat()
+        },
+        message="Interview session cancelled successfully"
+    )
 
-@router.get("/candidates", response_model=List[UserRead])
+@router.get("/candidates", response_model=ApiResponse[List[UserRead]])
 async def list_candidates(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List all users with CANDIDATE role."""
     candidates = session.exec(select(User).where(User.role == UserRole.CANDIDATE)).all()
-    return candidates
+    return ApiResponse(
+        status_code=200,
+        data=candidates,
+        message="Candidates retrieved successfully"
+    )
 
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=List[DetailedResult])
+@router.get("/users/results", response_model=ApiResponse[List[DetailedResult]])
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
     # Only show sessions created by this admin
@@ -709,9 +792,13 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
                 details=e.details
             ) for e in proctoring]
         ))
-    return results
+    return ApiResponse(
+        status_code=200,
+        data=results,
+        message="All results retrieved successfully"
+    )
 
-@router.get("/results/{session_id}", response_model=DetailedResult)
+@router.get("/results/{session_id}", response_model=ApiResponse[DetailedResult])
 async def get_result(
     session_id: int,
     current_user: User = Depends(get_admin_user),
@@ -755,21 +842,25 @@ async def get_result(
             audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
         ))
     
-    return DetailedResult(
-        session_id=interview_session.id,
-        candidate=interview_session.candidate.full_name if interview_session.candidate else (interview_session.candidate_name or "Unknown"),
-        date=interview_session.schedule_time.strftime("%Y-%m-%d %H:%M"),
-        score=f"{round(avg_score * 100, 1)}%",
-        flags=len(proctoring) > 0,
-        details=details,
-        proctoring_logs=[ProctoringLogItem(
-            type=e.event_type,
-            time=e.timestamp.strftime("%H:%M:%S"),
-            details=e.details
-        ) for e in proctoring]
+    return ApiResponse(
+        status_code=200,
+        data=DetailedResult(
+            session_id=interview_session.id,
+            candidate=interview_session.candidate.full_name if interview_session.candidate else (interview_session.candidate_name or "Unknown"),
+            date=interview_session.schedule_time.strftime("%Y-%m-%d %H:%M"),
+            score=f"{round(avg_score * 100, 1)}%",
+            flags=len(proctoring) > 0,
+            details=details,
+            proctoring_logs=[ProctoringLogItem(
+                type=e.event_type,
+                time=e.timestamp.strftime("%H:%M:%S"),
+                details=e.details
+            ) for e in proctoring]
+        ),
+        message="Result details retrieved successfully"
     )
 
-@router.patch("/results/{session_id}", response_model=DetailedResult)
+@router.patch("/results/{session_id}", response_model=ApiResponse[DetailedResult])
 async def update_result(
     session_id: int,
     update_data: ResultUpdate,
@@ -847,9 +938,14 @@ async def update_result(
     session.refresh(interview_session)
     
     # Return updated result using GET logic
-    return await get_result(session_id, current_user, session)
+    updated_result = await get_result(session_id, current_user, session)
+    return ApiResponse(
+        status_code=200,
+        data=updated_result.data,
+        message="Result updated successfully"
+    )
 
-@router.delete("/results/{session_id}")
+@router.delete("/results/{session_id}", response_model=ApiResponse[dict])
 async def delete_result(
     session_id: int,
     current_user: User = Depends(get_admin_user),
@@ -869,7 +965,11 @@ async def delete_result(
     session.add(interview_session)
     session.commit()
     
-    return {"message": "Results deleted, interview session preserved."}
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Results deleted, interview session preserved"
+    )
 
 @router.get("/results/audio/{response_id}")
 async def get_response_audio(
@@ -921,7 +1021,7 @@ async def get_enrollment_audio(
 
 
 
-@router.post("/users", response_model=UserRead)
+@router.post("/users", response_model=ApiResponse[UserRead])
 async def create_user(
     user_data: UserCreate,
     current_user: User = Depends(get_admin_user),
@@ -949,18 +1049,27 @@ async def create_user(
     session.commit()
     session.refresh(new_user)
     
-    return UserRead(
-        id=new_user.id,
-        email=new_user.email,
-        full_name=new_user.full_name,
-        role=new_user.role.value
+    return ApiResponse(
+        status_code=201,
+        data=UserRead(
+            id=new_user.id,
+            email=new_user.email,
+            full_name=new_user.full_name,
+            role=new_user.role.value
+        ),
+        message="User created successfully"
     )
 
-@router.get("/users", response_model=List[UserRead])
+@router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    return [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
+    users = [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
+    return ApiResponse(
+        status_code=200,
+        data=users,
+        message="Users retrieved successfully"
+    )
 
-@router.get("/users/{user_id}", response_model=UserDetailRead)
+@router.get("/users/{user_id}", response_model=ApiResponse[UserDetailRead])
 async def get_user(
     user_id: int,
     current_user: User = Depends(get_admin_user),
@@ -982,21 +1091,25 @@ async def get_user(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
     ).all()
     
-    return UserDetailRead(
-        id=user.id,
-        email=user.email,
-        full_name=user.full_name,
-        role=user.role.value,
-        is_active=user.is_active,
-        resume_text=user.resume_text,
-        has_profile_image=user.profile_image_bytes is not None,
-        has_face_embedding=user.face_embedding is not None,
-        created_interviews_count=len(created_interviews),
-        participated_interviews_count=len(participated_interviews),
-        profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
+    return ApiResponse(
+        status_code=200,
+        data=UserDetailRead(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role.value,
+            is_active=user.is_active,
+            resume_text=user.resume_text,
+            has_profile_image=user.profile_image_bytes is not None,
+            has_face_embedding=user.face_embedding is not None,
+            created_interviews_count=len(created_interviews),
+            participated_interviews_count=len(participated_interviews),
+            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
+        ),
+        message="User details retrieved successfully"
     )
 
-@router.patch("/users/{user_id}", response_model=UserDetailRead)
+@router.patch("/users/{user_id}", response_model=ApiResponse[UserDetailRead])
 async def update_user(
     user_id: int,
     update_data: UserUpdate,
@@ -1078,21 +1191,25 @@ async def update_user(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
     ).all()
     
-    return UserDetailRead(
-        id=user.id,
-        email=user.email,
-        full_name=user.full_name,
-        role=user.role.value,
-        is_active=user.is_active,
-        resume_text=user.resume_text,
-        has_profile_image=user.profile_image_bytes is not None,
-        has_face_embedding=user.face_embedding is not None,
-        created_interviews_count=len(created_interviews),
-        participated_interviews_count=len(participated_interviews),
-        profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
+    return ApiResponse(
+        status_code=200,
+        data=UserDetailRead(
+            id=user.id,
+            email=user.email,
+            full_name=user.full_name,
+            role=user.role.value,
+            is_active=user.is_active,
+            resume_text=user.resume_text,
+            has_profile_image=user.profile_image_bytes is not None,
+            has_face_embedding=user.face_embedding is not None,
+            created_interviews_count=len(created_interviews),
+            participated_interviews_count=len(participated_interviews),
+            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
+        ),
+        message="User updated successfully"
     )
 
-@router.delete("/users/{user_id}")
+@router.delete("/users/{user_id}", response_model=ApiResponse[dict])
 async def delete_user(
     user_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1128,14 +1245,17 @@ async def delete_user(
     session.add(user)
     session.commit()
     
-    return {
-        "message": "User deactivated successfully",
-        "user_id": user_id,
-        "email": user.email,
-        "full_name": user.full_name
-    }
+    return ApiResponse(
+        status_code=200,
+        data={
+            "user_id": user_id,
+            "email": user.email,
+            "full_name": user.full_name
+        },
+        message="User deactivated successfully"
+    )
 
-@router.post("/shutdown")
+@router.post("/shutdown", response_model=ApiResponse[dict])
 def shutdown(current_user: User = Depends(get_admin_user)):
     """Graceful shutdown trigger."""
     if current_user.role != UserRole.SUPER_ADMIN: raise HTTPException(status_code=403)
@@ -1143,12 +1263,16 @@ def shutdown(current_user: User = Depends(get_admin_user)):
     # Graceful shutdown for Uvicorn
     import signal
     os.kill(os.getpid(), signal.SIGTERM) # SIGTERM allows cleaning up
-    return {"message": "Server shutting down..."}
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Server shutting down..."
+    )
 
 # --- Candidate Status Tracking ---
 
 
-@router.get("/interviews/{session_id}/status", response_model=CandidateStatusResponse)
+@router.get("/interviews/{session_id}/status", response_model=ApiResponse[CandidateStatusResponse])
 async def get_candidate_status(
     session_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1182,5 +1306,9 @@ async def get_candidate_status(
     # Generate comprehensive status summary
     status_data = get_status_summary(session, interview_session)
     
-    return CandidateStatusResponse(**status_data)
+    return ApiResponse(
+        status_code=200,
+        data=CandidateStatusResponse(**status_data),
+        message="Candidate status retrieved successfully"
+    )
 

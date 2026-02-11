@@ -98,12 +98,16 @@ async def login_for_access_token(
         "expires_at": (datetime.utcnow() + access_token_expires).isoformat()
     }
 
-@router.post("/logout")
+@router.post("/logout", response_model=ApiResponse[dict])
 async def logout(response: Response):
     """Clears the authentication cookie."""
     from ..core.config import ENV
     response.delete_cookie(key="access_token", samesite="lax", secure=(ENV == "production"))
-    return {"message": "Logged out successfully"}
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Logged out successfully"
+    )
 
 @router.post("/register", response_model=ApiResponse[Token])
 async def register(
@@ -166,8 +170,12 @@ async def register(
         message="User registered successfully"
     )
 
-@router.get("/me", response_model=UserRead)
+@router.get("/me", response_model=ApiResponse[UserRead])
 async def read_users_me(current_user: User = Depends(get_current_user)):
     """Get current logged in user details."""
-    return current_user
+    return ApiResponse(
+        status_code=200,
+        data=current_user,
+        message="User profile retrieved successfully"
+    )
 
