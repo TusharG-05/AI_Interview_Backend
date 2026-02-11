@@ -5,7 +5,7 @@ Provides consistent response format across all endpoints.
 """
 
 from typing import TypeVar, Generic, Optional, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 T = TypeVar('T')
 
@@ -17,16 +17,13 @@ class ApiResponse(BaseModel, Generic[T]):
     Example:
         {
             "status_code": 200,
-            "data": {
-                "access_token": "...",
-                "email": "user@example.com"
-            },
-            "message": "Login successful"
+            "data": { ... },
+            "message": "Success"
         }
     """
-    status_code: int
+    status_code: int = Field(default=200)
     data: T
-    message: str
+    message: str = Field(default="Success")
 
 
 class ApiErrorResponse(BaseModel):
@@ -41,5 +38,5 @@ class ApiErrorResponse(BaseModel):
         }
     """
     status_code: int
-    data: Optional[Any] = None
-    message: str
+    data: Optional[Any] = Field(default=None)
+    message: str = Field(default="Error")
