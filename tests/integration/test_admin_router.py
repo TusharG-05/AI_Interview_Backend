@@ -26,7 +26,10 @@ def test_get_users_as_admin(client, session, admin_user):
     response = client.get("/api/admin/users")
     
     assert response.status_code == 200
-    data = response.json()
+    json_response = response.json()
+    assert "data" in json_response
+    data = json_response["data"]
+    
     assert len(data) >= 1
     assert data[0]["email"] == "admin@test.com"
     
