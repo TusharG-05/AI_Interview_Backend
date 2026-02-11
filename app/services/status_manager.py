@@ -11,6 +11,7 @@ This service handles:
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from sqlmodel import Session, select
+from ..schemas.user_schemas import serialize_user
 from ..models.db_models import (
     InterviewSession, 
     StatusTimeline, 
@@ -59,7 +60,7 @@ def record_status_change(
     """
     # Create timeline entry
     timeline_entry = StatusTimeline(
-        session_id=interview_session.id,
+        interview_id=interview_session.id,
         status=new_status,
         timestamp=datetime.now(timezone.utc),
         context_data=json.dumps(metadata) if metadata else None
@@ -107,7 +108,7 @@ def add_violation(
     
     # Create proctoring event
     event = ProctoringEvent(
-        session_id=interview_session.id,
+        interview_id=interview_session.id,
         event_type=event_type,
         details=details,
         severity=severity,
@@ -233,20 +234,20 @@ def get_status_summary(
     """
     # Get timeline
     timeline_stmt = select(StatusTimeline).where(
-        StatusTimeline.session_id == interview_session.id
+        StatusTimeline.interview_id == interview_session.id
     ).order_by(StatusTimeline.timestamp)
     timeline_entries = session.exec(timeline_stmt).all()
     
     # Get violations
     violations_stmt = select(ProctoringEvent).where(
-        ProctoringEvent.session_id == interview_session.id,
+        ProctoringEvent.interview_id == interview_session.id,
         ProctoringEvent.triggered_warning == True
     ).order_by(ProctoringEvent.timestamp)
     violations = session.exec(violations_stmt).all()
     
     # Get progress
     responses_stmt = select(InterviewResponse).where(
-        InterviewResponse.session_id == interview_session.id
+        InterviewResponse.interview_id == interview_session.id
     )
     responses = session.exec(responses_stmt).all()
     
@@ -263,9 +264,13 @@ def get_status_summary(
                 current_question_id = sq.question_id
                 break
     
+    
+    # Serialize candidate with role-based key
+    candidate_dict = serialize_user(interview_session.candidate)
+    
     return {
-        "session_id": interview_session.id,
-        "candidate_email": interview_session.candidate.email,
+        "interview_id": interview_session.id,
+        "candidate": candidate_dict,
         "current_status": interview_session.current_status.value if interview_session.current_status else None,
         "timeline": [
             {
