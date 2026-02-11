@@ -4,7 +4,9 @@ from ..core.config import local_llm
 import os
 import asyncio
 
-router = APIRouter(prefix="/status", tags=["System"])
+from ..utils.response_helpers import StandardizedRoute
+
+router = APIRouter(prefix="/settings", tags=["Settings"], route_class=StandardizedRoute)
 camera_service = CameraService()
 
 class ConnectionManager:

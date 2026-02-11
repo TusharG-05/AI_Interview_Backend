@@ -64,22 +64,32 @@ async def lifespan(app: FastAPI):
     engine.dispose()
     logger.info("Application Shutdown Complete.")
 
+from .utils.response_helpers import StandardizedRoute
+
 app = FastAPI(
     title="AI Interview Platform API",
     description="High-performance JSON API for AI-driven face/gaze detection and automated interviews.",
     version="2.0.0",
     lifespan=lifespan,
 )
+app.router.route_class = StandardizedRoute
 
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
 
+from .schemas.api_response import ApiErrorResponse
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global Exception: {exc}", exc_info=True)
+    error_content = ApiErrorResponse(
+        status_code=500,
+        message="Internal Server Error",
+        data={"path": request.url.path}
+    )
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal Server Error", "path": request.url.path}
+        content=error_content.model_dump()
     )
 
 from fastapi.middleware.cors import CORSMiddleware

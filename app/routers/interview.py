@@ -17,7 +17,9 @@ from datetime import datetime, timedelta
 from pydub import AudioSegment
 import logging
 
-router = APIRouter(prefix="/interview", tags=["Interview"])
+from ..utils.response_helpers import StandardizedRoute
+
+router = APIRouter(prefix="/interview", tags=["Interview"], route_class=StandardizedRoute)
 logger = logging.getLogger(__name__)
 audio_service = AudioService()
 

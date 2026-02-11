@@ -6,7 +6,9 @@ from ..core.database import get_db as get_session
 import random
 from ..models.db_models import User, InterviewSession, InterviewResponse, SessionQuestion, QuestionPaper, Questions
 
-router = APIRouter(prefix="/candidate", tags=["Candidate"])
+from ..utils.response_helpers import StandardizedRoute
+
+router = APIRouter(prefix="/candidate", tags=["Candidate"], route_class=StandardizedRoute)
 
 from ..schemas.requests import UserUpdate
 from ..schemas.responses import HistoryItem
