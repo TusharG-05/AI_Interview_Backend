@@ -13,7 +13,7 @@ from ..schemas.api_response import ApiResponse
 from pydantic import BaseModel
 import os
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from pydub import AudioSegment
 import logging
@@ -37,7 +37,7 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
         
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     # 1. Status Check
     if session.status in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
@@ -126,7 +126,7 @@ async def start_session_logic(
     # Update Status
     if session.status == InterviewStatus.SCHEDULED:
         session.status = InterviewStatus.LIVE
-        session.start_time = datetime.utcnow()
+        session.start_time = datetime.now(timezone.utc)
     
     warning = None
     try:
@@ -342,7 +342,7 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
     interview_session = session_db.get(InterviewSession, session_id)
     if not interview_session: raise HTTPException(status_code=404)
     
-    interview_session.end_time = datetime.utcnow()
+    interview_session.end_time = datetime.now(timezone.utc)
     interview_session.is_completed = True
     interview_session.status = InterviewStatus.COMPLETED
     
@@ -351,7 +351,7 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
         session=session_db,
         interview_session=interview_session,
         new_status=CandidateStatus.INTERVIEW_COMPLETED,
-        metadata={"completed_at": datetime.utcnow().isoformat()}
+        metadata={"completed_at": datetime.now(timezone.utc).isoformat()}
     )
     
     session_db.add(interview_session)

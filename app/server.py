@@ -28,10 +28,15 @@ async def lifespan(app: FastAPI):
     init_db()
     
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
-    import torchaudio
-    if not hasattr(torchaudio, "list_audio_backends"):
-        logger.warning("Monkey Patching torchaudio.list_audio_backends for SpeechBrain")
-        torchaudio.list_audio_backends = lambda: ["soundfile"]
+    try:
+        import torchaudio
+        if not hasattr(torchaudio, "list_audio_backends"):
+            logger.warning("Monkey Patching torchaudio.list_audio_backends for SpeechBrain")
+            torchaudio.list_audio_backends = lambda: ["soundfile"]
+    except ImportError:
+        logger.warning("Torchaudio not found. Skipping monkey patch.")
+    except Exception as e:
+        logger.warning(f"Failed to apply torchaudio monkey patch: {e}")
 
     # These imports are now safe since init_db() already finished
     from .services.camera import CameraService
