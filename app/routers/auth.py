@@ -1,4 +1,4 @@
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
@@ -48,7 +48,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     )
     
     set_auth_cookie(response, token)
-    expire_time = datetime.utcnow() + access_token_expires
+    expire_time = datetime.now(timezone.utc) + access_token_expires
     
     token_data = {
         "access_token": token, 
@@ -90,10 +90,11 @@ async def login_for_access_token(
     return {
         "access_token": token, 
         "token_type": "bearer",
+        "id": user.id,
         "role": user.role,
         "email": user.email,
         "full_name": user.full_name,
-        "expires_at": (datetime.utcnow() + access_token_expires).isoformat()
+        "expires_at": (datetime.now(timezone.utc) + access_token_expires).isoformat()
     }
 
 @router.post("/logout", response_model=ApiResponse[dict])
@@ -150,7 +151,7 @@ async def register(
     )
     
     set_auth_cookie(response, token)
-    expire_time = datetime.utcnow() + access_token_expires
+    expire_time = datetime.now(timezone.utc) + access_token_expires
     
     token_data = {
         "access_token": token, 
