@@ -2,6 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from ..services.camera import CameraService
+from ..schemas.api_response import ApiResponse
 import time
 import asyncio
 import json
@@ -50,7 +51,7 @@ pcs = set()
 # Global registry for active sessions: {session_id: {"pc": pc, "track": video_track}}
 active_sessions = {}
 
-@router.post("/video/offer")
+@router.post("/video/offer", response_model=ApiResponse[dict])
 async def offer(params: Offer):
     """
     Candidate Connection (Proctoring Source). 
@@ -100,16 +101,24 @@ async def offer(params: Offer):
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    return ApiResponse(
+        status_code=200,
+        data={"sdp": pc.localDescription.sdp, "type": pc.localDescription.type},
+        message="WebRTC offer processed successfully"
+    )
 
-@router.post("/video/watch/{target_session_id}")
+@router.post("/video/watch/{target_session_id}", response_model=ApiResponse[dict])
 async def watch(target_session_id: int, params: Offer):
     """
     Admin Ghost Mode: Watch an active session.
     """
     if target_session_id not in active_sessions or not active_sessions[target_session_id]["track"]:
         # Session not active or no video yet: Admin waits
-        return {"status": "WAITING_FOR_CANDIDATE", "message": "Admin Ghost Mode initialized. Waiting for candidate stream..."}
+        return ApiResponse(
+            status_code=200,
+            data={"status": "WAITING_FOR_CANDIDATE"},
+            message="Admin Ghost Mode initialized. Waiting for candidate stream..."
+        )
 
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     pc = RTCPeerConnection()
@@ -136,7 +145,11 @@ async def watch(target_session_id: int, params: Offer):
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
-    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+    return ApiResponse(
+        status_code=200,
+        data={"sdp": pc.localDescription.sdp, "type": pc.localDescription.type},
+        message="Admin watch session established successfully"
+    )
 
 # Shutdown hook to close PCs? 
 # In a real app, you'd want to close these on shutdown.

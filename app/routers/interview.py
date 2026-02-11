@@ -9,6 +9,7 @@ from ..services import interview as interview_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
 from ..schemas.responses import InterviewAccessResponse
+from ..schemas.api_response import ApiResponse
 from pydantic import BaseModel
 import os
 import uuid
@@ -27,7 +28,7 @@ class TTSRange(BaseModel):
 
 
 
-@router.get("/access/{token}", response_model=InterviewAccessResponse)
+@router.get("/access/{token}", response_model=ApiResponse[InterviewAccessResponse])
 async def access_interview(token: str, session_db: Session = Depends(get_session)):
     """
     Validates the interview link and checks time constraints.
@@ -45,11 +46,16 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     # 2. Start Time Check
     if now < session.schedule_time:
         # Too early
-        return InterviewAccessResponse(
+        access_data = InterviewAccessResponse(
             session_id=session.id,
             message="WAIT",
             schedule_time=session.schedule_time.isoformat(),
             duration_minutes=session.duration_minutes
+        )
+        return ApiResponse(
+            status_code=200,
+            data=access_data,
+            message="Interview not yet started. Please wait."
         )
         
     # 3. Expiration Check
@@ -73,15 +79,20 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
         )
     
     # 5. Success - Allow Entry
-    return InterviewAccessResponse(
-            session_id=session.id,
-            message="START",
-            schedule_time=session.schedule_time.isoformat(),
-            duration_minutes=session.duration_minutes
+    access_data = InterviewAccessResponse(
+        session_id=session.id,
+        message="START",
+        schedule_time=session.schedule_time.isoformat(),
+        duration_minutes=session.duration_minutes
+    )
+    return ApiResponse(
+        status_code=200,
+        data=access_data,
+        message="Interview access granted"
     )
 
 
-@router.post("/start-session/{session_id}")
+@router.post("/start-session/{session_id}", response_model=ApiResponse[dict])
 async def start_session_logic(
     session_id: int,
     enrollment_audio: UploadFile = File(None),
@@ -145,9 +156,13 @@ async def start_session_logic(
         session_db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to start interview: {str(e)}")
         
-    return {"session_id": session.id, "status": "LIVE", "warning": warning}
+    return ApiResponse(
+        status_code=200,
+        data={"session_id": session.id, "status": "LIVE", "warning": warning},
+        message="Interview session started successfully"
+    )
 
-@router.get("/next-question/{session_id}")
+@router.get("/next-question/{session_id}", response_model=ApiResponse[dict])
 async def get_next_question(session_id: int, session_db: Session = Depends(get_session)):
     from ..services.status_manager import record_status_change, update_last_activity
     from ..models.db_models import CandidateStatus
@@ -211,7 +226,12 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
                  .where(~Questions.id.in_(answered_ids))
              ).first()
     
-    if not question: return {"status": "finished"}
+    if not question:
+        return ApiResponse(
+            status_code=200,
+            data={"status": "finished"},
+            message="All questions completed"
+        )
     
     os.makedirs("app/assets/audio/questions", exist_ok=True)
     audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
@@ -227,14 +247,18 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
     elif session_obj and session_obj.paper_id:
         total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
     
-    return {
-        "question_id": question.id,
-        "text": question.question_text or question.content,
-        "audio_url": f"/interview/audio/question/{question.id}",
-        "response_type": question.response_type,
-        "question_index": question_index,
-        "total_questions": total_questions
-    }
+    return ApiResponse(
+        status_code=200,
+        data={
+            "question_id": question.id,
+            "text": question.question_text or question.content,
+            "audio_url": f"/interview/audio/question/{question.id}",
+            "response_type": question.response_type,
+            "question_index": question_index,
+            "total_questions": total_questions
+        },
+        message="Next question retrieved successfully"
+    )
 
 @router.get("/audio/question/{q_id}")
 async def stream_question_audio(q_id: int):
@@ -242,7 +266,7 @@ async def stream_question_audio(q_id: int):
     if not os.path.exists(audio_path): raise HTTPException(status_code=404)
     return FileResponse(audio_path, media_type="audio/mpeg")
 
-@router.post("/submit-answer-audio")
+@router.post("/submit-answer-audio", response_model=ApiResponse[dict])
 async def submit_answer_audio(
     session_id: int = Form(...),
     question_id: int = Form(...),
@@ -274,9 +298,13 @@ async def submit_answer_audio(
     update_last_activity(session_db, session_obj)
     
     session_db.commit()
-    return {"status": "saved"}
+    return ApiResponse(
+        status_code=200,
+        data={"status": "saved"},
+        message="Audio answer submitted successfully"
+    )
 
-@router.post("/submit-answer-text")
+@router.post("/submit-answer-text", response_model=ApiResponse[dict])
 async def submit_answer_text(
     session_id: int = Form(...),
     question_id: int = Form(...),
@@ -299,10 +327,14 @@ async def submit_answer_text(
     )
     session_db.add(response)
     session_db.commit()
-    return {"status": "saved"}
+    return ApiResponse(
+        status_code=200,
+        data={"status": "saved"},
+        message="Text answer submitted successfully"
+    )
 
 
-@router.post("/finish/{session_id}")
+@router.post("/finish/{session_id}", response_model=ApiResponse[dict])
 async def finish_interview(session_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session)):
     from ..services.status_manager import record_status_change
     from ..models.db_models import CandidateStatus
@@ -326,11 +358,15 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
     session_db.commit()
     
     background_tasks.add_task(process_session_results_unified, session_id)
-    return {"status": "finished", "message": "Results are being processed by AI."}
+    return ApiResponse(
+        status_code=200,
+        data={"status": "finished"},
+        message="Interview finished. Results are being processed."
+    )
 
 # --- AI & Resume Specific ---
 
-@router.post("/evaluate-answer")
+@router.post("/evaluate-answer", response_model=ApiResponse[dict])
 async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: Session = Depends(get_session)):
     interview_session = session_db.get(InterviewSession, session_id)
     if not interview_session: raise HTTPException(status_code=404)
@@ -352,7 +388,11 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
         
         # ATOMIC COMMIT: Both Question (if new) and Response are saved together
         session_db.commit()
-        return evaluation
+        return ApiResponse(
+            status_code=200,
+            data=evaluation,
+            message="Answer evaluated successfully"
+        )
     except Exception as e:
         session_db.rollback()
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
@@ -421,7 +461,7 @@ async def process_session_results_unified(session_id: int):
 
 # --- Standalone Tools ---
 
-@router.post("/tools/speech-to-text")
+@router.post("/tools/speech-to-text", response_model=ApiResponse[dict])
 async def speech_to_text_tool(audio: UploadFile = File(...)):
     """
     Public standalone tool to convert speech to text.
@@ -446,7 +486,11 @@ async def speech_to_text_tool(audio: UploadFile = File(...)):
         if os.path.exists(temp_path):
             os.remove(temp_path)
             
-        return {"text": text}
+        return ApiResponse(
+            status_code=200,
+            data={"text": text},
+            message="Speech converted to text successfully"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
 

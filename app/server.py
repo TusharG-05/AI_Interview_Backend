@@ -96,10 +96,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/status/")
-async def get_status():
-    """Simple healthcheck endpoint."""
-    return {"status": "online", "mode": "API-Only"}
+# (Redundant endpoint removed. Use settings.router instead)
 
 # Lazy include routers to ensure AI models (imported within routers) 
 # don't conflict with database initialization logic.

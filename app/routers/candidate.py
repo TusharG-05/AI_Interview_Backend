@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 import random
 from ..models.db_models import User, InterviewSession, InterviewResponse, SessionQuestion, QuestionPaper, Questions
+from ..schemas.api_response import ApiResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
 
@@ -15,7 +16,7 @@ from datetime import datetime
 
 
 
-@router.get("/history", response_model=List[HistoryItem])
+@router.get("/history", response_model=ApiResponse[List[HistoryItem]])
 async def my_history(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
@@ -34,13 +35,17 @@ async def my_history(
             date=s.start_time.strftime("%Y-%m-%d %H:%M") if s.start_time else "Scheduled",
             score=s.total_score
         ))
-    return history
+    return ApiResponse(
+        status_code=200,
+        data=history,
+        message="Interview history retrieved successfully"
+    )
 
 import shutil
 import os
 from fastapi import UploadFile, File
 
-@router.post("/upload-selfie")
+@router.post("/upload-selfie", response_model=ApiResponse[dict])
 async def upload_selfie(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
@@ -98,11 +103,14 @@ async def upload_selfie(
     session.commit()
     session.refresh(current_user)
     
-    return {
-        "message": "Selfie uploaded and identity verified (DB Sync)", 
-        "user_id": current_user.id,
-        "profile_image_url": f"/api/candidate/profile-image/{current_user.id}"
-    }
+    return ApiResponse(
+        status_code=200,
+        data={
+            "user_id": current_user.id,
+            "profile_image_url": f"/api/candidate/profile-image/{current_user.id}"
+        },
+        message="Selfie uploaded and identity verified successfully"
+    )
 
 @router.get("/profile-image/{user_id}")
 async def get_profile_image(user_id: int, session: Session = Depends(get_session)):
