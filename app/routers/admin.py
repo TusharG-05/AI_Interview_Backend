@@ -17,7 +17,9 @@ import uuid
 import secrets
 from datetime import datetime, timedelta
 
-router = APIRouter(prefix="/admin", tags=["Admin"])
+from ..utils.response_helpers import StandardizedRoute
+
+router = APIRouter(prefix="/admin", tags=["Admin"], route_class=StandardizedRoute)
 nlp_service = NLPService()
 email_service = EmailService()
 

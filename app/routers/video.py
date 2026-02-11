@@ -7,7 +7,9 @@ import asyncio
 import json
 from ..core.logger import get_logger
 
-router = APIRouter(tags=["Video"])
+from ..utils.response_helpers import StandardizedRoute
+
+router = APIRouter(prefix="/analyze", tags=["Gaze & Face Analysis"], route_class=StandardizedRoute)
 camera_service = CameraService()
 
 def frame_generator(session_id: int):

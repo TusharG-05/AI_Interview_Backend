@@ -1,10 +1,14 @@
 import sys
 import os
+from dotenv import load_dotenv
+
+# Ensure we can import from the app directory
 sys.path.append(os.getcwd())
 
-from auth.security import create_access_token, verify_password, get_password_hash
+load_dotenv()
+
+from app.auth.security import create_access_token
 from jose import jwt, JWTError
-from datetime import timedelta
 
 def test_token_logic():
     print("Testing Token Generation...")
@@ -13,7 +17,11 @@ def test_token_logic():
     token = create_access_token(data)
     print(f"Generated Token: {token[:20]}...")
     
-    secret = os.getenv("SECRET_KEY", "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7")
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        print("Error: SECRET_KEY not found in environment")
+        return
+        
     algorithm = "HS256"
     
     try:

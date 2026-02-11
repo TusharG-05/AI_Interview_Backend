@@ -13,13 +13,13 @@ from ..auth.security import (
 from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token, UserRead
 from ..schemas.api_response import ApiResponse
-from ..utils.response_helpers import success_response
+from ..utils.response_helpers import StandardizedRoute
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
 from ..models.db_models import User, UserRole
 from ..auth.security import verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
-router = APIRouter(prefix="/auth", tags=["Authentication"])
+router = APIRouter(prefix="/auth", tags=["Authentication"], route_class=StandardizedRoute)
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
@@ -62,11 +62,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "expires_at": expire_time.isoformat()
     }
     
-    return ApiResponse(
-        status_code=200,
-        data=token_data,
-        message="Login successfully"
-    )
+    return token_data
 
 @router.post("/token", response_model=Token)
 async def login_for_access_token(
@@ -160,11 +156,7 @@ async def register(
         "expires_at": expire_time.isoformat()
     }
     
-    return ApiResponse(
-        status_code=201,
-        data=token_data,
-        message="User registered successfully"
-    )
+    return token_data
 
 @router.get("/me", response_model=UserRead)
 async def read_users_me(current_user: User = Depends(get_current_user)):
