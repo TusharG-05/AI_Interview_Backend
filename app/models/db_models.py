@@ -118,7 +118,7 @@ class InterviewSession(SQLModel, table=True):
 class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     question_id: int = Field(foreign_key="questions.id")
     sort_order: int = Field(default=0)
     
@@ -127,7 +127,7 @@ class SessionQuestion(SQLModel, table=True):
 
 class ProctoringEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     event_type: str 
     details: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -141,7 +141,7 @@ class ProctoringEvent(SQLModel, table=True):
 class StatusTimeline(SQLModel, table=True):
     """Tracks status changes throughout the interview lifecycle"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     status: CandidateStatus
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     context_data: Optional[str] = None  # JSON string for additional context (renamed from metadata)
@@ -150,7 +150,7 @@ class StatusTimeline(SQLModel, table=True):
 
 class InterviewResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     question_id: int = Field(foreign_key="questions.id")
     
     # Legacy fields

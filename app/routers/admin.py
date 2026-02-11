@@ -12,6 +12,7 @@ from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
 from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
 from ..schemas.api_response import ApiResponse
+from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
 import shutil
 import uuid
@@ -406,7 +407,7 @@ async def schedule_interview(
     # Create SessionQuestion records with sort order
     for idx, question in enumerate(selected_questions):
         session_question = SessionQuestion(
-            session_id=new_session.id,
+            interview_id=new_session.id,
             question_id=question.id,
             sort_order=idx
         )
@@ -430,8 +431,14 @@ async def schedule_interview(
     
     warning = None if success else "Email failed to send. Check server logs for mock link."
     
+    # Serialize users with role-based keys
+    admin_dict = serialize_user(current_user)  # {"admin": {...}}
+    candidate_dict = serialize_user(candidate)  # {"candidate": {...}}
+    
     link_response = InterviewLinkResponse(
-        session_id=new_session.id,
+        interview_id=new_session.id,
+        admin=admin_dict,
+        candidate=candidate_dict,
         access_token=new_session.access_token,
         link=link,
         scheduled_at=new_session.schedule_time.isoformat(),
@@ -455,9 +462,12 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
     
     results = []
     for s in sessions:
+        # Serialize candidate
+        candidate_dict = serialize_user(s.candidate)
+        
         results.append(SessionRead(
             id=s.id,
-            candidate_name=s.candidate.full_name if s.candidate else "Unknown",
+            candidate=candidate_dict,
             status=s.status.value,
             scheduled_at=s.schedule_time.isoformat(),
             score=s.total_score
@@ -503,9 +513,12 @@ async def get_live_status_dashboard(
         answered_questions = len(interview_session.responses)
         progress_percent = (answered_questions / total_questions * 100) if total_questions > 0 else 0
         
+        # Serialize candidate
+        candidate_dict = serialize_user(interview_session.candidate)
+        
         results.append(LiveStatusItem(
-            session_id=interview_session.id,
-            candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+            interview_id=interview_session.id,
+            candidate=candidate_dict,
             current_status=interview_session.current_status.value if interview_session.current_status else None,
             warning_count=interview_session.warning_count,
             warnings_remaining=max(0, interview_session.max_warnings - interview_session.warning_count),
@@ -521,15 +534,15 @@ async def get_live_status_dashboard(
     )
 
 
-@router.get("/interviews/{session_id}", response_model=ApiResponse[InterviewDetailRead])
+@router.get("/interviews/{interview_id}", response_model=ApiResponse[InterviewDetailRead])
 async def get_interview(
-    session_id: int,
+    interview_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Get detailed information about a specific interview session."""
     # Retrieve the interview session
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -541,12 +554,15 @@ async def get_interview(
             detail="Not authorized to access this interview session"
         )
     
+    # Serialize users with role-based keys
+    admin_dict = serialize_user(interview_session.admin)
+    candidate_dict = serialize_user(interview_session.candidate)
+    
     # Build detailed response
     detail_read = InterviewDetailRead(
         id=interview_session.id,
-        candidate_id=interview_session.candidate_id,
-        candidate_name=interview_session.candidate.full_name if interview_session.candidate else "Unknown",
-        candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+        admin=admin_dict,
+        candidate=candidate_dict,
         paper_id=interview_session.paper_id,
         paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
         schedule_time=interview_session.schedule_time.isoformat(),
@@ -566,16 +582,16 @@ async def get_interview(
         message="Interview details retrieved successfully"
     )
 
-@router.patch("/interviews/{session_id}", response_model=ApiResponse[InterviewDetailRead])
+@router.patch("/interviews/{interview_id}", response_model=ApiResponse[InterviewDetailRead])
 async def update_interview(
-    session_id: int,
+    interview_id: int,
     update_data: InterviewUpdate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Update interview session details (schedule_time, duration, status, paper)."""
     # Retrieve the interview session
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -645,7 +661,7 @@ async def update_interview(
         
         # Delete existing SessionQuestion records
         existing_session_questions = session.exec(
-            select(SessionQuestion).where(SessionQuestion.session_id == session_id)
+            select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)
         ).all()
         
         for sq in existing_session_questions:
@@ -660,7 +676,7 @@ async def update_interview(
         # Create new SessionQuestion records
         for idx, question in enumerate(selected_questions):
             session_question = SessionQuestion(
-                session_id=session_id,
+                interview_id=interview_id,
                 question_id=question.id,
                 sort_order=idx
             )
@@ -675,11 +691,13 @@ async def update_interview(
     session.refresh(interview_session)
     
     # Return updated interview details
+    admin_dict = serialize_user(interview_session.admin)
+    candidate_dict = serialize_user(interview_session.candidate)
+    
     detail_read = InterviewDetailRead(
         id=interview_session.id,
-        candidate_id=interview_session.candidate_id,
-        candidate_name=interview_session.candidate.full_name if interview_session.candidate else "Unknown",
-        candidate_email=interview_session.candidate.email if interview_session.candidate else "Unknown",
+        admin=admin_dict,
+        candidate=candidate_dict,
         paper_id=interview_session.paper_id,
         paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
         schedule_time=interview_session.schedule_time.isoformat(),
@@ -699,15 +717,15 @@ async def update_interview(
         message="Interview session updated successfully"
     )
 
-@router.delete("/interviews/{session_id}", response_model=ApiResponse[dict])
+@router.delete("/interviews/{interview_id}", response_model=ApiResponse[dict])
 async def delete_interview(
-    session_id: int,
+    interview_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Cancel/delete an interview session (soft delete by setting status to CANCELLED)."""
     # Retrieve the interview session
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -725,11 +743,14 @@ async def delete_interview(
     session.add(interview_session)
     session.commit()
     
+    # Serialize candidate for response
+    candidate_dict = serialize_user(interview_session.candidate)
+    
     return ApiResponse(
         status_code=200,
         data={
-            "session_id": session_id,
-            "candidate": interview_session.candidate.full_name if interview_session.candidate else "Unknown",
+            "interview_id": interview_id,
+            "candidate": candidate_dict,
             "scheduled_time": interview_session.schedule_time.isoformat()
         },
         message="Interview session cancelled successfully"
@@ -779,9 +800,12 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
                 audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
             ))
 
+        # Serialize candidate
+        candidate_dict = serialize_user(s.candidate)
+
         results.append(DetailedResult(
-            session_id=s.id,
-            candidate=s.candidate.full_name if s.candidate else (s.candidate_name or "Unknown"),
+            interview_id=s.id,
+            candidate=candidate_dict,
             date=s.schedule_time.strftime("%Y-%m-%d %H:%M"),
             score=f"{round(avg_score * 100, 1)}%",
             flags=len(proctoring) > 0,
@@ -798,15 +822,15 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All results retrieved successfully"
     )
 
-@router.get("/results/{session_id}", response_model=ApiResponse[DetailedResult])
+@router.get("/results/{interview_id}", response_model=ApiResponse[DetailedResult])
 async def get_result(
-    session_id: int,
+    interview_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Get detailed result for a specific interview session."""
     # Get the interview session
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -842,11 +866,15 @@ async def get_result(
             audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
         ))
     
+    
+    # Serialize candidate with role-based key
+    candidate_dict = serialize_user(interview_session.candidate)
+    
     return ApiResponse(
         status_code=200,
         data=DetailedResult(
-            session_id=interview_session.id,
-            candidate=interview_session.candidate.full_name if interview_session.candidate else (interview_session.candidate_name or "Unknown"),
+            interview_id=interview_session.id,
+            candidate=candidate_dict,
             date=interview_session.schedule_time.strftime("%Y-%m-%d %H:%M"),
             score=f"{round(avg_score * 100, 1)}%",
             flags=len(proctoring) > 0,
@@ -860,16 +888,16 @@ async def get_result(
         message="Result details retrieved successfully"
     )
 
-@router.patch("/results/{session_id}", response_model=ApiResponse[DetailedResult])
+@router.patch("/results/{interview_id}", response_model=ApiResponse[DetailedResult])
 async def update_result(
-    session_id: int,
+    interview_id: int,
     update_data: ResultUpdate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Update result scores and evaluations."""
     # Get the interview session
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -916,10 +944,10 @@ async def update_result(
                 )
             
             # Verify response belongs to this session
-            if interview_response.session_id != session_id:
+            if interview_response.interview_id != interview_id:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Response {response_id} does not belong to session {session_id}"
+                    detail=f"Response {response_id} does not belong to session {interview_id}"
                 )
             
             # Update score if provided
@@ -939,18 +967,18 @@ async def update_result(
     
     # Return updated result using GET logic
     # Return updated result using GET logic
-    updated_result = await get_result(session_id, current_user, session)
+    updated_result = await get_result(interview_id, current_user, session)
     updated_result.message = "Result updated successfully"
     return updated_result
 
-@router.delete("/results/{session_id}", response_model=ApiResponse[dict])
+@router.delete("/results/{interview_id}", response_model=ApiResponse[dict])
 async def delete_result(
-    session_id: int,
+    interview_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Delete all result data for an interview session (hard delete responses, keep session)."""
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     if not interview_session or interview_session.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
@@ -992,14 +1020,14 @@ async def get_response_audio(
         content_disposition_type="inline"
     )
 
-@router.get("/interviews/enrollment-audio/{session_id}")
+@router.get("/interviews/enrollment-audio/{interview_id}")
 async def get_enrollment_audio(
-    session_id: int,
+    interview_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Streams the candidate's enrollment audio for verification."""
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     if not interview_session or not interview_session.enrollment_audio_path:
         raise HTTPException(status_code=404, detail="Enrollment audio not found")
         
@@ -1270,9 +1298,9 @@ def shutdown(current_user: User = Depends(get_admin_user)):
 # --- Candidate Status Tracking ---
 
 
-@router.get("/interviews/{session_id}/status", response_model=ApiResponse[CandidateStatusResponse])
+@router.get("/interviews/{interview_id}/status", response_model=ApiResponse[CandidateStatusResponse])
 async def get_candidate_status(
-    session_id: int,
+    interview_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -1289,7 +1317,7 @@ async def get_candidate_status(
     from ..services.status_manager import get_status_summary
     
     # Get the interview session
-    interview_session = session.get(InterviewSession, session_id)
+    interview_session = session.get(InterviewSession, interview_id)
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
