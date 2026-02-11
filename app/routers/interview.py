@@ -9,6 +9,7 @@ from ..services import interview as interview_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
 from ..schemas.responses import InterviewAccessResponse
+from ..schemas.api_response import ApiResponse
 from pydantic import BaseModel
 import os
 import uuid
@@ -29,7 +30,7 @@ class TTSRange(BaseModel):
 
 
 
-@router.get("/access/{token}", response_model=InterviewAccessResponse)
+@router.get("/access/{token}")
 async def access_interview(token: str, session_db: Session = Depends(get_session)):
     """
     Validates the interview link and checks time constraints.
@@ -47,12 +48,15 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     # 2. Start Time Check
     if now < session.schedule_time:
         # Too early
-        return InterviewAccessResponse(
-            session_id=session.id,
-            message="WAIT",
-            schedule_time=session.schedule_time.isoformat(),
-            duration_minutes=session.duration_minutes
-        )
+        return {
+            "message": "Interview not yet started. Please wait.",
+            "data": InterviewAccessResponse(
+                session_id=session.id,
+                message="WAIT",
+                schedule_time=session.schedule_time.isoformat(),
+                duration_minutes=session.duration_minutes
+            )
+        }
         
     # 3. Expiration Check
     expiration_time = session.schedule_time + timedelta(minutes=session.duration_minutes)
@@ -75,12 +79,15 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
         )
     
     # 5. Success - Allow Entry
-    return InterviewAccessResponse(
+    return {
+        "message": "Interview access granted",
+        "data": InterviewAccessResponse(
             session_id=session.id,
             message="START",
             schedule_time=session.schedule_time.isoformat(),
             duration_minutes=session.duration_minutes
-    )
+        )
+    }
 
 
 @router.post("/start-session/{session_id}")
@@ -147,7 +154,10 @@ async def start_session_logic(
         session_db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to start interview: {str(e)}")
         
-    return {"session_id": session.id, "status": "LIVE", "warning": warning}
+    return {
+        "message": "Interview session started successfully",
+        "data": {"session_id": session.id, "status": "LIVE", "warning": warning}
+    }
 
 @router.get("/next-question/{session_id}")
 async def get_next_question(session_id: int, session_db: Session = Depends(get_session)):
@@ -213,7 +223,11 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
                  .where(~Questions.id.in_(answered_ids))
              ).first()
     
-    if not question: return {"status": "finished"}
+    if not question:
+        return {
+            "message": "All questions completed",
+            "data": {"status": "finished"}
+        }
     
     os.makedirs("app/assets/audio/questions", exist_ok=True)
     audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
@@ -230,12 +244,15 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
         total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
     
     return {
-        "question_id": question.id,
-        "text": question.question_text or question.content,
-        "audio_url": f"/interview/audio/question/{question.id}",
-        "response_type": question.response_type,
-        "question_index": question_index,
-        "total_questions": total_questions
+        "message": "Next question retrieved successfully",
+        "data": {
+            "question_id": question.id,
+            "text": question.question_text or question.content,
+            "audio_url": f"/interview/audio/question/{question.id}",
+            "response_type": question.response_type,
+            "question_index": question_index,
+            "total_questions": total_questions
+        }
     }
 
 @router.get("/audio/question/{q_id}")
@@ -276,7 +293,7 @@ async def submit_answer_audio(
     update_last_activity(session_db, session_obj)
     
     session_db.commit()
-    return {"status": "saved"}
+    return {"message": "Answer submitted successfully", "data": {"status": "saved"}}
 
 @router.post("/submit-answer-text")
 async def submit_answer_text(
@@ -328,7 +345,10 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
     session_db.commit()
     
     background_tasks.add_task(process_session_results_unified, session_id)
-    return {"status": "finished", "message": "Results are being processed by AI."}
+    return {
+        "message": "Interview finished. Results are being processed by AI.",
+        "data": {"status": "finished"}
+    }
 
 # --- AI & Resume Specific ---
 
@@ -354,7 +374,7 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
         
         # ATOMIC COMMIT: Both Question (if new) and Response are saved together
         session_db.commit()
-        return evaluation
+        return {"message": "Answer evaluated successfully", "data": evaluation}
     except Exception as e:
         session_db.rollback()
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
@@ -448,7 +468,7 @@ async def speech_to_text_tool(audio: UploadFile = File(...)):
         if os.path.exists(temp_path):
             os.remove(temp_path)
             
-        return {"text": text}
+        return {"message": "Speech converted to text successfully", "data": {"text": text}}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
 

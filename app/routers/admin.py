@@ -10,7 +10,12 @@ from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
-from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
+from ..schemas.responses import (
+    PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, 
+    ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, 
+    UserDetailRead, CandidateStatusResponse, LiveStatusItem
+)
+from ..schemas.api_response import ApiResponse
 import os
 import shutil
 import uuid
@@ -25,17 +30,18 @@ email_service = EmailService()
 
 # --- Question Paper & Question Management ---
 
-@router.get("/papers", response_model=List[PaperRead])
+@router.get("/papers")
 async def list_papers(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """List all question papers created by the admin."""
     papers = session.exec(select(QuestionPaper).where(QuestionPaper.admin_id == current_user.id)).all()
-    return [PaperRead(
+    papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
         question_count=len(p.questions), created_at=p.created_at.isoformat()
     ) for p in papers]
+    return {"message": "Question papers retrieved successfully", "data": papers_data}
 
 class PaperCreate(BaseModel):
     name: str
@@ -43,7 +49,7 @@ class PaperCreate(BaseModel):
 
 
 
-@router.post("/papers", response_model=PaperRead)
+@router.post("/papers")
 async def create_paper(
     paper_data: PaperCreate,
     current_user: User = Depends(get_admin_user),
@@ -58,9 +64,10 @@ async def create_paper(
     session.add(new_paper)
     session.commit()
     session.refresh(new_paper)
-    return PaperRead(id=new_paper.id, name=new_paper.name, description=new_paper.description, question_count=0, created_at=new_paper.created_at.isoformat())
+    paper_read = PaperRead(id=new_paper.id, name=new_paper.name, description=new_paper.description, question_count=0, created_at=new_paper.created_at.isoformat())
+    return {"message": "Question paper created successfully", "data": paper_read}
 
-@router.get("/papers/{paper_id}", response_model=PaperRead)
+@router.get("/papers/{paper_id}")
 async def get_paper(
     paper_id: int,
     current_user: User = Depends(get_admin_user),
@@ -70,12 +77,13 @@ async def get_paper(
     paper = session.get(QuestionPaper, paper_id)
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
-    return PaperRead(
+    paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions), created_at=paper.created_at.isoformat()
     )
+    return {"message": "Question paper retrieved successfully", "data": paper_read}
 
-@router.patch("/papers/{paper_id}", response_model=PaperRead)
+@router.patch("/papers/{paper_id}")
 async def update_paper(
     paper_id: int,
     paper_update: PaperUpdate,
@@ -94,10 +102,11 @@ async def update_paper(
     session.add(paper)
     session.commit()
     session.refresh(paper)
-    return PaperRead(
+    paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions), created_at=paper.created_at.isoformat()
     )
+    return {"message": "Question paper updated successfully", "data": paper_read}
 
 @router.delete("/papers/{paper_id}")
 async def delete_paper(
@@ -112,9 +121,9 @@ async def delete_paper(
     
     session.delete(paper)
     session.commit()
-    return {"message": "Paper and all associated questions deleted"}
+    return {"message": "Paper and all associated questions deleted successfully", "data": {}}
 
-@router.get("/papers/{paper_id}/questions", response_model=List[Questions])
+@router.get("/papers/{paper_id}/questions")
 async def get_paper_questions(
     paper_id: int,
     current_user: User = Depends(get_admin_user),
@@ -124,9 +133,9 @@ async def get_paper_questions(
     paper = session.get(QuestionPaper, paper_id)
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
-    return paper.questions
+    return {"message": "Paper questions retrieved successfully", "data": paper.questions}
 
-@router.post("/papers/{paper_id}/questions", response_model=Questions)
+@router.post("/papers/{paper_id}/questions")
 async def add_question_to_paper(
     paper_id: int,
     q_data: QuestionCreate,
@@ -150,7 +159,7 @@ async def add_question_to_paper(
     session.add(new_q)
     session.commit()
     session.refresh(new_q)
-    return new_q
+    return {"message": "Question added to paper successfully", "data": new_q}
 
 @router.post("/upload-doc")
 async def upload_document(
@@ -211,9 +220,9 @@ async def delete_question(
     if not q: raise HTTPException(status_code=404, detail="Question not found")
     session.delete(q)
     session.commit()
-    return {"message": "Question deleted"}
+    return {"message": "Question deleted successfully", "data": {}}
 
-@router.get("/questions", response_model=List[Questions])
+@router.get("/questions")
 async def list_all_questions(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
@@ -226,9 +235,9 @@ async def list_all_questions(
         .where((QuestionPaper.admin_id == current_user.id) | (Questions.paper_id == None))
     )
     questions = session.exec(stmt).all()
-    return questions
+    return {"message": "Questions retrieved successfully", "data": questions}
 
-@router.get("/questions/{q_id}", response_model=Questions)
+@router.get("/questions/{q_id}")
 async def get_question(
     q_id: int,
     current_user: User = Depends(get_admin_user),
@@ -241,9 +250,9 @@ async def get_question(
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
     if q.paper and q.paper.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
-    return q
+    return {"message": "Question retrieved successfully", "data": q}
 
-@router.patch("/questions/{q_id}", response_model=Questions)
+@router.patch("/questions/{q_id}")
 async def update_question(
     q_id: int,
     q_update: QuestionUpdate,
@@ -268,11 +277,11 @@ async def update_question(
     session.add(q)
     session.commit()
     session.refresh(q)
-    return q
+    return {"message": "Question updated successfully", "data": q}
 
 # --- Interview Scheduling ---
 
-@router.post("/interviews/schedule", response_model=InterviewLinkResponse)
+@router.post("/interviews/schedule")
 async def schedule_interview(
     schedule_data: InterviewScheduleCreate, 
     current_user: User = Depends(get_admin_user), 
@@ -387,7 +396,7 @@ async def schedule_interview(
         warning=warning
     )
 
-@router.get("/interviews", response_model=List[SessionRead])
+@router.get("/interviews")
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
     # Find sessions where admin_id matches current user
@@ -406,9 +415,9 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             scheduled_at=s.schedule_time.isoformat(),
             score=s.total_score
         ))
-    return results
+    return {"message": "Interviews retrieved successfully", "data": results}
 
-@router.get("/interviews/live-status", response_model=List[LiveStatusItem])
+@router.get("/interviews/live-status")
 async def get_live_status_dashboard(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
@@ -457,7 +466,7 @@ async def get_live_status_dashboard(
     return results
 
 
-@router.get("/interviews/{session_id}", response_model=InterviewDetailRead)
+@router.get("/interviews/{session_id}")
 async def get_interview(
     session_id: int,
     current_user: User = Depends(get_admin_user),
@@ -497,7 +506,7 @@ async def get_interview(
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
 
-@router.patch("/interviews/{session_id}", response_model=InterviewDetailRead)
+@router.patch("/interviews/{session_id}")
 async def update_interview(
     session_id: int,
     update_data: InterviewUpdate,
@@ -658,7 +667,7 @@ async def delete_interview(
         "scheduled_time": interview_session.schedule_time.isoformat()
     }
 
-@router.get("/candidates", response_model=List[UserRead])
+@router.get("/candidates")
 async def list_candidates(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List all users with CANDIDATE role."""
     candidates = session.exec(select(User).where(User.role == UserRole.CANDIDATE)).all()
@@ -667,7 +676,7 @@ async def list_candidates(current_user: User = Depends(get_admin_user), session:
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=List[DetailedResult])
+@router.get("/users/results")
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
     # Only show sessions created by this admin
@@ -713,7 +722,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         ))
     return results
 
-@router.get("/results/{session_id}", response_model=DetailedResult)
+@router.get("/results/{session_id}")
 async def get_result(
     session_id: int,
     current_user: User = Depends(get_admin_user),
@@ -771,7 +780,7 @@ async def get_result(
         ) for e in proctoring]
     )
 
-@router.patch("/results/{session_id}", response_model=DetailedResult)
+@router.patch("/results/{session_id}")
 async def update_result(
     session_id: int,
     update_data: ResultUpdate,
@@ -923,7 +932,7 @@ async def get_enrollment_audio(
 
 
 
-@router.post("/users", response_model=UserRead)
+@router.post("/users")
 async def create_user(
     user_data: UserCreate,
     current_user: User = Depends(get_admin_user),
@@ -958,11 +967,11 @@ async def create_user(
         role=new_user.role.value
     )
 
-@router.get("/users", response_model=List[UserRead])
+@router.get("/users")
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     return [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
 
-@router.get("/users/{user_id}", response_model=UserDetailRead)
+@router.get("/users/{user_id}")
 async def get_user(
     user_id: int,
     current_user: User = Depends(get_admin_user),
@@ -998,7 +1007,7 @@ async def get_user(
         profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
     )
 
-@router.patch("/users/{user_id}", response_model=UserDetailRead)
+@router.patch("/users/{user_id}")
 async def update_user(
     user_id: int,
     update_data: UserUpdate,
@@ -1150,7 +1159,7 @@ def shutdown(current_user: User = Depends(get_admin_user)):
 # --- Candidate Status Tracking ---
 
 
-@router.get("/interviews/{session_id}/status", response_model=CandidateStatusResponse)
+@router.get("/interviews/{session_id}/status")
 async def get_candidate_status(
     session_id: int,
     current_user: User = Depends(get_admin_user),

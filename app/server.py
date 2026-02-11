@@ -79,17 +79,42 @@ from fastapi.requests import Request
 
 from .schemas.api_response import ApiErrorResponse
 
+from fastapi import HTTPException
+
+@app.exception_handler(404)
+async def not_found_handler(request: Request, exc: Exception):
+    """Catch global 404 errors (unmatched paths) and wrap them."""
+    return JSONResponse(
+        status_code=404,
+        content=ApiErrorResponse(
+            status_code=404,
+            message="Resource not found",
+            data={"path": request.url.path}
+        ).model_dump()
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Catch other 4xx errors and wrap them."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ApiErrorResponse(
+            status_code=exc.status_code,
+            message=str(exc.detail),
+            data=None
+        ).model_dump()
+    )
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global Exception: {exc}", exc_info=True)
-    error_content = ApiErrorResponse(
-        status_code=500,
-        message="Internal Server Error",
-        data={"path": request.url.path}
-    )
     return JSONResponse(
         status_code=500,
-        content=error_content.model_dump()
+        content=ApiErrorResponse(
+            status_code=500,
+            message="Internal Server Error",
+            data={"path": request.url.path}
+        ).model_dump()
     )
 
 from fastapi.middleware.cors import CORSMiddleware

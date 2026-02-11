@@ -1,9 +1,10 @@
 from datetime import timedelta, datetime
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User
+from ..models.db_models import User, UserRole
 from ..auth.security import (
     verify_password, 
     get_password_hash, 
@@ -14,10 +15,7 @@ from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token, UserRead
 from ..schemas.api_response import ApiResponse
 from ..utils.response_helpers import StandardizedRoute
-from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
-from ..models.db_models import User, UserRole
-from ..auth.security import verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["Authentication"], route_class=StandardizedRoute)
 
@@ -34,7 +32,7 @@ def set_auth_cookie(response: Response, token: str):
         secure=(ENV == "production")  # Only secure in production (HTTPS)
     )
 
-@router.post("/login", response_model=ApiResponse[Token])
+@router.post("/login")
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
     user = session.exec(select(User).where(User.email == login_data.email)).first()
@@ -62,9 +60,9 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "expires_at": expire_time.isoformat()
     }
     
-    return token_data
+    return {"message": "Login successful", "data": token_data}
 
-@router.post("/token", response_model=Token)
+@router.post("/token")
 async def login_for_access_token(
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -88,6 +86,7 @@ async def login_for_access_token(
     return {
         "access_token": token, 
         "token_type": "bearer",
+        "id": user.id,
         "role": user.role,
         "email": user.email,
         "full_name": user.full_name,
@@ -101,7 +100,7 @@ async def logout(response: Response):
     response.delete_cookie(key="access_token", samesite="lax", secure=(ENV == "production"))
     return {"message": "Logged out successfully"}
 
-@router.post("/register", response_model=ApiResponse[Token])
+@router.post("/register")
 async def register(
     response: Response, 
     user_data: UserCreate, 
@@ -156,10 +155,10 @@ async def register(
         "expires_at": expire_time.isoformat()
     }
     
-    return token_data
+    return {"message": "User registered successfully", "data": token_data}
 
-@router.get("/me", response_model=UserRead)
+@router.get("/me")
 async def read_users_me(current_user: User = Depends(get_current_user)):
     """Get current logged in user details."""
-    return current_user
+    return {"message": "User details retrieved successfully", "data": current_user}
 
