@@ -938,12 +938,10 @@ async def update_result(
     session.refresh(interview_session)
     
     # Return updated result using GET logic
+    # Return updated result using GET logic
     updated_result = await get_result(session_id, current_user, session)
-    return ApiResponse(
-        status_code=200,
-        data=updated_result.data,
-        message="Result updated successfully"
-    )
+    updated_result.message = "Result updated successfully"
+    return updated_result
 
 @router.delete("/results/{session_id}", response_model=ApiResponse[dict])
 async def delete_result(

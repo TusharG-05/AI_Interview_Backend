@@ -5,7 +5,7 @@ Provides convenience functions for creating standardized API responses.
 """
 
 from typing import TypeVar
-from app.schemas.api_response import ApiResponse
+from ..schemas.api_response import ApiResponse
 
 T = TypeVar('T')
 
