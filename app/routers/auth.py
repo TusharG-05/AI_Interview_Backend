@@ -13,11 +13,9 @@ from ..auth.security import (
 from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token, UserRead
 from ..schemas.api_response import ApiResponse
-from ..utils.response_helpers import success_response
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
 from ..models.db_models import User, UserRole
-from ..auth.security import verify_password, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
