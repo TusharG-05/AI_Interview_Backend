@@ -542,6 +542,8 @@ async def standalone_tts(text: str, background_tasks: BackgroundTasks):
         # Final safety cleanup
         for p in [temp_mp3, wav_path]:
             if os.path.exists(p): 
-                try: os.remove(p)
-                except: pass
+                try: 
+                    os.remove(p)
+                except Exception as e:
+                    logger.error(f"TTS Cleanup Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")

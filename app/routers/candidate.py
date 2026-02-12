@@ -88,7 +88,9 @@ async def upload_selfie(
                 os.remove(tmp_path)
                 
     except Exception as e:
-        print(f"Embedding generation failed: {e}")
+        from ..core.logger import get_logger
+        logger = get_logger(__name__)
+        logger.error(f"Embedding generation failed: {e}")
         # We still save the bytes even if embedding fails, but log it
         
     # 4. Legacy: Save to disk
@@ -100,8 +102,16 @@ async def upload_selfie(
         
     current_user.profile_image = file_path
     session.add(current_user)
-    session.commit()
-    session.refresh(current_user)
+    
+    try:
+        session.commit()
+        session.refresh(current_user)
+    except Exception as e:
+        session.rollback()
+        from ..core.logger import get_logger
+        logger = get_logger(__name__)
+        logger.error(f"Failed to save profile image: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save profile image")
     
     return ApiResponse(
         status_code=200,

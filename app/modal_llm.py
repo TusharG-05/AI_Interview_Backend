@@ -91,7 +91,11 @@ Candidate's Answer: {answer}<|eot_id|><|start_header_id|>assistant<|end_header_i
 @app.local_entrypoint()
 def main(question: str = "What is a Python decorator?", answer: str = "It's a function that modifies another function."):
     """CLI test: modal run app/modal_llm.py"""
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
     evaluator = LLMEvaluator()
     result = evaluator.evaluate.remote(question, answer)
-    print(f"Feedback: {result['feedback']}")
-    print(f"Score: {result['score']}/10")
+    logger.info(f"Feedback: {result['feedback']}")
+    logger.info(f"Score: {result['score']}/10")
