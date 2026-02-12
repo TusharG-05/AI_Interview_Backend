@@ -142,8 +142,13 @@ async def register(
         role=user_data.role
     )
     session.add(new_user)
-    session.commit()
-    session.refresh(new_user)
+    
+    try:
+        session.commit()
+        session.refresh(new_user)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
@@ -169,12 +174,14 @@ async def register(
         message="User registered successfully"
     )
 
-@router.get("/me", response_model=ApiResponse[UserRead])
+@router.get("/me", response_model=ApiResponse[dict])
 async def read_users_me(current_user: User = Depends(get_current_user)):
     """Get current logged in user details."""
+    from ..schemas.user_schemas import serialize_user
+    
     return ApiResponse(
         status_code=200,
-        data=current_user,
+        data=serialize_user(current_user),
         message="User profile retrieved successfully"
     )
 
