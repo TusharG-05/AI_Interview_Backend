@@ -1126,7 +1126,6 @@ async def get_user(
             email=user.email,
             full_name=user.full_name,
             role=user.role.value,
-            is_active=user.is_active,
             resume_text=user.resume_text,
             has_profile_image=user.profile_image_bytes is not None,
             has_face_embedding=user.face_embedding is not None,
@@ -1185,7 +1184,7 @@ async def update_user(
         if user.role == UserRole.SUPER_ADMIN and new_role != UserRole.SUPER_ADMIN:
             # Count active SUPER_ADMINs
             super_admin_count = session.exec(
-                select(User).where(User.role == UserRole.SUPER_ADMIN, User.is_active == True)
+                select(User).where(User.role == UserRole.SUPER_ADMIN)
             ).all()
             
             if len(super_admin_count) <= 1:
@@ -1226,7 +1225,6 @@ async def update_user(
             email=user.email,
             full_name=user.full_name,
             role=user.role.value,
-            is_active=user.is_active,
             resume_text=user.resume_text,
             has_profile_image=user.profile_image_bytes is not None,
             has_face_embedding=user.face_embedding is not None,

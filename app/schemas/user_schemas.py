@@ -15,7 +15,6 @@ class UserPublic(BaseModel):
     email: str
     full_name: str
     role: str
-    is_active: bool
     profile_image: Optional[str] = None
     
     class Config:
@@ -43,7 +42,6 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
             "email": "deleted@user.com",
             "full_name": fallback_name or "Deleted User",
             "role": fallback_role,
-            "is_active": False,
             "profile_image": None
         }
         return {fallback_role: user_data}
@@ -55,7 +53,6 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
         "email": user.email,
         "full_name": user.full_name,
         "role": role_key,
-        "is_active": user.is_active,
         "profile_image": user.profile_image
     }
     
@@ -79,6 +76,5 @@ def serialize_user_flat(user: User) -> Dict[str, Any]:
         "email": user.email,
         "full_name": user.full_name,
         "role": role_key,
-        "is_active": user.is_active,
         "profile_image": user.profile_image
     }

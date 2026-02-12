@@ -74,7 +74,6 @@ class UserDetailRead(BaseModel):
     email: str
     full_name: str
     role: str
-    is_active: bool
     resume_text: Optional[str] = None
     has_profile_image: bool
     has_face_embedding: bool

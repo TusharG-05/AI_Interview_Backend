@@ -34,7 +34,6 @@ class User(SQLModel, table=True):
     full_name: str
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
-    is_active: bool = Field(default=True)  # Soft delete flag
     resume_text: Optional[str] = Field(default=None)  # Stored extracted text
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
     profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
