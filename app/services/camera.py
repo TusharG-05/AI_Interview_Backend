@@ -36,11 +36,11 @@ class CameraService:
         self.running: bool = False
         self._listeners = []
         
-        # Session Isolation: {session_id: value}
+        # Session Isolation: {interview_id: value}
         self.session_frames: dict[int, bytes] = {}
         self.session_frame_ids: dict[int, int] = {}
         self.session_warnings: dict[int, str] = {}
-        self.session_start_times: dict[int, float] = {} # {session_id: timestamp}
+        self.session_start_times: dict[int, float] = {} # {interview_id: timestamp}
         
         self.frame_lock = threading.Lock()
         self._detectors_ready = False
@@ -89,7 +89,7 @@ class CameraService:
         if self.gaze_detector:
             self.gaze_detector.close()
 
-    def process_frame_ndarray(self, frame: np.ndarray, session_id: int):
+    def process_frame_ndarray(self, frame: np.ndarray, interview_id: int):
         """
         Core logic: Processes a numpy BGR frame (from WS or WebRTC).
         Returns: (annotated_frame, result_dict)
@@ -100,7 +100,7 @@ class CameraService:
             gaze_status = "No Gaze"
             
             if self.face_detector:
-                f_res = self.face_detector.process_frame(frame, session_id)
+                f_res = self.face_detector.process_frame(frame, interview_id)
                 if f_res: face_status = f_res
             
             if self.gaze_detector:
@@ -123,14 +123,14 @@ class CameraService:
             # Update latest frame for MJPEG stream (Isolate by session)
             with self.frame_lock:
                 _, buffer = cv2.imencode('.jpg', frame)
-                self.session_frames[session_id] = buffer.tobytes()
-                self.session_frame_ids[session_id] = self.session_frame_ids.get(session_id, 0) + 1
-                if session_id not in self.session_start_times:
-                    self.session_start_times[session_id] = time.time()
+                self.session_frames[interview_id] = buffer.tobytes()
+                self.session_frame_ids[interview_id] = self.session_frame_ids.get(interview_id, 0) + 1
+                if interview_id not in self.session_start_times:
+                    self.session_start_times[interview_id] = time.time()
 
             # --- PERSIST PROCTORING EVENT (With Grace Period) ---
             GRACE_PERIOD = 30 # Seconds
-            in_grace_period = (time.time() - self.session_start_times.get(session_id, time.time())) < GRACE_PERIOD
+            in_grace_period = (time.time() - self.session_start_times.get(interview_id, time.time())) < GRACE_PERIOD
             
             if warning and not in_grace_period:
                 from ..core.database import engine
@@ -139,19 +139,19 @@ class CameraService:
                 
                 with Session(engine) as db_session:
                     event = ProctoringEvent(
-                        session_id=session_id,
+                        interview_id=interview_id,
                         event_type=warning,
                         details=f"Faces: {n_face}, Auth: {found}, Gaze: {gaze_status}"
                     )
                     db_session.add(event)
                     db_session.commit()
             elif warning and in_grace_period:
-                logger.debug(f"Proctoring: Alert suppressed during grace period for Session {session_id}")
+                logger.debug(f"Proctoring: Alert suppressed during grace period for Session {interview_id}")
 
             # Update state for external status calls (Isolate by session)
-            self.session_warnings[session_id] = warning if warning else "No Issues"
+            self.session_warnings[interview_id] = warning if warning else "No Issues"
             for callback in self._listeners:
-                try: callback(session_id, self.session_warnings[session_id])
+                try: callback(interview_id, self.session_warnings[interview_id])
                 except: pass
 
             result_dict = {
@@ -197,7 +197,7 @@ class CameraService:
         self._monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
         self._monitor_thread.start()
 
-    def process_external_frame(self, image_bytes, session_id: Optional[int] = None):
+    def process_external_frame(self, image_bytes, interview_id: Optional[int] = None):
         """
         Processes a frame received from the client via WebSocket.
         Returns a dict of analysis results.
@@ -213,23 +213,23 @@ class CameraService:
                 return {"warning": "Bad Frame"}
 
             # Delegate to core logic
-            _, result = self.process_frame_ndarray(frame, session_id)
+            _, result = self.process_frame_ndarray(frame, interview_id)
             return result
             
         except Exception as e:
             logger.error(f"Frame Process Error: {e}")
             return {"warning": "Server Error"}
 
-    def get_frame(self, session_id: int) -> Tuple[Optional[bytes], int]:
+    def get_frame(self, interview_id: int) -> Tuple[Optional[bytes], int]:
         """Returns the latest annotated frame and its unique ID for a specific session."""
         with self.frame_lock:
-            return self.session_frames.get(session_id), self.session_frame_ids.get(session_id, 0)
+            return self.session_frames.get(interview_id), self.session_frame_ids.get(interview_id, 0)
 
 
 
     def add_listener(self, callback):
         self._listeners.append(callback)
 
-    def get_current_warning(self, session_id: int):
-        return self.session_warnings.get(session_id, "System Active")
+    def get_current_warning(self, interview_id: int):
+        return self.session_warnings.get(interview_id, "System Active")
 

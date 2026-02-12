@@ -34,7 +34,6 @@ class User(SQLModel, table=True):
     full_name: str
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
-    is_active: bool = Field(default=True)  # Soft delete flag
     resume_text: Optional[str] = Field(default=None)  # Stored extracted text
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
     profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
@@ -47,10 +46,10 @@ class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = None
-    admin_id: int = Field(foreign_key="user.id")
+    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    admin: User = Relationship(back_populates="question_papers")
+    admin: Optional[User] = Relationship(back_populates="question_papers")
     questions: List["Questions"] = Relationship(back_populates="paper")
     sessions: List["InterviewSession"] = Relationship(back_populates="paper")
 
@@ -74,8 +73,8 @@ class InterviewSession(SQLModel, table=True):
     
     # Scheduler Info 
     access_token: str = Field(unique=True, index=True, default_factory=lambda: uuid.uuid4().hex)
-    admin_id: int = Field(foreign_key="user.id")
-    candidate_id: int = Field(foreign_key="user.id")
+    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when admin deleted
+    candidate_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when candidate deleted
     paper_id: int = Field(foreign_key="questionpaper.id")
     
     # Timing
@@ -102,23 +101,25 @@ class InterviewSession(SQLModel, table=True):
     
     # Legacy/Enrollment
     enrollment_audio_path: Optional[str] = None
-    candidate_name: Optional[str] = None # Optional fallback
+    candidate_name: Optional[str] = None # Optional fallback for deleted candidate
+    admin_name: Optional[str] = None  # Preserve admin name when admin is deleted
     is_completed: bool = Field(default=False) 
     
     # Relationships
-    admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
-    candidate: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
+    admin: Optional[User] = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
+    candidate: Optional[User] = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
     paper: QuestionPaper = Relationship(back_populates="sessions")
     
-    responses: List["InterviewResponse"] = Relationship(back_populates="session")
-    proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session")
-    selected_questions: List["SessionQuestion"] = Relationship(back_populates="session")
-    status_timeline: List["StatusTimeline"] = Relationship(back_populates="session")
+    # Cascade delete when interview is deleted (not when user is deleted)
+    responses: List["InterviewResponse"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    selected_questions: List["SessionQuestion"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    status_timeline: List["StatusTimeline"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
 class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     question_id: int = Field(foreign_key="questions.id")
     sort_order: int = Field(default=0)
     
@@ -127,7 +128,7 @@ class SessionQuestion(SQLModel, table=True):
 
 class ProctoringEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     event_type: str 
     details: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -141,7 +142,7 @@ class ProctoringEvent(SQLModel, table=True):
 class StatusTimeline(SQLModel, table=True):
     """Tracks status changes throughout the interview lifecycle"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     status: CandidateStatus
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     context_data: Optional[str] = None  # JSON string for additional context (renamed from metadata)
@@ -150,7 +151,7 @@ class StatusTimeline(SQLModel, table=True):
 
 class InterviewResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    session_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id")
     question_id: int = Field(foreign_key="questions.id")
     
     # Legacy fields
