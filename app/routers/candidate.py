@@ -113,7 +113,11 @@ async def upload_selfie(
     )
 
 @router.get("/profile-image/{user_id}")
-async def get_profile_image(user_id: int, session: Session = Depends(get_session)):
+async def get_profile_image(
+    user_id: int, 
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
     """Streams the user's profile image (selfie) directly to the browser."""
     user = session.get(User, user_id)
     if not user:
