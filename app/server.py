@@ -28,10 +28,15 @@ async def lifespan(app: FastAPI):
     init_db()
     
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
-    import torchaudio
-    if not hasattr(torchaudio, "list_audio_backends"):
-        logger.warning("Monkey Patching torchaudio.list_audio_backends for SpeechBrain")
-        torchaudio.list_audio_backends = lambda: ["soundfile"]
+    try:
+        import torchaudio
+        if not hasattr(torchaudio, "list_audio_backends"):
+            logger.warning("Monkey Patching torchaudio.list_audio_backends for SpeechBrain")
+            torchaudio.list_audio_backends = lambda: ["soundfile"]
+    except ImportError:
+        logger.warning("Torchaudio not found. Skipping monkey patch.")
+    except Exception as e:
+        logger.warning(f"Failed to apply torchaudio monkey patch: {e}")
 
     # These imports are now safe since init_db() already finished
     from .services.camera import CameraService
@@ -64,15 +69,12 @@ async def lifespan(app: FastAPI):
     engine.dispose()
     logger.info("Application Shutdown Complete.")
 
-from .utils.response_helpers import StandardizedRoute
-
 app = FastAPI(
     title="AI Interview Platform API",
     description="High-performance JSON API for AI-driven face/gaze detection and automated interviews.",
     version="2.0.0",
     lifespan=lifespan,
 )
-app.router.route_class = StandardizedRoute
 
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
@@ -131,10 +133,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/status/")
-async def get_status():
-    """Simple healthcheck endpoint."""
-    return {"status": "online", "mode": "API-Only"}
+# (Redundant endpoint removed. Use settings.router instead)
 
 # Lazy include routers to ensure AI models (imported within routers) 
 # don't conflict with database initialization logic.

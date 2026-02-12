@@ -1,10 +1,9 @@
-from datetime import timedelta, datetime
-from typing import Optional
+from datetime import timedelta, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, UserRole
+from ..models.db_models import User
 from ..auth.security import (
     verify_password, 
     get_password_hash, 
@@ -14,10 +13,11 @@ from ..auth.security import (
 from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token, UserRead
 from ..schemas.api_response import ApiResponse
-from ..utils.response_helpers import StandardizedRoute
+from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
+from ..models.db_models import User, UserRole
 
-router = APIRouter(prefix="/auth", tags=["Authentication"], route_class=StandardizedRoute)
+router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
@@ -32,7 +32,7 @@ def set_auth_cookie(response: Response, token: str):
         secure=(ENV == "production")  # Only secure in production (HTTPS)
     )
 
-@router.post("/login")
+@router.post("/login", response_model=ApiResponse[Token])
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
     user = session.exec(select(User).where(User.email == login_data.email)).first()
@@ -48,7 +48,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     )
     
     set_auth_cookie(response, token)
-    expire_time = datetime.utcnow() + access_token_expires
+    expire_time = datetime.now(timezone.utc) + access_token_expires
     
     token_data = {
         "access_token": token, 
@@ -60,9 +60,13 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "expires_at": expire_time.isoformat()
     }
     
-    return {"message": "Login successful", "data": token_data}
+    return ApiResponse(
+        status_code=200,
+        data=token_data,
+        message="Login successfully"
+    )
 
-@router.post("/token")
+@router.post("/token", response_model=Token)
 async def login_for_access_token(
     response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
@@ -90,17 +94,21 @@ async def login_for_access_token(
         "role": user.role,
         "email": user.email,
         "full_name": user.full_name,
-        "expires_at": (datetime.utcnow() + access_token_expires).isoformat()
+        "expires_at": (datetime.now(timezone.utc) + access_token_expires).isoformat()
     }
 
-@router.post("/logout")
+@router.post("/logout", response_model=ApiResponse[dict])
 async def logout(response: Response):
     """Clears the authentication cookie."""
     from ..core.config import ENV
     response.delete_cookie(key="access_token", samesite="lax", secure=(ENV == "production"))
-    return {"message": "Logged out successfully"}
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Logged out successfully"
+    )
 
-@router.post("/register")
+@router.post("/register", response_model=ApiResponse[Token])
 async def register(
     response: Response, 
     user_data: UserCreate, 
@@ -143,7 +151,7 @@ async def register(
     )
     
     set_auth_cookie(response, token)
-    expire_time = datetime.utcnow() + access_token_expires
+    expire_time = datetime.now(timezone.utc) + access_token_expires
     
     token_data = {
         "access_token": token, 
@@ -155,10 +163,18 @@ async def register(
         "expires_at": expire_time.isoformat()
     }
     
-    return {"message": "User registered successfully", "data": token_data}
+    return ApiResponse(
+        status_code=201,
+        data=token_data,
+        message="User registered successfully"
+    )
 
-@router.get("/me")
+@router.get("/me", response_model=ApiResponse[UserRead])
 async def read_users_me(current_user: User = Depends(get_current_user)):
     """Get current logged in user details."""
-    return {"message": "User details retrieved successfully", "data": current_user}
+    return ApiResponse(
+        status_code=200,
+        data=current_user,
+        message="User profile retrieved successfully"
+    )
 

@@ -26,7 +26,8 @@ local_llm = ChatOllama(
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     # Fallback to local sqlite for dev ONLY if explicitly requested, otherwise fail or default to postgres service
-    DATABASE_URL = "postgresql://postgres:postgres@postgres:5432/interview_db"
+    # Default to localhost for non-docker environments
+    DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/interview_db"
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
