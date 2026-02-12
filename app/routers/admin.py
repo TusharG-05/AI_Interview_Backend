@@ -61,8 +61,12 @@ async def create_paper(
         admin_id=current_user.id
     )
     session.add(new_paper)
-    session.commit()
-    session.refresh(new_paper)
+    try:
+        session.commit()
+        session.refresh(new_paper)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create paper: {str(e)}")
     paper_read = PaperRead(id=new_paper.id, name=new_paper.name, description=new_paper.description, question_count=0, created_at=new_paper.created_at.isoformat())
     return ApiResponse(
         status_code=201,
@@ -107,8 +111,12 @@ async def update_paper(
         setattr(paper, key, value)
     
     session.add(paper)
-    session.commit()
-    session.refresh(paper)
+    try:
+        session.commit()
+        session.refresh(paper)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update paper: {str(e)}")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions), created_at=paper.created_at.isoformat()
@@ -131,7 +139,11 @@ async def delete_paper(
         raise HTTPException(status_code=404, detail="Paper not found")
     
     session.delete(paper)
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete paper: {str(e)}")
     return ApiResponse(
         status_code=200,
         data={},
@@ -176,8 +188,12 @@ async def add_question_to_paper(
         response_type=q_data.response_type
     )
     session.add(new_q)
-    session.commit()
-    session.refresh(new_q)
+    try:
+        session.commit()
+        session.refresh(new_q)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create question: {str(e)}")
     return ApiResponse(
         status_code=201,
         data=new_q,
@@ -228,7 +244,11 @@ async def upload_document(
                 response_type="audio" # Default for extracted
             )
             session.add(q)
-        session.commit()
+        try:
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=500, detail=f"Failed to upload questions: {str(e)}")
         return ApiResponse(
             status_code=200,
             data={"questions_count": len(extracted_data)},
@@ -246,7 +266,11 @@ async def delete_question(
     q = session.get(Questions, q_id)
     if not q: raise HTTPException(status_code=404, detail="Question not found")
     session.delete(q)
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete question: {str(e)}")
     return ApiResponse(
         status_code=200,
         data={},
@@ -314,8 +338,12 @@ async def update_question(
         setattr(q, key, value)
     
     session.add(q)
-    session.commit()
-    session.refresh(q)
+    try:
+        session.commit()
+        session.refresh(q)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update question: {str(e)}")
     return ApiResponse(
         status_code=200,
         data=q,
@@ -357,8 +385,12 @@ async def schedule_interview(
     )
     
     session.add(new_session)
-    session.commit()
-    session.refresh(new_session)
+    try:
+        session.commit()
+        session.refresh(new_session)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to schedule interview: {str(e)}")
     
     # Track initial status - INVITED
     from ..services.status_manager import record_status_change
@@ -413,7 +445,11 @@ async def schedule_interview(
         )
         session.add(session_question)
     
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
     
     # Generate Link
     # Note: host needs to be configurable in real prod, assume localhost:8000 for now or passed in env
@@ -690,8 +726,12 @@ async def update_interview(
         setattr(interview_session, key, value)
     
     session.add(interview_session)
-    session.commit()
-    session.refresh(interview_session)
+    try:
+        session.commit()
+        session.refresh(interview_session)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update interview: {str(e)}")
     
     # Return updated interview details
     admin_dict = serialize_user(interview_session.admin, fallback_name=interview_session.admin_name, fallback_role="admin")
@@ -746,7 +786,11 @@ async def delete_interview(
     
     # Hard delete: this will cascade to responses, proctoring_events, selected_questions, status_timeline
     session.delete(interview_session)
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete interview: {str(e)}")
     
     return ApiResponse(
         status_code=200,
@@ -758,13 +802,15 @@ async def delete_interview(
         message="Interview session and all related data deleted successfully"
     )
 
-@router.get("/candidates", response_model=ApiResponse[List[UserRead]])
+@router.get("/candidates", response_model=ApiResponse[List[dict]])
 async def list_candidates(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List all users with CANDIDATE role."""
+    from ..schemas.user_schemas import serialize_user
+    
     candidates = session.exec(select(User).where(User.role == UserRole.CANDIDATE)).all()
     return ApiResponse(
         status_code=200,
-        data=candidates,
+        data=[serialize_user(c) for c in candidates],
         message="Candidates retrieved successfully"
     )
 
@@ -964,8 +1010,12 @@ async def update_result(
     
     # Save changes
     session.add(interview_session)
-    session.commit()
-    session.refresh(interview_session)
+    try:
+        session.commit()
+        session.refresh(interview_session)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update proctor settings: {str(e)}")
     
     # Return updated result using GET logic
     # Return updated result using GET logic
@@ -991,7 +1041,11 @@ async def delete_result(
     
     interview_session.total_score = None
     session.add(interview_session)
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to reset evaluation: {str(e)}")
     
     return ApiResponse(
         status_code=200,
@@ -1074,8 +1128,12 @@ async def create_user(
         role=user_data.role
     )
     session.add(new_user)
-    session.commit()
-    session.refresh(new_user)
+    try:
+        session.commit()
+        session.refresh(new_user)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
     
     return ApiResponse(
         status_code=201,
@@ -1207,8 +1265,12 @@ async def update_user(
         setattr(user, key, value)
     
     session.add(user)
-    session.commit()
-    session.refresh(user)
+    try:
+        session.commit()
+        session.refresh(user)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
     
     # Return updated user details
     created_interviews = session.exec(
@@ -1299,7 +1361,11 @@ async def delete_user(
     
     # Hard delete: user is permanently removed, but related data is preserved
     session.delete(user)
-    session.commit()
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
     
     return ApiResponse(
         status_code=200,

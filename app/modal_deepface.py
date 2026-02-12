@@ -140,12 +140,16 @@ def verify_embeddings(embedding1: list, embedding2: list, threshold: float = 0.4
 @app.local_entrypoint()
 def main(image_path: str = "test_face.jpg"):
     """CLI test: modal run app/modal_deepface.py --image-path face.jpg"""
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
     with open(image_path, "rb") as f:
         image_bytes = f.read()
     
     result = get_embedding.remote(image_bytes)
     
     if result["success"]:
-        print(f"Embedding extracted! Length: {len(result['embedding'])}")
+        logger.info(f"Embedding extracted! Length: {len(result['embedding'])}")
     else:
-        print(f"Failed: {result.get('error', 'Unknown error')}")
+        logger.error(f"Failed: {result.get('error', 'Unknown error')}")

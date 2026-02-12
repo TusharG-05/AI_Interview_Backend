@@ -78,10 +78,14 @@ def transcribe(audio_bytes: bytes, model_size: str = "base.en") -> dict:
 @app.local_entrypoint()
 def main(audio_path: str = "test.wav"):
     """CLI entrypoint for testing: modal run app/modal_whisper.py --audio-path audio.wav"""
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
     with open(audio_path, "rb") as f:
         audio_bytes = f.read()
     
     result = transcribe.remote(audio_bytes)
-    print(f"Transcription: {result['text']}")
-    print(f"Language: {result['language']}")
-    print(f"Duration: {result['duration']:.2f}s")
+    logger.info(f"Transcription: {result['text']}")
+    logger.info(f"Language: {result['language']}")
+    logger.info(f"Duration: {result['duration']:.2f}s")

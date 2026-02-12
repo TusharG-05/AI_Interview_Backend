@@ -151,8 +151,10 @@ class CameraService:
             # Update state for external status calls (Isolate by session)
             self.session_warnings[interview_id] = warning if warning else "No Issues"
             for callback in self._listeners:
-                try: callback(interview_id, self.session_warnings[interview_id])
-                except: pass
+                try: 
+                    callback(interview_id, self.session_warnings[interview_id])
+                except Exception as e:
+                    logger.warning(f"Listener callback failed: {e}")
 
             result_dict = {
                 "auth": bool(found),
