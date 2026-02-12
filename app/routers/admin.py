@@ -453,20 +453,23 @@ async def schedule_interview(
 @router.get("/interviews", response_model=ApiResponse[List[SessionRead]])
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
-    # Find sessions where admin_id matches current user
+    # Only show sessions created by this admin (including those where admin is NULL)
     sessions = session.exec(
-        select(InterviewSession)
-        .where(InterviewSession.admin_id == current_user.id)
-        .order_by(InterviewSession.schedule_time.desc())
+        select(InterviewSession).where(
+            (InterviewSession.admin_id == current_user.id) | 
+            (InterviewSession.admin_id == None)
+        )
     ).all()
     
     results = []
     for s in sessions:
-        # Serialize candidate
-        candidate_dict = serialize_user(s.candidate)
+        # Serialize users with role-based keys, handling NULL users
+        admin_dict = serialize_user(s.admin, fallback_name=s.admin_name, fallback_role="admin")
+        candidate_dict = serialize_user(s.candidate, fallback_name=s.candidate_name, fallback_role="candidate")
         
         results.append(SessionRead(
             id=s.id,
+            admin=admin_dict,
             candidate=candidate_dict,
             status=s.status.value,
             scheduled_at=s.schedule_time.isoformat(),
@@ -547,16 +550,16 @@ async def get_interview(
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    # Authorization: verify the session belongs to the requesting admin
-    if interview_session.admin_id != current_user.id:
+    # Authorization: verify the session belongs to the requesting admin (handle NULL admin_id)
+    if interview_session.admin_id and interview_session.admin_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="Not authorized to access this interview session"
         )
     
-    # Serialize users with role-based keys
-    admin_dict = serialize_user(interview_session.admin)
-    candidate_dict = serialize_user(interview_session.candidate)
+    # Serialize users with role-based keys, handling NULL users
+    admin_dict = serialize_user(interview_session.admin, fallback_name=interview_session.admin_name, fallback_role="admin")
+    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
     
     # Build detailed response
     detail_read = InterviewDetailRead(
@@ -691,8 +694,8 @@ async def update_interview(
     session.refresh(interview_session)
     
     # Return updated interview details
-    admin_dict = serialize_user(interview_session.admin)
-    candidate_dict = serialize_user(interview_session.candidate)
+    admin_dict = serialize_user(interview_session.admin, fallback_name=interview_session.admin_name, fallback_role="admin")
+    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
     
     detail_read = InterviewDetailRead(
         id=interview_session.id,
@@ -723,37 +726,36 @@ async def delete_interview(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Cancel/delete an interview session (soft delete by setting status to CANCELLED)."""
+    """Hard delete an interview session and all related data (responses, proctoring events, etc.)."""
     # Retrieve the interview session
     interview_session = session.get(InterviewSession, interview_id)
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    # Authorization: verify the session belongs to the requesting admin
-    if interview_session.admin_id != current_user.id:
+    # Authorization: verify the session belongs to the requesting admin (handle NULL admin_id)
+    if interview_session.admin_id and interview_session.admin_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="Not authorized to delete this interview session"
         )
     
-    # Soft delete: set status to CANCELLED instead of hard deleting
-    # This preserves audit trail and allows for potential recovery
-    interview_session.status = InterviewStatus.CANCELLED
-    session.add(interview_session)
-    session.commit()
+    # Store info for response before deletion
+    candidate_name = interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name or "Unknown"
+    scheduled_time = interview_session.schedule_time.isoformat()
     
-    # Serialize candidate for response
-    candidate_dict = serialize_user(interview_session.candidate)
+    # Hard delete: this will cascade to responses, proctoring_events, selected_questions, status_timeline
+    session.delete(interview_session)
+    session.commit()
     
     return ApiResponse(
         status_code=200,
         data={
             "interview_id": interview_id,
-            "candidate": candidate_dict,
-            "scheduled_time": interview_session.schedule_time.isoformat()
+            "candidate_name": candidate_name,
+            "scheduled_time": scheduled_time
         },
-        message="Interview session cancelled successfully"
+        message="Interview session and all related data deleted successfully"
     )
 
 @router.get("/candidates", response_model=ApiResponse[List[UserRead]])
@@ -800,8 +802,8 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
                 audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
             ))
 
-        # Serialize candidate
-        candidate_dict = serialize_user(s.candidate)
+        # Serialize candidate, handling NULL
+        candidate_dict = serialize_user(s.candidate, fallback_name=s.candidate_name, fallback_role="candidate")
 
         results.append(DetailedResult(
             interview_id=s.id,
@@ -867,8 +869,8 @@ async def get_result(
         ))
     
     
-    # Serialize candidate with role-based key
-    candidate_dict = serialize_user(interview_session.candidate)
+    # Serialize candidate with role-based key, handling NULL
+    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
     
     return ApiResponse(
         status_code=200,
@@ -1241,7 +1243,7 @@ async def delete_user(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Soft delete a user by setting is_active to False."""
+    """Hard delete a user while preserving interview history by setting foreign keys to NULL."""
     user = session.get(User, user_id)
     
     if not user:
@@ -1257,7 +1259,7 @@ async def delete_user(
     # Protection 2: Prevent deleting the last SUPER_ADMIN
     if user.role == UserRole.SUPER_ADMIN:
         super_admin_count = session.exec(
-            select(User).where(User.role == UserRole.SUPER_ADMIN, User.is_active == True)
+            select(User).where(User.role == UserRole.SUPER_ADMIN)
         ).all()
         
         if len(super_admin_count) <= 1:
@@ -1266,19 +1268,51 @@ async def delete_user(
                 detail="Cannot delete the last Super Admin. Promote another user first."
             )
     
-    # Soft delete: set is_active to False
-    user.is_active = False
-    session.add(user)
+    # Preserve user info in related records before deletion
+    # 1. Update interviews where user is admin
+    admin_sessions = session.exec(
+        select(InterviewSession).where(InterviewSession.admin_id == user_id)
+    ).all()
+    for interview in admin_sessions:
+        interview.admin_name = user.full_name
+        interview.admin_id = None
+        session.add(interview)
+    
+    # 2. Update interviews where user is candidate
+    candidate_sessions = session.exec(
+        select(InterviewSession).where(InterviewSession.candidate_id == user_id)
+    ).all()
+    for interview in candidate_sessions:
+        interview.candidate_name = user.full_name
+        interview.candidate_id = None
+        session.add(interview)
+    
+    # 3. Update question papers where user is admin
+    papers = session.exec(
+        select(QuestionPaper).where(QuestionPaper.admin_id == user_id)
+    ).all()
+    for paper in papers:
+        paper.admin_id = None
+        session.add(paper)
+    
+    # Store info for response
+    user_email = user.email
+    user_name = user.full_name
+    
+    # Hard delete: user is permanently removed, but related data is preserved
+    session.delete(user)
     session.commit()
     
     return ApiResponse(
         status_code=200,
         data={
             "user_id": user_id,
-            "email": user.email,
-            "full_name": user.full_name
+            "email": user_email,
+            "full_name": user_name,
+            "interviews_preserved": len(admin_sessions) + len(candidate_sessions),
+            "papers_preserved": len(papers)
         },
-        message="User deactivated successfully"
+        message="User deleted successfully. Interview history and question papers preserved."
     )
 
 @router.post("/shutdown", response_model=ApiResponse[dict])

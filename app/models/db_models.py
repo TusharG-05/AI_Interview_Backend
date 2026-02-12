@@ -47,10 +47,10 @@ class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = None
-    admin_id: int = Field(foreign_key="user.id")
+    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    admin: User = Relationship(back_populates="question_papers")
+    admin: Optional[User] = Relationship(back_populates="question_papers")
     questions: List["Questions"] = Relationship(back_populates="paper")
     sessions: List["InterviewSession"] = Relationship(back_populates="paper")
 
@@ -74,8 +74,8 @@ class InterviewSession(SQLModel, table=True):
     
     # Scheduler Info 
     access_token: str = Field(unique=True, index=True, default_factory=lambda: uuid.uuid4().hex)
-    admin_id: int = Field(foreign_key="user.id")
-    candidate_id: int = Field(foreign_key="user.id")
+    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when admin deleted
+    candidate_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when candidate deleted
     paper_id: int = Field(foreign_key="questionpaper.id")
     
     # Timing
@@ -102,18 +102,20 @@ class InterviewSession(SQLModel, table=True):
     
     # Legacy/Enrollment
     enrollment_audio_path: Optional[str] = None
-    candidate_name: Optional[str] = None # Optional fallback
+    candidate_name: Optional[str] = None # Optional fallback for deleted candidate
+    admin_name: Optional[str] = None  # Preserve admin name when admin is deleted
     is_completed: bool = Field(default=False) 
     
     # Relationships
-    admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
-    candidate: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
+    admin: Optional[User] = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
+    candidate: Optional[User] = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
     paper: QuestionPaper = Relationship(back_populates="sessions")
     
-    responses: List["InterviewResponse"] = Relationship(back_populates="session")
-    proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session")
-    selected_questions: List["SessionQuestion"] = Relationship(back_populates="session")
-    status_timeline: List["StatusTimeline"] = Relationship(back_populates="session")
+    # Cascade delete when interview is deleted (not when user is deleted)
+    responses: List["InterviewResponse"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    selected_questions: List["SessionQuestion"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    status_timeline: List["StatusTimeline"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
 class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
