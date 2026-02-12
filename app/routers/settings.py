@@ -1,12 +1,12 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ..services.camera import CameraService
 from ..core.config import local_llm
+from ..schemas.api_response import ApiResponse
 import os
 import asyncio
 
-from ..utils.response_helpers import StandardizedRoute
 
-router = APIRouter(prefix="/settings", tags=["Settings"], route_class=StandardizedRoute)
+router = APIRouter(prefix="/settings", tags=["Settings"])
 camera_service = CameraService()
 
 class ConnectionManager:
@@ -45,7 +45,7 @@ def camera_status_callback(session_id: int, warning_key: str):
     except Exception:
         pass
 
-@router.get("/")
+@router.get("/", response_model=ApiResponse[dict])
 async def get_system_status(session_id: int):
     """Comprehensive health check for AI services (Isolate by session)."""
     llm_status = "error"
@@ -59,15 +59,19 @@ async def get_system_status(session_id: int):
     if camera_service.running:
         hw_status = "active (streaming)"
     
-    return {
-        "status": "online",
-        "services": {
-            "llm": llm_status,
-            "proctoring_engine": "healthy" if camera_service._detectors_ready else "initializing/off",
-            "camera_access": hw_status,
-            "current_warning": camera_service.get_current_warning(session_id)
-        }
-    }
+    return ApiResponse(
+        status_code=200,
+        data={
+            "status": "online",
+            "services": {
+                "llm": llm_status,
+                "proctoring_engine": "healthy" if camera_service._detectors_ready else "initializing/off",
+                "camera_access": hw_status,
+                "current_warning": camera_service.get_current_warning(session_id)
+            }
+        },
+        message="System status retrieved successfully"
+    )
 
 @router.websocket("/ws")
 async def websocket_status(websocket: WebSocket, session_id: int):

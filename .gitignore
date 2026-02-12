@@ -86,3 +86,4 @@ Thumbs.db
 
 # === Docker ===
 .docker-compose.un~
+app/assets/face_landmarker.task

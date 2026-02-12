@@ -9,7 +9,7 @@ This service handles:
 """
 
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import Session, select
 from ..models.db_models import (
     InterviewSession, 
@@ -61,13 +61,13 @@ def record_status_change(
     timeline_entry = StatusTimeline(
         session_id=interview_session.id,
         status=new_status,
-        timestamp=datetime.utcnow(),
+        timestamp=datetime.now(timezone.utc),
         context_data=json.dumps(metadata) if metadata else None
     )
     
     # Update session current status
     interview_session.current_status = new_status
-    interview_session.last_activity = datetime.utcnow()
+    interview_session.last_activity = datetime.now(timezone.utc)
     
     session.add(timeline_entry)
     session.add(interview_session)
@@ -112,7 +112,7 @@ def add_violation(
         details=details,
         severity=severity,
         triggered_warning=False,
-        timestamp=datetime.utcnow()
+        timestamp=datetime.now(timezone.utc)
     )
     
     # Handle critical violations - immediate suspension
@@ -120,7 +120,7 @@ def add_violation(
         event.triggered_warning = True
         interview_session.is_suspended = True
         interview_session.suspension_reason = f"Critical violation: {event_type}"
-        interview_session.suspended_at = datetime.utcnow()
+        interview_session.suspended_at = datetime.now(timezone.utc)
         
         # Record status change to SUSPENDED
         record_status_change(
@@ -152,7 +152,7 @@ def add_violation(
         if interview_session.warning_count >= interview_session.max_warnings:
             interview_session.is_suspended = True
             interview_session.suspension_reason = f"Exceeded maximum warnings ({interview_session.max_warnings})"
-            interview_session.suspended_at = datetime.utcnow()
+            interview_session.suspended_at = datetime.now(timezone.utc)
             
             # Record status change to SUSPENDED
             record_status_change(
@@ -201,7 +201,7 @@ def check_and_suspend(
     
     interview_session.is_suspended = True
     interview_session.suspension_reason = reason
-    interview_session.suspended_at = datetime.utcnow()
+    interview_session.suspended_at = datetime.now(timezone.utc)
     
     record_status_change(
         session=session,
@@ -312,6 +312,6 @@ def update_last_activity(
         session: Database session
         interview_session: The interview session
     """
-    interview_session.last_activity = datetime.utcnow()
+    interview_session.last_activity = datetime.now(timezone.utc)
     session.add(interview_session)
     session.commit()

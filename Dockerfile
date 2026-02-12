@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libavfilter-dev \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -43,6 +44,7 @@ ENV TF_CPP_MIN_LOG_LEVEL=2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    libsndfile1 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 

@@ -12,7 +12,7 @@ services:
       - SECRET_KEY=change_this_to_a_secure_random_string_in_production
       - DATABASE_URL=${DOCKER_DATABASE_URL}
       - LLM_MODEL=qwen2.5-coder:3b
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434 # Connects to host Ollama
+      - OLLAMA_BASE_URL=http://ollama:11434
       - MAIL_USERNAME=${MAIL_USERNAME}
       - MAIL_PASSWORD=${MAIL_PASSWORD}
     dns:
@@ -23,8 +23,23 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_started
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - app-network
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: face_gaze_ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_storage:/root/.ollama
+    ports:
+      - "11434:11434"
+    networks:
+      - app-network
 
   ngrok:
     image: ngrok/ngrok:latest
@@ -36,6 +51,8 @@ services:
       - "4040:4040" # Dashboard
     depends_on:
       - app
+    networks:
+      - app-network
 
   db:
     image: postgres:15-alpine
@@ -50,6 +67,14 @@ services:
       retries: 5
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
 
 volumes:
   postgres_data:
+  ollama_storage:
+
+
+networks:
+  app-network:
+    driver: bridge
