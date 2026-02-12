@@ -2,7 +2,7 @@
 import pytest
 from app.models.db_models import User, UserRole, InterviewSession, InterviewStatus, Questions, InterviewResponse, QuestionPaper
 from app.auth.security import get_password_hash
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 @pytest.fixture
 def test_setup(session):
@@ -56,7 +56,7 @@ def test_access_interview_valid(client, test_setup):
     response = client.get(f"/api/interview/access/{interview.access_token}")
     
     assert response.status_code == 200
-    assert response.json()["message"] == "START"
+    assert response.json()["data"]["message"] == "START"
 
 # @pytest.mark.skip(reason="Requires ffmpeg/real audio processing - skip in CI")
 @pytest.mark.skip(reason="Requires ffmpeg/real audio processing - skip in CI")
@@ -81,7 +81,7 @@ def test_submit_answer_text(client, session, test_setup):
     session.refresh(q)
     
     data = {
-        "session_id": interview.id,
+        "interview_id": interview.id,
         "question_id": q.id,
         "answer_text": "This is a test answer"
     }
@@ -98,7 +98,7 @@ def test_submit_persistence_check(client, session, test_setup):
     session.refresh(q)
     
     data = {
-        "session_id": interview.id,
+        "interview_id": interview.id,
         "question_id": q.id,
         "answer_text": "Real Persistence Answer"
     }
@@ -109,4 +109,4 @@ def test_submit_persistence_check(client, session, test_setup):
     stmt = select(InterviewResponse).where(InterviewResponse.answer_text == "Real Persistence Answer")
     resp = session.exec(stmt).first()
     assert resp is not None
-    assert resp.session_id == interview.id
+    assert resp.interview_id == interview.id

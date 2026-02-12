@@ -44,7 +44,7 @@ def test_upload_selfie_success(client, session, candidate_setup):
     response = client.post("/api/candidate/upload-selfie", files=files)
     
     assert response.status_code == 200
-    assert response.json()["user_id"] == candidate.id
+    assert response.json()["data"]["user_id"] == candidate.id
     
     session.refresh(candidate)
     assert candidate.profile_image_bytes is not None
@@ -81,7 +81,7 @@ def test_get_history(client, session, candidate_setup):
     response = client.get("/api/candidate/history")
     
     assert response.status_code == 200
-    history = response.json()
+    history = response.json()["data"]
     assert len(history) == 1
     assert history[0]["score"] == 85.0
     

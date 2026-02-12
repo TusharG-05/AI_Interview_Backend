@@ -99,7 +99,7 @@ def test_candidate_history_response_format(client, session, candidate_auth_heade
 
 def test_system_status_response_format(client):
     # Act
-    response = client.get("/api/status/?session_id=1")
+    response = client.get("/api/status/?interview_id=1")
     
     # Assert
     assert response.status_code == 200
