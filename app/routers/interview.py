@@ -44,7 +44,11 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
         raise HTTPException(status_code=403, detail=f"Interview is {session.status.value}")
         
     # 2. Start Time Check
-    if now < session.schedule_time:
+    schedule_time = session.schedule_time
+    if schedule_time.tzinfo is None:
+        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+        
+    if now < schedule_time:
         # Too early
         access_data = InterviewAccessResponse(
             interview_id=session.id,
@@ -59,7 +63,7 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
         )
         
     # 3. Expiration Check
-    expiration_time = session.schedule_time + timedelta(minutes=session.duration_minutes)
+    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
     if now > expiration_time:
          session.status = InterviewStatus.EXPIRED
          session_db.add(session)

@@ -33,7 +33,7 @@ def test_smoke_auth_flow(client, session):
         "role": "super_admin"
     })
     assert resp.status_code == 200
-    assert "access_token" in resp.json()
+    assert "access_token" in resp.json()["data"]
 
 
 def test_smoke_public_endpoints(client):

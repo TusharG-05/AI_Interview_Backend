@@ -52,7 +52,7 @@ def test_record_status_change(session, interview_session):
     assert interview_session.current_status == CandidateStatus.LINK_ACCESSED
     
     # Check timeline
-    timeline = session.query(StatusTimeline).filter_by(session_id=interview_session.id).first()
+    timeline = session.query(StatusTimeline).filter_by(interview_id=interview_session.id).first()
     assert timeline is not None
     assert timeline.status == CandidateStatus.LINK_ACCESSED
 
@@ -65,7 +65,7 @@ def test_add_violation_warning(session, interview_session):
     assert interview_session.is_suspended is False
     
     # Check event
-    event = session.query(ProctoringEvent).filter_by(session_id=interview_session.id).first()
+    event = session.query(ProctoringEvent).filter_by(interview_id=interview_session.id).first()
     assert event.event_type == "gaze_away"
     assert event.severity == "warning"
 
