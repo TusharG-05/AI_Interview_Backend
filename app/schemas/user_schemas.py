@@ -23,7 +23,7 @@ class UserPublic(BaseModel):
 
 def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fallback_role: str = "candidate") -> Dict[str, Any]:
     """
-    Serialize a User object to a clean dict with role-based key.
+    Serialize a User object to a clean flat dict.
     
     Excludes: password_hash, profile_image_bytes, face_embedding, resume_text
     
@@ -33,30 +33,27 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
         fallback_role: Role to use if user is None
         
     Returns:
-        Dict with role as key, e.g. {"candidate": {...user_data...}}
+        Flat dict with user data, e.g. {"id": 1, "email": "...", "full_name": "...", ...}
     """
     if user is None:
         # User was deleted - return fallback data
-        user_data = {
+        return {
             "id": None,
             "email": "deleted@user.com",
             "full_name": fallback_name or "Deleted User",
             "role": fallback_role,
             "profile_image": None
         }
-        return {fallback_role: user_data}
     
     role_key = user.role.value if isinstance(user.role, UserRole) else str(user.role)
     
-    user_data = {
+    return {
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image
     }
-    
-    return {role_key: user_data}
 
 
 def serialize_user_flat(user: User) -> Dict[str, Any]:

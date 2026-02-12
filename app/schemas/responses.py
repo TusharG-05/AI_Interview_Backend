@@ -23,7 +23,7 @@ class PaperRead(BaseModel):
 
 class SessionRead(BaseModel):
     id: int
-    candidate: dict  # {"candidate": {...}}
+    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     status: str
     scheduled_at: str
     score: Optional[float] = None
@@ -45,8 +45,8 @@ class Token(BaseModel):
 
 class InterviewLinkResponse(BaseModel):
     interview_id: int
-    admin: dict  # {"admin": {...}}
-    candidate: dict  # {"candidate": {...}}
+    admin: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     access_token: str
     link: str
     scheduled_at: str
@@ -54,8 +54,8 @@ class InterviewLinkResponse(BaseModel):
 
 class InterviewDetailRead(BaseModel):
     id: int
-    admin: dict  # {"admin": {"id": ..., "email": ..., ...}}
-    candidate: dict  # {"candidate": {"id": ..., "email": ..., ...}}
+    admin: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     paper_id: int
     paper_name: str
     schedule_time: str
@@ -97,7 +97,7 @@ class ResponseDetail(BaseModel):
 
 class DetailedResult(BaseModel):
     interview_id: int
-    candidate: dict  # {"candidate": {...}}
+    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     date: str
     score: str
     flags: bool
@@ -134,7 +134,7 @@ class ProgressInfo(BaseModel):
 class CandidateStatusResponse(BaseModel):
     """Complete status response for a single interview"""
     interview_id: int
-    candidate: dict  # {"candidate": {...}}
+    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     current_status: Optional[str] = None
     timeline: List[TimelineItem]
     warnings: WarningInfo
@@ -147,7 +147,7 @@ class CandidateStatusResponse(BaseModel):
 class LiveStatusItem(BaseModel):
     """Lightweight status item for batch live status view"""
     interview_id: int
-    candidate: dict  # {"candidate": {...}}
+    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     current_status: Optional[str] = None
     warning_count: int
     warnings_remaining: int
