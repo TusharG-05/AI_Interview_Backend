@@ -82,6 +82,19 @@ from fastapi.requests import Request
 from .schemas.api_response import ApiErrorResponse
 
 from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Catch 422 validation errors and wrap them."""
+    return JSONResponse(
+        status_code=422,
+        content=ApiErrorResponse(
+            status_code=422,
+            message="Validation failed",
+            data={"errors": exc.errors()}
+        ).model_dump()
+    )
 
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: Exception):
