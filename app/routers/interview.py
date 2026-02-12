@@ -47,7 +47,7 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     if now < session.schedule_time:
         # Too early
         access_data = InterviewAccessResponse(
-            session_id=session.id,
+            interview_id=session.id,
             message="WAIT",
             schedule_time=session.schedule_time.isoformat(),
             duration_minutes=session.duration_minutes
@@ -80,7 +80,7 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     
     # 5. Success - Allow Entry
     access_data = InterviewAccessResponse(
-        session_id=session.id,
+        interview_id=session.id,
         message="START",
         schedule_time=session.schedule_time.isoformat(),
         duration_minutes=session.duration_minutes
@@ -92,9 +92,9 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     )
 
 
-@router.post("/start-session/{session_id}", response_model=ApiResponse[dict])
+@router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])
 async def start_session_logic(
-    session_id: int,
+    interview_id: int,
     enrollment_audio: UploadFile = File(None),
     session_db: Session = Depends(get_session)
 ):
@@ -105,7 +105,7 @@ async def start_session_logic(
     from ..services.status_manager import record_status_change
     from ..models.db_models import CandidateStatus
     
-    session = session_db.get(InterviewSession, session_id)
+    session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404)
     
     # Check if suspended
@@ -158,17 +158,17 @@ async def start_session_logic(
         
     return ApiResponse(
         status_code=200,
-        data={"session_id": session.id, "status": "LIVE", "warning": warning},
+        data={"interview_id": session.id, "status": "LIVE", "warning": warning},
         message="Interview session started successfully"
     )
 
-@router.get("/next-question/{session_id}", response_model=ApiResponse[dict])
-async def get_next_question(session_id: int, session_db: Session = Depends(get_session)):
+@router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
+async def get_next_question(interview_id: int, session_db: Session = Depends(get_session)):
     from ..services.status_manager import record_status_change, update_last_activity
     from ..models.db_models import CandidateStatus
     
     # Get session and check suspension
-    session_obj = session_db.get(InterviewSession, session_id)
+    session_obj = session_db.get(InterviewSession, interview_id)
     if not session_obj:
         raise HTTPException(status_code=404, detail="Session not found")
     
@@ -190,11 +190,11 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
     update_last_activity(session_db, session_obj)
     
     # 1. Get answered questions
-    answered_ids = [r.question_id for r in session_db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()]
+    answered_ids = [r.question_id for r in session_db.exec(select(InterviewResponse).where(InterviewResponse.interview_id == interview_id)).all()]
     
     # 2. Check if this session has assigned questions (Campaign mode)
     has_assignments = session_db.exec(
-        select(SessionQuestion).where(SessionQuestion.session_id == session_id)
+        select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)
     ).first() is not None
     
     # Logic Update: If Bank is assigned, we should pull from Bank if no session_questions pre-assigned?
@@ -204,7 +204,7 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
         # Campaign mode: Strictly follow assigned questions
         session_q = session_db.exec(
             select(SessionQuestion)
-            .where(SessionQuestion.session_id == session_id)
+            .where(SessionQuestion.interview_id == interview_id)
             .where(~SessionQuestion.question_id.in_(answered_ids))
             .order_by(SessionQuestion.sort_order)
         ).first()
@@ -243,7 +243,7 @@ async def get_next_question(session_id: int, session_db: Session = Depends(get_s
     question_index = len(answered_ids) + 1
     
     if has_assignments:
-        total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.session_id == session_id)).all())
+        total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)).all())
     elif session_obj and session_obj.paper_id:
         total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
     
@@ -268,7 +268,7 @@ async def stream_question_audio(q_id: int):
 
 @router.post("/submit-answer-audio", response_model=ApiResponse[dict])
 async def submit_answer_audio(
-    session_id: int = Form(...),
+    interview_id: int = Form(...),
     question_id: int = Form(...),
     audio: UploadFile = File(...),
     session_db: Session = Depends(get_session)
@@ -276,7 +276,7 @@ async def submit_answer_audio(
     from ..services.status_manager import update_last_activity
     
     # Check if session exists and is not suspended
-    session_obj = session_db.get(InterviewSession, session_id)
+    session_obj = session_db.get(InterviewSession, interview_id)
     if not session_obj:
         raise HTTPException(status_code=404, detail="Session not found")
     
@@ -287,11 +287,11 @@ async def submit_answer_audio(
         )
     
     os.makedirs("app/assets/audio/responses", exist_ok=True)
-    audio_path = f"app/assets/audio/responses/resp_{session_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
+    audio_path = f"app/assets/audio/responses/resp_{interview_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
     audio_service.save_audio_blob(content, audio_path)
     
-    response = InterviewResponse(session_id=session_id, question_id=question_id, audio_path=audio_path)
+    response = InterviewResponse(interview_id=interview_id, question_id=question_id, audio_path=audio_path)
     session_db.add(response)
     
     # Update last activity
@@ -306,7 +306,7 @@ async def submit_answer_audio(
 
 @router.post("/submit-answer-text", response_model=ApiResponse[dict])
 async def submit_answer_text(
-    session_id: int = Form(...),
+    interview_id: int = Form(...),
     question_id: int = Form(...),
     answer_text: str = Form(...),
     session_db: Session = Depends(get_session)
@@ -316,12 +316,12 @@ async def submit_answer_text(
     Saves the response but delays evaluation until the interview finishes.
     """
     # Verify session exists
-    session = session_db.get(InterviewSession, session_id)
+    session = session_db.get(InterviewSession, interview_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
     response = InterviewResponse(
-        session_id=session_id,
+        interview_id=interview_id,
         question_id=question_id,
         answer_text=answer_text
     )
@@ -334,12 +334,12 @@ async def submit_answer_text(
     )
 
 
-@router.post("/finish/{session_id}", response_model=ApiResponse[dict])
-async def finish_interview(session_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session)):
+@router.post("/finish/{interview_id}", response_model=ApiResponse[dict])
+async def finish_interview(interview_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session)):
     from ..services.status_manager import record_status_change
     from ..models.db_models import CandidateStatus
     
-    interview_session = session_db.get(InterviewSession, session_id)
+    interview_session = session_db.get(InterviewSession, interview_id)
     if not interview_session: raise HTTPException(status_code=404)
     
     interview_session.end_time = datetime.now(timezone.utc)
@@ -357,7 +357,7 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
     session_db.add(interview_session)
     session_db.commit()
     
-    background_tasks.add_task(process_session_results_unified, session_id)
+    background_tasks.add_task(process_session_results_unified, interview_id)
     return ApiResponse(
         status_code=200,
         data={"status": "finished"},
@@ -367,8 +367,8 @@ async def finish_interview(session_id: int, background_tasks: BackgroundTasks, s
 # --- AI & Resume Specific ---
 
 @router.post("/evaluate-answer", response_model=ApiResponse[dict])
-async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: Session = Depends(get_session)):
-    interview_session = session_db.get(InterviewSession, session_id)
+async def evaluate_answer(request: AnswerRequest, interview_id: int, session_db: Session = Depends(get_session)):
+    interview_session = session_db.get(InterviewSession, interview_id)
     if not interview_session: raise HTTPException(status_code=404)
 
     try:
@@ -378,7 +378,7 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
         db_question = interview_service.get_or_create_question(session_db, request.question, topic="Dynamic")
 
         new_response = InterviewResponse(
-            session_id=session_id,
+            interview_id=interview_id,
             question_id=db_question.id,
             answer_text=request.answer,
             evaluation_text=evaluation["feedback"],
@@ -400,7 +400,7 @@ async def evaluate_answer(request: AnswerRequest, session_id: int, session_db: S
 
 # --- Background Unified Processor ---
 
-async def process_session_results_unified(session_id: int):
+async def process_session_results_unified(interview_id: int):
     from ..core.database import engine
     from ..core.logger import get_logger
     from sqlmodel import Session, select
@@ -409,12 +409,12 @@ async def process_session_results_unified(session_id: int):
     
     with Session(engine) as db:
         try:
-            session = db.get(InterviewSession, session_id)
+            session = db.get(InterviewSession, interview_id)
             if not session: 
-                logger.warning(f"Session {session_id} not found for processing")
+                logger.warning(f"Session {interview_id} not found for processing")
                 return
             
-            responses = db.exec(select(InterviewResponse).where(InterviewResponse.session_id == session_id)).all()
+            responses = db.exec(select(InterviewResponse).where(InterviewResponse.interview_id == interview_id)).all()
             for resp in responses:
                 # Process Audio Responses
                 if resp.audio_path and not (resp.answer_text or resp.transcribed_text):
@@ -445,12 +445,12 @@ async def process_session_results_unified(session_id: int):
             session.total_score = calculate_average_score(all_scores)
             db.add(session)
             db.commit()
-            logger.info(f"Session {session_id} processing complete. Score: {session.total_score}")
+            logger.info(f"Session {interview_id} processing complete. Score: {session.total_score}")
         except Exception as e:
-            logger.error(f"Session {session_id} processing failed: {e}")
+            logger.error(f"Session {interview_id} processing failed: {e}")
             # Mark session with error state so frontend can show appropriate message
             try:
-                session = db.get(InterviewSession, session_id)
+                session = db.get(InterviewSession, interview_id)
                 if session:
                     session.status = InterviewStatus.COMPLETED  # Keep as completed but log error
                     db.add(session)

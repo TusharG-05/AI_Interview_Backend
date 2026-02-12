@@ -5,29 +5,28 @@ from ..schemas.api_response import ApiResponse
 import os
 import asyncio
 
-
-router = APIRouter(prefix="/settings", tags=["Settings"])
+router = APIRouter(prefix="/status", tags=["System"])
 camera_service = CameraService()
 
 class ConnectionManager:
     def __init__(self):
-        # {session_id: [WebSocket]}
+        # {interview_id: [WebSocket]}
         self.active_connections: dict[int, list[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, session_id: int):
+    async def connect(self, websocket: WebSocket, interview_id: int):
         await websocket.accept()
-        if session_id not in self.active_connections:
-            self.active_connections[session_id] = []
-        self.active_connections[session_id].append(websocket)
+        if interview_id not in self.active_connections:
+            self.active_connections[interview_id] = []
+        self.active_connections[interview_id].append(websocket)
 
-    def disconnect(self, websocket: WebSocket, session_id: int):
-        if session_id in self.active_connections:
-            if websocket in self.active_connections[session_id]:
-                self.active_connections[session_id].remove(websocket)
+    def disconnect(self, websocket: WebSocket, interview_id: int):
+        if interview_id in self.active_connections:
+            if websocket in self.active_connections[interview_id]:
+                self.active_connections[interview_id].remove(websocket)
 
-    async def broadcast(self, session_id: int, message: str):
-        if session_id in self.active_connections:
-            for connection in self.active_connections[session_id]:
+    async def broadcast(self, interview_id: int, message: str):
+        if interview_id in self.active_connections:
+            for connection in self.active_connections[interview_id]:
                 try:
                     await connection.send_json({"warning": message})
                 except Exception:
@@ -36,17 +35,17 @@ class ConnectionManager:
 manager = ConnectionManager()
 _listener_registered = False
 
-def camera_status_callback(session_id: int, warning_key: str):
+def camera_status_callback(interview_id: int, warning_key: str):
     """Bridge for CameraService alerts to WebSockets (Filtered by Session)."""
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            asyncio.run_coroutine_threadsafe(manager.broadcast(session_id, warning_key), loop)
+            asyncio.run_coroutine_threadsafe(manager.broadcast(interview_id, warning_key), loop)
     except Exception:
         pass
 
 @router.get("/", response_model=ApiResponse[dict])
-async def get_system_status(session_id: int):
+async def get_system_status(interview_id: int):
     """Comprehensive health check for AI services (Isolate by session)."""
     llm_status = "error"
     try:
@@ -67,25 +66,25 @@ async def get_system_status(session_id: int):
                 "llm": llm_status,
                 "proctoring_engine": "healthy" if camera_service._detectors_ready else "initializing/off",
                 "camera_access": hw_status,
-                "current_warning": camera_service.get_current_warning(session_id)
+                "current_warning": camera_service.get_current_warning(interview_id)
             }
         },
         message="System status retrieved successfully"
     )
 
 @router.websocket("/ws")
-async def websocket_status(websocket: WebSocket, session_id: int):
+async def websocket_status(websocket: WebSocket, interview_id: int):
     """Real-time proctoring alert feed (Isolate by Session)."""
     global _listener_registered
-    await manager.connect(websocket, session_id)
+    await manager.connect(websocket, interview_id)
     
     if not _listener_registered:
         camera_service.add_listener(camera_status_callback)
         _listener_registered = True
         
     try:
-        await websocket.send_json({"warning": camera_service.get_current_warning(session_id)})
+        await websocket.send_json({"warning": camera_service.get_current_warning(interview_id)})
         while True:
             await websocket.receive_text() # Keep-alive
     except WebSocketDisconnect:
-        manager.disconnect(websocket, session_id)
+        manager.disconnect(websocket, interview_id)

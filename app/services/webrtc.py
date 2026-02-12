@@ -13,12 +13,12 @@ class VideoTransformTrack(MediaStreamTrack):
     """
     kind = "video"
 
-    def __init__(self, track, session_id: Optional[int] = None):
+    def __init__(self, track, interview_id: Optional[int] = None):
         super().__init__()  # don't forget this!
         self.track = track
         self.camera_service = CameraService()
-        self.session_id = session_id
-        logger.info(f"WebRTC Track Initialized for Session: {session_id}")
+        self.interview_id = interview_id
+        logger.info(f"WebRTC Track Initialized for Session: {interview_id}")
 
     async def recv(self):
         try:
@@ -30,7 +30,7 @@ class VideoTransformTrack(MediaStreamTrack):
             
             # Process Frame
             # This handles detection, DB logging, and updating the Admin MJPEG stream
-            annotated_img, _ = self.camera_service.process_frame_ndarray(img, self.session_id)
+            annotated_img, _ = self.camera_service.process_frame_ndarray(img, self.interview_id)
             
             # Convert back to WebRTC frame
             new_frame = av.VideoFrame.from_ndarray(annotated_img, format="bgr24")

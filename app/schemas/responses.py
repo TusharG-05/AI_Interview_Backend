@@ -3,13 +3,13 @@ from pydantic import BaseModel
 
 # Candidate Responses
 class HistoryItem(BaseModel):
-    session_id: int
+    interview_id: int
     paper_name: str
     date: str
     score: Optional[float] = None
 
 class InterviewAccessResponse(BaseModel):
-    session_id: int
+    interview_id: int
     message: str # "START" or "WAIT"
     schedule_time: Optional[str] = None
     duration_minutes: Optional[int] = None
@@ -23,7 +23,7 @@ class PaperRead(BaseModel):
 
 class SessionRead(BaseModel):
     id: int
-    candidate_name: str
+    candidate: dict  # {"candidate": {...}}
     status: str
     scheduled_at: str
     score: Optional[float] = None
@@ -44,7 +44,9 @@ class Token(BaseModel):
     expires_at: str
 
 class InterviewLinkResponse(BaseModel):
-    session_id: int
+    interview_id: int
+    admin: dict  # {"admin": {...}}
+    candidate: dict  # {"candidate": {...}}
     access_token: str
     link: str
     scheduled_at: str
@@ -52,9 +54,8 @@ class InterviewLinkResponse(BaseModel):
 
 class InterviewDetailRead(BaseModel):
     id: int
-    candidate_id: int
-    candidate_name: str
-    candidate_email: str
+    admin: dict  # {"admin": {"id": ..., "email": ..., ...}}
+    candidate: dict  # {"candidate": {"id": ..., "email": ..., ...}}
     paper_id: int
     paper_name: str
     schedule_time: str
@@ -73,7 +74,6 @@ class UserDetailRead(BaseModel):
     email: str
     full_name: str
     role: str
-    is_active: bool
     resume_text: Optional[str] = None
     has_profile_image: bool
     has_face_embedding: bool
@@ -96,8 +96,8 @@ class ResponseDetail(BaseModel):
     audio_url: Optional[str] = None
 
 class DetailedResult(BaseModel):
-    session_id: int
-    candidate: str
+    interview_id: int
+    candidate: dict  # {"candidate": {...}}
     date: str
     score: str
     flags: bool
@@ -133,8 +133,8 @@ class ProgressInfo(BaseModel):
 
 class CandidateStatusResponse(BaseModel):
     """Complete status response for a single interview"""
-    session_id: int
-    candidate_email: str
+    interview_id: int
+    candidate: dict  # {"candidate": {...}}
     current_status: Optional[str] = None
     timeline: List[TimelineItem]
     warnings: WarningInfo
@@ -146,8 +146,8 @@ class CandidateStatusResponse(BaseModel):
 
 class LiveStatusItem(BaseModel):
     """Lightweight status item for batch live status view"""
-    session_id: int
-    candidate_email: str
+    interview_id: int
+    candidate: dict  # {"candidate": {...}}
     current_status: Optional[str] = None
     warning_count: int
     warnings_remaining: int

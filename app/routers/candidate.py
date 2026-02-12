@@ -30,7 +30,7 @@ async def my_history(
     history = []
     for s in sessions:
         history.append(HistoryItem(
-            session_id=s.id,
+            interview_id=s.id,
             paper_name=s.paper.name if s.paper else "General",
             date=s.start_time.strftime("%Y-%m-%d %H:%M") if s.start_time else "Scheduled",
             score=s.total_score

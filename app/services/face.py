@@ -150,7 +150,7 @@ def face_worker_process(frame_queue, result_queue):
     detector = MediaPipeDetector()
     recognizer = FaceRecognizer() # No global encoding
     
-    # Cache for embeddings: {session_id: encoding_ndarray}
+    # Cache for embeddings: {interview_id: encoding_ndarray}
     embedding_cache = {}
 
     while True:
@@ -162,15 +162,15 @@ def face_worker_process(frame_queue, result_queue):
         if item is None:
             break
 
-        session_id, frame_bgr, encoding_json = item
+        interview_id, frame_bgr, encoding_json = item
 
         try:
             # Sync session encoding if provided
-            if encoding_json and session_id not in embedding_cache:
+            if encoding_json and interview_id not in embedding_cache:
                 import json
-                embedding_cache[session_id] = np.array(json.loads(encoding_json))
+                embedding_cache[interview_id] = np.array(json.loads(encoding_json))
             
-            recognizer.known_encoding = embedding_cache.get(session_id)
+            recognizer.known_encoding = embedding_cache.get(interview_id)
             
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             h, w = frame_rgb.shape[:2]
@@ -184,9 +184,9 @@ def face_worker_process(frame_queue, result_queue):
             final_locs = [(int(t/s), int(r/s), int(b/s), int(l/s)) for (t,r,b,l) in locs]
 
             if not result_queue.full():
-                result_queue.put((session_id, is_authorized, 1.0, len(final_locs), final_locs))
+                result_queue.put((interview_id, is_authorized, 1.0, len(final_locs), final_locs))
         except Exception as e:
-            worker_logger.error(f"Face Worker Error [Session {session_id}]: {e}")
+            worker_logger.error(f"Face Worker Error [Session {interview_id}]: {e}")
 
 
 class FaceService:
@@ -203,17 +203,17 @@ class FaceService:
         self.worker.daemon = True
         self.worker.start()
         
-        # Results map: {session_id: latest_result}
+        # Results map: {interview_id: latest_result}
         self.session_results = {}
         self.session_encodings = {}
 
-    def process_frame(self, frame_bgr, session_id: int):
+    def process_frame(self, frame_bgr, interview_id: int):
         # 1. Provide encoding to worker if not already sent
-        encoding = self.session_encodings.get(session_id)
+        encoding = self.session_encodings.get(interview_id)
         
         if not self.frame_queue.full():
             img_small, _ = resize_with_aspect_ratio(frame_bgr, target_height=360)
-            self.frame_queue.put((session_id, img_small, encoding))
+            self.frame_queue.put((interview_id, img_small, encoding))
         
         # 2. Drain results and update map
         while not self.result_queue.empty():
@@ -223,11 +223,11 @@ class FaceService:
             except multiprocessing.queues.Empty:
                 break
         
-        return self.session_results.get(session_id, (False, 1.0, 0, []))
+        return self.session_results.get(interview_id, (False, 1.0, 0, []))
 
-    def register_session_identity(self, session_id: int, encoding_json: str):
+    def register_session_identity(self, interview_id: int, encoding_json: str):
         """Pre-cache the candidate encoding for a session."""
-        self.session_encodings[session_id] = encoding_json
+        self.session_encodings[interview_id] = encoding_json
 
     def close(self):
         try:
