@@ -136,12 +136,13 @@ async def global_exception_handler(request: Request, exc: Exception):
 from fastapi.middleware.cors import CORSMiddleware
 import os
 
-# SECURITY: Use environment-based CORS origins, never "*" with credentials
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8000").split(",")
+# SECURITY: Allow ALL origins (including localhost) for development convenience
+# WARNING: This effectively disables CORS protection.
+ALLOW_ORIGIN_REGEX = r".*"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=ALLOW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
