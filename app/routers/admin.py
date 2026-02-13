@@ -34,7 +34,8 @@ async def list_papers(
     papers = session.exec(select(QuestionPaper).where(QuestionPaper.admin_id == current_user.id)).all()
     papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
-        question_count=len(p.questions), created_at=p.created_at.isoformat()
+        question_count=len(p.questions), created_at=p.created_at.isoformat(),
+        created_by=serialize_user(p.admin, fallback_role="admin")
     ) for p in papers]
     return ApiResponse(
         status_code=200,
@@ -67,7 +68,11 @@ async def create_paper(
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create paper: {str(e)}")
-    paper_read = PaperRead(id=new_paper.id, name=new_paper.name, description=new_paper.description, question_count=0, created_at=new_paper.created_at.isoformat())
+    paper_read = PaperRead(
+        id=new_paper.id, name=new_paper.name, description=new_paper.description, 
+        question_count=0, created_at=new_paper.created_at.isoformat(),
+        created_by=serialize_user(current_user)
+    )
     return ApiResponse(
         status_code=201,
         data=paper_read,
@@ -86,7 +91,8 @@ async def get_paper(
         raise HTTPException(status_code=404, detail="Paper not found")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
-        question_count=len(paper.questions), created_at=paper.created_at.isoformat()
+        question_count=len(paper.questions), created_at=paper.created_at.isoformat(),
+        created_by=serialize_user(paper.admin, fallback_role="admin")
     )
     return ApiResponse(
         status_code=200,
@@ -119,7 +125,8 @@ async def update_paper(
         raise HTTPException(status_code=500, detail=f"Failed to update paper: {str(e)}")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
-        question_count=len(paper.questions), created_at=paper.created_at.isoformat()
+        question_count=len(paper.questions), created_at=paper.created_at.isoformat(),
+        created_by=serialize_user(paper.admin, fallback_role="admin")
     )
     return ApiResponse(
         status_code=200,
