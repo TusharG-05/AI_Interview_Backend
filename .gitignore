@@ -25,7 +25,6 @@ MANIFEST
 # === Environment & Virtual Envs ===
 .env
 .env.local
-.env.hf
 .env.*.local
 pip-log.txt
 pip-delete-this-directory.txt
