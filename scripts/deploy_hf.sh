@@ -1,11 +1,15 @@
 #!/bin/bash
 
 # Configuration
-# DO NOT hardcode your token here. Set it as an environment variable: export HF_TOKEN="your_token"
-# HF_TOKEN="your_token_here" 
+# Load from .env.hf if it exists
+if [ -f .env.hf ]; then
+    export $(grep -v '^#' .env.hf | xargs)
+fi
+
 if [ -z "$HF_TOKEN" ]; then
-    echo "❌ Error: HF_TOKEN environment variable is not set."
-    echo "Run: export HF_TOKEN='your_huggingface_token'"
+    echo "❌ Error: HF_TOKEN is not set."
+    echo "Please create a file named .env.hf with: HF_TOKEN=\"your_token\""
+    echo "Or: export HF_TOKEN='your_token'"
     exit 1
 fi
 HF_REPO="https://huggingface.co/spaces/ichigo253/AI_Interview_Backend"
