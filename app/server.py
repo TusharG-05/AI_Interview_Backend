@@ -83,6 +83,7 @@ from .schemas.api_response import ApiErrorResponse
 
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -92,7 +93,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content=ApiErrorResponse(
             status_code=422,
             message="Validation failed",
-            data={"errors": exc.errors()}
+            data={"errors": jsonable_encoder(exc.errors())}
         ).model_dump()
     )
 
