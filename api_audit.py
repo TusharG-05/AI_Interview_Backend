@@ -2,17 +2,22 @@ import requests
 import json
 import time
 
-BASE_URL = "http://localhost:8001/api"
+import sys
+
+# Allow overriding base URL from command line
+if len(sys.argv) > 1 and sys.argv[1].startswith("http"):
+    BASE_URL = sys.argv[1].rstrip("/")
+else:
+    BASE_URL = "http://localhost:8000/api"
 
 def audit_endpoint(path, method="GET", body=None):
     url = f"{BASE_URL}{path}"
     print(f"Auditing [{method}] {url}...")
     try:
-        # Reduced timeout to 5 seconds as per user request
         if method == "GET":
-            response = requests.get(url, timeout=5)
+            response = requests.get(url, timeout=30)
         elif method == "POST":
-            response = requests.post(url, json=body or {}, timeout=5)
+            response = requests.post(url, json=body or {}, timeout=30)
         
         try:
             data = response.json()

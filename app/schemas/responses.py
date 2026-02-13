@@ -20,6 +20,7 @@ class PaperRead(BaseModel):
     description: Optional[str] = None
     question_count: int = 0
     created_at: str
+    created_by: Optional[dict] = None # {"id": ..., "email": ..., "full_name": ..., "role": ...}
 
 class SessionRead(BaseModel):
     id: int
