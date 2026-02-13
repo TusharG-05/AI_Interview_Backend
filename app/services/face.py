@@ -36,6 +36,20 @@ class MediaPipeDetector:
         from mediapipe.tasks import python
         from mediapipe.tasks.python import vision
         
+        # specific fix for model path
+        if not os.path.exists(model_path):
+            # Try absolute path relative to this file
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            # app/services/face.py -> app/assets/face_landmarker.task
+            potential_path = os.path.join(base_dir, "..", "assets", "face_landmarker.task")
+            if os.path.exists(potential_path):
+                model_path = os.path.abspath(potential_path)
+            else:
+                 # Fallback to project root connection
+                 potential_path = os.path.abspath(os.path.join(os.getcwd(), "app", "assets", "face_landmarker.task"))
+                 if os.path.exists(potential_path):
+                     model_path = potential_path
+
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,

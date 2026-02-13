@@ -10,6 +10,7 @@ from ..core.logger import get_logger
 
 
 router = APIRouter(prefix="/analyze", tags=["Gaze & Face Analysis"])
+logger = get_logger(__name__)
 camera_service = CameraService()
 
 def frame_generator(interview_id: int):
@@ -129,7 +130,6 @@ async def watch(target_session_id: int, params: Offer):
     # For now, just a set is fine
     pcs.add(pc)
 
-    logger = get_logger(__name__)
     logger.info(f"WebRTC: Admin watching Session {target_session_id}")
     
     # Add the Candidate's track to Admin's PC
