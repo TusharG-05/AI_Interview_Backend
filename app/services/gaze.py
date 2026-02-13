@@ -24,6 +24,20 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
         from ..utils.image_processing import convert_to_rgb
         
         abs_model_path = os.path.abspath(model_path)
+        
+        # specific fix if relative path fails in worker
+        if not os.path.exists(abs_model_path):
+             # Try absolute path relative to this file's parent (app/services/ -> app/assets/)
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            potential_path = os.path.join(base_dir, "..", "assets", "face_landmarker.task")
+            if os.path.exists(potential_path):
+                abs_model_path = os.path.abspath(potential_path)
+            else:
+                 # Fallback to project root connection
+                 potential_path = os.path.abspath(os.path.join(os.getcwd(), "app", "assets", "face_landmarker.task"))
+                 if os.path.exists(potential_path):
+                     abs_model_path = potential_path
+
         worker_logger.info(f"GazeWorker: Initializing MediaPipe with model: {abs_model_path}")
     
         if not os.path.exists(abs_model_path):
