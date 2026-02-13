@@ -160,3 +160,9 @@ app.include_router(admin.router, prefix="/api")
 app.include_router(interview.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(candidate.router, prefix="/api")
+
+from fastapi.responses import RedirectResponse
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return RedirectResponse(url="/docs")

@@ -1,30 +1,42 @@
-# Use Python 3.11 Slim
-FROM python:3.11-slim-bookworm
 
-# Install system dependencies (required for audio processing)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libsndfile1 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+# Use Python 3.10 to be safe (or 3.11 if compatible)
+FROM python:3.11-slim
 
-# Set permissions for HF Spaces (must run as user 1000)
-RUN useradd -m -u 1000 user
-USER user
-ENV PATH="/home/user/.local/bin:$PATH"
+# Set working directory
 WORKDIR /app
 
-# Copy requirements
+# Install system dependencies (ffmpeg, etc.)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    git \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a non-root user (Hugging Face requirement)
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH
+
+# Copy requirements first to leverage cache
 COPY --chown=user requirements.txt .
 
-# Install dependencies
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY --chown=user . .
 
-# Expose port 7860 (Hugging Face default)
+# Download Face Landmarker Model (Bypass Git LFS/Binary restrictions)
+RUN mkdir -p app/assets && \
+    wget -q -O app/assets/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+
+# Expose port (Hugging Face expects 7860 by default)
 EXPOSE 7860
 
-# Run FastAPI on port 7860
-CMD ["uvicorn", "app.server:app", "--host", "0.0.0.0", "--port", "7860"]
+# Command to run the application
+# Note: HF Spaces expect port 7860
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "2"]
