@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI):
     # Pre-warm models in background
     import threading
     def warm_up():
-        logger.info("Warm-up: Loading AI Models (Whisper, LLM)...")
+        logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
         from .core.config import local_llm
         try:
             # Trigger lazy loading properties
@@ -58,8 +58,7 @@ async def lifespan(app: FastAPI):
     
     # Start warm-up in background thread so server starts instantly
     threading.Thread(target=warm_up, daemon=True).start()
-    logger.info("Warm-up: Started in background thread for fast startup.")
-    logger.info("Model warm-up: Deferred to first request for stability.")
+    logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()
@@ -141,7 +140,7 @@ import os
 
 # SECURITY: Allow ALL origins (including localhost) for development convenience
 # WARNING: This effectively disables CORS protection.
-ALLOW_ORIGIN_REGEX = r".*"
+# ALLOW_ORIGIN_REGEX = r".*"
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,10 +1,11 @@
 ---
 title: AI Interview Backend
-emoji: 🧠
+emoji: 🎥
 colorFrom: blue
-colorTo: indigo
+colorTo: purple
 sdk: docker
 pinned: false
+app_port: 7860
 ---
 
 # AI-Powered Proctoring & Interview System
