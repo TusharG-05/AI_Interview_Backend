@@ -257,6 +257,9 @@ def run_simulation():
         print(f"    - Q{ans['question_id']} Score: {ans['score']}")
         print(f"      Feedback: {ans['feedback']}")
     
+    print("\n[DEBUG] Full Answers Payload:")
+    print(json.dumps(answers, indent=2))
+
     if total_score is None:
         print("\n[WARNING] Total Score is None. AI usage might be mocked or failed?")
     else:

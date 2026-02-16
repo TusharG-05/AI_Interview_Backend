@@ -599,8 +599,21 @@ async def get_live_status_dashboard(
         # Serialize candidate
         candidate_dict = serialize_user(interview_session.candidate)
         
+        # Serialize interview
+        interview_dict = {
+            "id": interview_session.id,
+            "paper_id": interview_session.paper_id,
+            "schedule_time": interview_session.schedule_time.isoformat(),
+            "duration_minutes": interview_session.duration_minutes,
+            "status": interview_session.status.value,
+            "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
+            "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
+            "total_score": interview_session.total_score,
+            "access_token": interview_session.access_token
+        }
+        
         results.append(LiveStatusItem(
-            interview_id=interview_session.id,
+            interview=interview_dict,
             candidate=candidate_dict,
             current_status=interview_session.current_status.value if interview_session.current_status else None,
             warning_count=interview_session.warning_count,

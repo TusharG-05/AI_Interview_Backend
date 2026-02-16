@@ -159,7 +159,7 @@ class CandidateStatusResponse(BaseModel):
 
 class LiveStatusItem(BaseModel):
     """Lightweight status item for batch live status view"""
-    interview_id: int
+    interview: dict # InterviewSession data
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     current_status: Optional[str] = None
     warning_count: int
