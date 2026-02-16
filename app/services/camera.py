@@ -122,8 +122,9 @@ class CameraService:
 
             # Update latest frame for MJPEG stream (Isolate by session)
             with self.frame_lock:
-                _, buffer = cv2.imencode('.jpg', frame)
-                self.session_frames[interview_id] = buffer.tobytes()
+                success, buffer = cv2.imencode('.jpg', frame)
+                if success:
+                    self.session_frames[interview_id] = buffer.tobytes()
                 self.session_frame_ids[interview_id] = self.session_frame_ids.get(interview_id, 0) + 1
                 if interview_id not in self.session_start_times:
                     self.session_start_times[interview_id] = time.time()
@@ -135,16 +136,22 @@ class CameraService:
             if warning and not in_grace_period:
                 from ..core.database import engine
                 from sqlmodel import Session
-                from ..models.db_models import ProctoringEvent
+                from ..services.status_manager import add_violation
                 
                 with Session(engine) as db_session:
-                    event = ProctoringEvent(
-                        interview_id=interview_id,
-                        event_type=warning,
-                        details=f"Faces: {n_face}, Auth: {found}, Gaze: {gaze_status}"
-                    )
-                    db_session.add(event)
-                    db_session.commit()
+                    # session_obj = db_session.get(InterviewSession, interview_id)
+                    # We need the full session object for status_manager
+                    # Optimization: In a real app, caching this might be better than fetching every frame
+                    from ..models.db_models import InterviewSession
+                    interview_session = db_session.get(InterviewSession, interview_id)
+                    
+                    if interview_session:
+                        add_violation(
+                            session=db_session,
+                            interview_session=interview_session,
+                            event_type=warning,
+                            details=f"Faces: {n_face}, Auth: {found}, Gaze: {gaze_status}"
+                        )
             elif warning and in_grace_period:
                 logger.debug(f"Proctoring: Alert suppressed during grace period for Session {interview_id}")
 

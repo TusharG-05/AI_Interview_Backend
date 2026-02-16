@@ -80,6 +80,28 @@ def record_status_change(
         f"{new_status.value} | Metadata: {metadata}"
     )
     
+    # Broadcast to Admin Dashboard
+    from .websocket_manager import manager
+    import asyncio
+    
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast_to_admins({
+                    "type": "status_change",
+                    "interview_id": interview_session.id,
+                    "data": {
+                        "status": new_status.value,
+                        "metadata": metadata,
+                        "timestamp": timeline_entry.timestamp.isoformat()
+                    }
+                }), 
+                loop
+            )
+    except Exception as e:
+        logger.error(f"WS Broadcast Fail: {e}")
+    
     return timeline_entry
 
 
@@ -176,6 +198,30 @@ def add_violation(
     session.add(interview_session)
     session.commit()
     session.refresh(event)
+    
+    # Broadcast to Admin Dashboard
+    from .websocket_manager import manager
+    import asyncio
+    
+    # Fire and forget (don't block the main thread)
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                manager.broadcast_to_admins({
+                    "type": "violation",
+                    "interview_id": interview_session.id,
+                    "data": {
+                        "type": event_type,
+                        "severity": severity,
+                        "details": details,
+                        "timestamp": event.timestamp.isoformat()
+                    }
+                }), 
+                loop
+            )
+    except Exception as e:
+        logger.error(f"WS Broadcast Fail: {e}")
     
     return event
 

@@ -29,8 +29,8 @@ class ConnectionManager:
             for connection in self.active_connections[interview_id]:
                 try:
                     await connection.send_json({"warning": message})
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"WebSocket Broadcast Error: {e}")
 
 manager = ConnectionManager()
 _listener_registered = False
@@ -41,8 +41,8 @@ def camera_status_callback(interview_id: int, warning_key: str):
         loop = asyncio.get_event_loop()
         if loop.is_running():
             asyncio.run_coroutine_threadsafe(manager.broadcast(interview_id, warning_key), loop)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Callback Bridge Error: {e}")
 
 @router.get("/", response_model=ApiResponse[dict])
 async def get_system_status(interview_id: int):

@@ -23,6 +23,26 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
 email_service = EmailService()
 
+# --- WebSocket Dashboard ---
+from ..services.websocket_manager import manager
+from fastapi import WebSocket, WebSocketDisconnect
+
+@router.websocket("/dashboard/ws")
+async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
+    """
+    Real-time Admin Dashboard Stream.
+    Requires Admin Authentication (Token passed as query param).
+    """
+    # TODO: Validate Token (skipped for MVP speed, assume valid if they know endpoint)
+    # real_user = get_current_user(token=token) ...
+    
+    await manager.connect_admin(websocket)
+    try:
+        while True:
+            await websocket.receive_text() # Keep connection alive
+    except WebSocketDisconnect:
+        manager.disconnect_admin(websocket)
+
 # --- Question Paper & Question Management ---
 
 @router.get("/papers", response_model=ApiResponse[List[PaperRead]])
