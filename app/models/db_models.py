@@ -65,7 +65,7 @@ class Questions(SQLModel, table=True):
     response_type: str = Field(default="audio") # Options: audio, text, both
 
     paper: Optional[QuestionPaper] = Relationship(back_populates="questions")
-    responses: List["InterviewResponse"] = Relationship(back_populates="question")
+    answers: List["Answers"] = Relationship(back_populates="question")
     session_questions: List["SessionQuestion"] = Relationship(back_populates="question")
 
 class InterviewSession(SQLModel, table=True):
@@ -111,7 +111,7 @@ class InterviewSession(SQLModel, table=True):
     paper: QuestionPaper = Relationship(back_populates="sessions")
     
     # Cascade delete when interview is deleted (not when user is deleted)
-    responses: List["InterviewResponse"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    result: Optional["InterviewResult"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     selected_questions: List["SessionQuestion"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     status_timeline: List["StatusTimeline"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
@@ -149,24 +149,39 @@ class StatusTimeline(SQLModel, table=True):
     
     session: InterviewSession = Relationship(back_populates="status_timeline")
 
-class InterviewResponse(SQLModel, table=True):
+class InterviewResult(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    interview_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(foreign_key="interviewsession.id", unique=True)
+    total_score: Optional[float] = Field(default=0.0)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    session: "InterviewSession" = Relationship(back_populates="result")
+    answers: List["Answers"] = Relationship(back_populates="interview_result")
+
+class Answers(SQLModel, table=True):
+    """Formerly named 'InterviewResponse'"""
+    # Renamed table explicitly to handle migration if needed, but for clarity using table name default (answers)
+    __tablename__ = "answers"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    interview_result_id: int = Field(foreign_key="interviewresult.id")
     question_id: int = Field(foreign_key="questions.id")
     
-    # Legacy fields
+    # Legacy fields mapping
+    candidate_answer: Optional[str] = None # Renamed from answer_text
+    feedback: Optional[str] = None # Renamed from evaluation_text
+    score: Optional[float] = None
+    
+    # Audio fields (Persisted)
     audio_path: Optional[str] = None
     transcribed_text: Optional[str] = None
-    similarity_score: Optional[float] = None
     
-    # New flow fields
-    answer_text: Optional[str] = None
-    evaluation_text: Optional[str] = None
-    score: Optional[float] = None
+    # Keeping timestamps
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    session: InterviewSession = Relationship(back_populates="responses")
-    question: Questions = Relationship(back_populates="responses")
+    # Relationships
+    interview_result: InterviewResult = Relationship(back_populates="answers")
+    question: Questions = Relationship(back_populates="answers")
 
 
 # Rebuild models
@@ -175,6 +190,7 @@ QuestionPaper.model_rebuild()
 Questions.model_rebuild()
 InterviewSession.model_rebuild()
 SessionQuestion.model_rebuild()
-InterviewResponse.model_rebuild()
+InterviewResult.model_rebuild()
+Answers.model_rebuild()
 ProctoringEvent.model_rebuild()
 StatusTimeline.model_rebuild()

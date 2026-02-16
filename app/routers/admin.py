@@ -3,14 +3,15 @@ from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
-from ..models.db_models import QuestionPaper, Questions, InterviewSession, InterviewResponse, User, UserRole, ProctoringEvent, InterviewStatus
+from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
-from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
+from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem, AnswerRead
 from ..schemas.api_response import ApiResponse
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
@@ -399,13 +400,20 @@ async def schedule_interview(
          raise HTTPException(status_code=400, detail="Invalid Candidate ID")
 
     # Availability Check (Optional - can be expanded later)
-    # Check if candidate has conflicting interview within + - 1 hour? SKIPPED for MVP.
+
+    # Parse schedule time
+    try:
+        # Handle "Z" for UTC if present, though fromisoformat supports it in newer Python versions
+        dt_str = schedule_data.schedule_time.replace("Z", "+00:00")
+        schedule_dt = datetime.fromisoformat(dt_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid schedule_time format. ISO 8601 expected.")
 
     new_session = InterviewSession(
         admin_id=current_user.id,
         candidate_id=schedule_data.candidate_id,
         paper_id=schedule_data.paper_id,
-        schedule_time=schedule_data.schedule_time,
+        schedule_time=schedule_dt,
         duration_minutes=schedule_data.duration_minutes,
         max_questions=schedule_data.max_questions,
         status=InterviewStatus.SCHEDULED
@@ -479,7 +487,6 @@ async def schedule_interview(
         raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
     
     # Generate Link
-    # Note: host needs to be configurable in real prod, assume localhost:8000 for now or passed in env
     base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
     link = f"{base_url}/interview/access/{new_session.access_token}"
     
@@ -518,9 +525,14 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
     """List interviews created by this admin."""
     # Only show sessions created by this admin (including those where admin is NULL)
     sessions = session.exec(
-        select(InterviewSession).where(
+        select(InterviewSession)
+        .where(
             (InterviewSession.admin_id == current_user.id) | 
             (InterviewSession.admin_id == None)
+        )
+        .options(
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.candidate)
         )
     ).all()
     
@@ -568,6 +580,10 @@ async def get_live_status_dashboard(
             InterviewStatus.SCHEDULED,
             InterviewStatus.LIVE
         ])
+    ).options(
+        selectinload(InterviewSession.selected_questions),
+        selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+        selectinload(InterviewSession.candidate)
     ).order_by(InterviewSession.last_activity.desc())
     
     active_sessions = session.exec(stmt).all()
@@ -576,7 +592,8 @@ async def get_live_status_dashboard(
     for interview_session in active_sessions:
         # Calculate progress
         total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
-        answered_questions = len(interview_session.responses)
+        responses = interview_session.result.answers if interview_session.result else []
+        answered_questions = len(responses)
         progress_percent = (answered_questions / total_questions * 100) if total_questions > 0 else 0
         
         # Serialize candidate
@@ -608,7 +625,16 @@ async def get_interview(
 ):
     """Get detailed information about a specific interview session."""
     # Retrieve the interview session
-    interview_session = session.get(InterviewSession, interview_id)
+    interview_session = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.id == interview_id)
+        .options(
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+            selectinload(InterviewSession.proctoring_events)
+        )
+    ).first()
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -638,7 +664,7 @@ async def get_interview(
         start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
         end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
         access_token=interview_session.access_token,
-        response_count=len(interview_session.responses),
+        response_count=len(interview_session.result.answers) if interview_session.result else 0,
         proctoring_event_count=len(interview_session.proctoring_events),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
@@ -777,7 +803,7 @@ async def update_interview(
         start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
         end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
         access_token=interview_session.access_token,
-        response_count=len(interview_session.responses),
+        response_count=len(interview_session.result.answers) if interview_session.result else 0,
         proctoring_event_count=len(interview_session.proctoring_events),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
@@ -848,11 +874,20 @@ async def list_candidates(current_user: User = Depends(get_admin_user), session:
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
     # Only show sessions created by this admin
-    sessions = session.exec(select(InterviewSession).where(InterviewSession.admin_id == current_user.id)).all()
+    # Only show sessions created by this admin
+    sessions = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.admin_id == current_user.id)
+        .options(
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+            selectinload(InterviewSession.proctoring_events)
+        )
+    ).all()
     
     results = []
     for s in sessions:
-        responses = s.responses
+        responses = s.result.answers if s.result else []
         proctoring = s.proctoring_events
         
         from ..utils import calculate_average_score
@@ -864,12 +899,12 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             res_status = "Skipped"
             if r.score is not None:
                 res_status = "Answered"
-            elif r.answer_text or r.transcribed_text or r.audio_path:
+            elif r.candidate_answer or r.transcribed_text or r.audio_path:
                 res_status = "Pending AI"
                 
             details.append(ResponseDetail(
                 question=r.question.question_text or r.question.content or "Dynamic",
-                answer=r.answer_text or r.transcribed_text or "[No Answer]",
+                answer=r.candidate_answer or r.transcribed_text or "[No Answer]",
                 score=f"{round(r.score * 100, 1) if r.score is not None else 0}%",
                 status=res_status,
                 audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
@@ -878,11 +913,42 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         # Serialize candidate, handling NULL
         candidate_dict = serialize_user(s.candidate, fallback_name=s.candidate_name, fallback_role="candidate")
 
+        # Serialize interview
+        # Manually constructing or using model_dump if it were a Pydantic model, but it's SQLModel
+        # Let's use a helper or manual dict for now to ensure we get what we need
+        interview_dict = {
+            "id": s.id,
+            "paper_id": s.paper_id,
+            "schedule_time": s.schedule_time.isoformat() if s.schedule_time else None,
+            "duration_minutes": s.duration_minutes,
+            "status": s.status.value,
+            "total_score": s.total_score,
+            "start_time": s.start_time.isoformat() if s.start_time else None,
+            "end_time": s.end_time.isoformat() if s.end_time else None,
+            "access_token": s.access_token,
+        }
+
+        # Answers list
+        answers_list = [
+            AnswerRead(
+                id=r.id,
+                question_id=r.question_id,
+                candidate_answer=r.candidate_answer,
+                feedback=r.feedback,
+                score=r.score,
+                audio_path=r.audio_path,
+                transcribed_text=r.transcribed_text,
+                timestamp=r.timestamp.isoformat() if r.timestamp else None
+            ) for r in responses
+        ]
+
         results.append(DetailedResult(
-            interview_id=s.id,
+            interview=interview_dict,
             candidate=candidate_dict,
+            answers=answers_list,
             date=s.schedule_time.strftime("%Y-%m-%d %H:%M"),
-            score=f"{round(avg_score * 100, 1)}%",
+            total_score=s.total_score, # Use session's cached score or avg_score
+            max_score=100.0, # Assuming percentage based for now
             flags=len(proctoring) > 0,
             details=details,
             proctoring_logs=[ProctoringLogItem(
@@ -905,7 +971,15 @@ async def get_result(
 ):
     """Get detailed result for a specific interview session."""
     # Get the interview session
-    interview_session = session.get(InterviewSession, interview_id)
+    interview_session = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.id == interview_id)
+        .options(
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+            selectinload(InterviewSession.proctoring_events)
+        )
+    ).first()
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -918,7 +992,7 @@ async def get_result(
         )
     
     # Build detailed result (reuse logic from get_all_results)
-    responses = interview_session.responses
+    responses = interview_session.result.answers if interview_session.result else []
     proctoring = interview_session.proctoring_events
     
     from ..utils import calculate_average_score
@@ -930,12 +1004,12 @@ async def get_result(
         res_status = "Skipped"
         if r.score is not None:
             res_status = "Answered"
-        elif r.answer_text or r.transcribed_text or r.audio_path:
+        elif r.candidate_answer or r.transcribed_text or r.audio_path:
             res_status = "Pending AI"
             
         details.append(ResponseDetail(
             question=r.question.question_text or r.question.content or "Dynamic",
-            answer=r.answer_text or r.transcribed_text or "[No Answer]",
+            answer=r.candidate_answer or r.transcribed_text or "[No Answer]",
             score=f"{round(r.score * 100, 1) if r.score is not None else 0}%",
             status=res_status,
             audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
@@ -945,13 +1019,44 @@ async def get_result(
     # Serialize candidate with role-based key, handling NULL
     candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
     
+    # Serialize interview
+    interview_dict = {
+        "id": interview_session.id,
+        "paper_id": interview_session.paper_id,
+        "schedule_time": interview_session.schedule_time.isoformat() if interview_session.schedule_time else None,
+        "duration_minutes": interview_session.duration_minutes,
+        "status": interview_session.status.value,
+        "total_score": interview_session.total_score,
+        "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
+        "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
+        "access_token": interview_session.access_token,
+        "admin_id": interview_session.admin_id,
+        "created_at": interview_session.created_at.isoformat() if hasattr(interview_session, 'created_at') and interview_session.created_at else None
+    }
+
+    # Answers list
+    answers_list = [
+        AnswerRead(
+            id=r.id,
+            question_id=r.question_id,
+            candidate_answer=r.candidate_answer,
+            feedback=r.feedback,
+            score=r.score,
+            audio_path=r.audio_path,
+            transcribed_text=r.transcribed_text,
+            timestamp=r.timestamp.isoformat() if r.timestamp else None
+        ) for r in responses
+    ]
+
     return ApiResponse(
         status_code=200,
         data=DetailedResult(
-            interview_id=interview_session.id,
+            interview=interview_dict,
             candidate=candidate_dict,
+            answers=answers_list,
             date=interview_session.schedule_time.strftime("%Y-%m-%d %H:%M"),
-            score=f"{round(avg_score * 100, 1)}%",
+            total_score=interview_session.total_score,
+            max_score=100.0,
             flags=len(proctoring) > 0,
             details=details,
             proctoring_logs=[ProctoringLogItem(
@@ -1010,16 +1115,23 @@ async def update_result(
             response_id = resp_update.get("response_id")
             
             # Get the response
-            interview_response = session.get(InterviewResponse, response_id)
+            answer = session.get(Answers, response_id)
             
-            if not interview_response:
+            if not answer:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Response with ID {response_id} not found"
                 )
             
             # Verify response belongs to this session
-            if interview_response.interview_id != interview_id:
+            # We need to query the result ID for this session
+            if not interview_session.result:
+                 # Should have a result if we are updating it? 
+                 # Or maybe the result object is created on finish?
+                 # If no result, we can't have answers.
+                 raise HTTPException(status_code=400, detail="Interview has no result object")
+                 
+            if answer.interview_result_id != interview_session.result.id:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Response {response_id} does not belong to session {interview_id}"
@@ -1027,13 +1139,13 @@ async def update_result(
             
             # Update score if provided
             if "score" in resp_update and resp_update["score"] is not None:
-                interview_response.score = resp_update["score"]
+                answer.score = resp_update["score"]
             
-            # Update evaluation text if provided
+            # Update evaluation text (feedback) if provided
             if "evaluation_text" in resp_update and resp_update["evaluation_text"] is not None:
-                interview_response.evaluation_text = resp_update["evaluation_text"]
+                answer.feedback = resp_update["evaluation_text"]
             
-            session.add(interview_response)
+            session.add(answer)
     
     # Save changes
     session.add(interview_session)
@@ -1062,9 +1174,10 @@ async def delete_result(
         raise HTTPException(status_code=404, detail="Interview session not found")
     
     # Hard delete responses to keep session history but clear results
-    responses = interview_session.responses
-    for r in responses:
-        session.delete(r)
+    if interview_session.result:
+        responses = interview_session.result.answers
+        for r in responses:
+            session.delete(r)
     
     interview_session.total_score = None
     session.add(interview_session)
@@ -1080,6 +1193,34 @@ async def delete_result(
         message="Results deleted, interview session preserved"
     )
 
+@router.get("/interviews/response/{response_id}")
+async def get_response(response_id: int, session: Session = Depends(get_session), current_user: User = Depends(get_admin_user)):
+    """
+    Get a specific response/answer details (for audio playback etc)
+    """
+    answer = session.get(Answers, response_id)
+    if not answer:
+       raise HTTPException(status_code=404, detail="Answer not found")
+       
+    # Authorization: Only admin who created the interview session associated with this answer
+    if answer.interview_session.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this response")
+
+    # We might need to construct a response that matches what UI expects if UI hasn't changed
+    # Logic: return data
+    return {
+        "id": answer.id,
+        "question_id": answer.question_id,
+        "candidate_answer": answer.candidate_answer,
+        "feedback": answer.feedback,
+        "score": answer.score,
+        "timestamp": answer.timestamp.isoformat() if answer.timestamp else None,
+        "audio_path": answer.audio_path,
+        "transcribed_text": answer.transcribed_text,
+        "evaluation_text": answer.evaluation_text,
+        "interview_id": answer.interview_id
+    }
+
 @router.get("/results/audio/{response_id}")
 async def get_response_audio(
     response_id: int,
@@ -1087,11 +1228,12 @@ async def get_response_audio(
     session: Session = Depends(get_session)
 ):
     """Streams a candidate's audio response for review."""
-    response = session.get(InterviewResponse, response_id)
+    response = session.get(Answers, response_id)
     if not response or not response.audio_path:
         raise HTTPException(status_code=404, detail="Audio response not found")
         
-    if response.session.admin_id != current_user.id:
+    # Answers -> InterviewResult -> InterviewSession
+    if not response.interview_result or not response.interview_result.session or response.interview_result.session.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
     if not os.path.exists(response.audio_path):
@@ -1442,7 +1584,16 @@ async def get_candidate_status(
     from ..services.status_manager import get_status_summary
     
     # Get the interview session
-    interview_session = session.get(InterviewSession, interview_id)
+    interview_session = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.id == interview_id)
+        .options(
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+            selectinload(InterviewSession.selected_questions),
+            selectinload(InterviewSession.proctoring_events)
+        )
+    ).first()
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")

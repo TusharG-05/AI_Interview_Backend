@@ -16,7 +16,7 @@ engine = create_engine(DATABASE_URL, connect_args=connect_args, **engine_args)
 def init_db():
     from ..models.db_models import (
         User, QuestionPaper, Questions, 
-        InterviewSession, InterviewResponse,
+        InterviewSession, InterviewResult, Answers,
         SessionQuestion, ProctoringEvent
     )
     SQLModel.metadata.create_all(engine)

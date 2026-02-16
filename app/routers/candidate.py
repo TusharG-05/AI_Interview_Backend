@@ -4,7 +4,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 import random
-from ..models.db_models import User, InterviewSession, InterviewResponse, SessionQuestion, QuestionPaper, Questions
+from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions
 from ..schemas.api_response import ApiResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])

@@ -17,7 +17,8 @@ from ..models.db_models import (
     StatusTimeline, 
     ProctoringEvent,
     CandidateStatus,
-    InterviewResponse
+    Answers,
+    InterviewResult
 )
 import json
 from ..core.logger import get_logger
@@ -290,15 +291,22 @@ def get_status_summary(
         ProctoringEvent.triggered_warning == True
     ).order_by(ProctoringEvent.timestamp)
     violations = session.exec(violations_stmt).all()
+    # Check implementation:
+    # We need to find the InterviewResult for this session, then count answers
+    # Or count Answers joined with InterviewResult where interview_id matches
     
-    # Get progress
-    responses_stmt = select(InterviewResponse).where(
-        InterviewResponse.interview_id == interview_session.id
-    )
-    responses = session.exec(responses_stmt).all()
+    # Check if result exists
+    result_stmt = select(InterviewResult).where(InterviewResult.interview_id == interview_session.id)
+    result = session.exec(result_stmt).first()
+    
+    answered_questions = 0
+    if result:
+        # Count answers linked to this result
+        # count() is not directly supported in all sqlmodel versions easily, using len of list or func.count
+        # simpler: 
+        answered_questions = len(result.answers)
     
     total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
-    answered_questions = len(responses)
     
     # Get current question (if any)
     current_question_id = None

@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Questions, QuestionPaper, InterviewSession, InterviewResponse, SessionQuestion, InterviewStatus
+from ..models.db_models import Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus
 from ..schemas.requests import AnswerRequest
 from ..services import interview as interview_service
 from ..services.audio import AudioService
@@ -194,7 +194,13 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     update_last_activity(session_db, session_obj)
     
     # 1. Get answered questions
-    answered_ids = [r.question_id for r in session_db.exec(select(InterviewResponse).where(InterviewResponse.interview_id == interview_id)).all()]
+    # Need to find InterviewResult first or join
+    # answered_ids = [r.question_id for r in session_db.exec(select(Answers).join(InterviewResult).where(InterviewResult.interview_id == interview_id)).all()]
+    # simplified:
+    answered_ids = []
+    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+    if result:
+        answered_ids = [a.question_id for a in result.answers]
     
     # 2. Check if this session has assigned questions (Campaign mode)
     has_assignments = session_db.exec(
@@ -295,8 +301,21 @@ async def submit_answer_audio(
     content = await audio.read()
     audio_service.save_audio_blob(content, audio_path)
     
-    response = InterviewResponse(interview_id=interview_id, question_id=question_id, audio_path=audio_path)
-    session_db.add(response)
+    # Get or Create InterviewResult
+    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+    if not result:
+        result = InterviewResult(interview_id=interview_id)
+        session_db.add(result)
+        session_db.commit()
+        session_db.refresh(result)
+    
+    # Save Answer
+    answer = Answers(
+        interview_result_id=result.id, 
+        question_id=question_id, 
+        audio_path=audio_path
+    )
+    session_db.add(answer)
     
     # Update last activity
     update_last_activity(session_db, session_obj)
@@ -324,12 +343,20 @@ async def submit_answer_text(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    response = InterviewResponse(
-        interview_id=interview_id,
+    # Get or Create InterviewResult
+    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+    if not result:
+        result = InterviewResult(interview_id=interview_id)
+        session_db.add(result)
+        session_db.commit()
+        session_db.refresh(result)
+
+    answer = Answers(
+        interview_result_id=result.id,
         question_id=question_id,
-        answer_text=answer_text
+        candidate_answer=answer_text
     )
-    session_db.add(response)
+    session_db.add(answer)
     session_db.commit()
     return ApiResponse(
         status_code=200,
@@ -381,14 +408,22 @@ async def evaluate_answer(request: AnswerRequest, interview_id: int, session_db:
         # This now only flushes, doesn't commit
         db_question = interview_service.get_or_create_question(session_db, request.question, topic="Dynamic")
 
-        new_response = InterviewResponse(
-            interview_id=interview_id,
+        # Get or Create InterviewResult
+        result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+        if not result:
+            result = InterviewResult(interview_id=interview_id)
+            session_db.add(result)
+            session_db.commit()
+            session_db.refresh(result)
+
+        new_answer = Answers(
+            interview_result_id=result.id,
             question_id=db_question.id,
-            answer_text=request.answer,
-            evaluation_text=evaluation["feedback"],
+            candidate_answer=request.answer,
+            feedback=evaluation["feedback"],
             score=evaluation["score"]
         )
-        session_db.add(new_response)
+        session_db.add(new_answer)
         
         # ATOMIC COMMIT: Both Question (if new) and Response are saved together
         session_db.commit()
@@ -418,10 +453,27 @@ async def process_session_results_unified(interview_id: int):
                 logger.warning(f"Session {interview_id} not found for processing")
                 return
             
-            responses = db.exec(select(InterviewResponse).where(InterviewResponse.interview_id == interview_id)).all()
-            for resp in responses:
+            # Retrieve Result Object
+            result_obj = db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+            if not result_obj:
+                 # If no result object, try creating or just return if no answers?
+                 # If we are finishing, we expect something? 
+                 # If not present, maybe no questions answered.
+                 logger.warning(f"No InterviewResult for session {interview_id}")
+                 # Initialize if needed to prevent crash or just return
+                 result_obj = InterviewResult(interview_id=interview_id)
+                 db.add(result_obj)
+                 db.commit()
+                 db.refresh(result_obj)
+            
+            # Fetch answers
+            # answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+            # Or use relationship
+            answers = result_obj.answers
+            
+            for resp in answers:
                 # Process Audio Responses
-                if resp.audio_path and not (resp.answer_text or resp.transcribed_text):
+                if resp.audio_path and not (resp.candidate_answer or resp.transcribed_text):
                     audio_service.cleanup_audio(resp.audio_path)
                     
                     # 1. Verification & Transcription (Async)
@@ -430,24 +482,34 @@ async def process_session_results_unified(interview_id: int):
                         match, _ = audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path)
                         if not match: text = f"[VOICE MISMATCH] {text}"
                     
-                    resp.answer_text = text
-                    resp.transcribed_text = text # Compatibility
+                    resp.candidate_answer = text
+                    resp.transcribed_text = text 
                 
                 # Evaluation (for both Audio and Text responses)
-                if resp.answer_text and not resp.evaluation_text:
-                    q_text = resp.question.question_text or resp.question.content or "General Question"
-                    evaluation = interview_service.evaluate_answer_content(q_text, resp.answer_text)
+                if resp.candidate_answer and not resp.feedback:
+                    # Fetch question text
+                    q = db.get(Questions, resp.question_id)
+                    q_text = q.question_text or q.content or "General Question"
                     
-                    resp.evaluation_text = evaluation["feedback"]
+                    evaluation = interview_service.evaluate_answer_content(q_text, resp.candidate_answer)
+                    
+                    resp.feedback = evaluation["feedback"]
                     resp.score = evaluation["score"]
                     db.add(resp)
                     db.commit()
             
             # Final Score Aggregation
             from ..utils import calculate_average_score
-            all_scores = [r.score for r in responses if r.score is not None]
-            session.total_score = calculate_average_score(all_scores)
+            all_scores = [r.score for r in answers if r.score is not None]
+            
+            # Update InterviewResult
+            result_obj.total_score = calculate_average_score(all_scores)
+            db.add(result_obj)
+            
+            # Update Session Legacy/Cache Field
+            session.total_score = result_obj.total_score
             db.add(session)
+            
             db.commit()
             logger.info(f"Session {interview_id} processing complete. Score: {session.total_score}")
         except Exception as e:
@@ -456,9 +518,8 @@ async def process_session_results_unified(interview_id: int):
             try:
                 session = db.get(InterviewSession, interview_id)
                 if session:
-                    session.status = InterviewStatus.COMPLETED  # Keep as completed but log error
-                    db.add(session)
-                    db.commit()
+                    # status is already completed, maybe add error flag?
+                    pass
             except Exception:
                 db.rollback()
 

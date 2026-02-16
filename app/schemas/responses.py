@@ -96,11 +96,23 @@ class ResponseDetail(BaseModel):
     status: str # "Answered", "Skipped", "Pending AI"
     audio_url: Optional[str] = None
 
+class AnswerRead(BaseModel):
+    id: int
+    question_id: int
+    candidate_answer: Optional[str] = None
+    feedback: Optional[str] = None
+    score: Optional[float] = None
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
+    timestamp: Optional[str] = None
+
 class DetailedResult(BaseModel):
-    interview_id: int
+    interview: dict # Full interview details
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    answers: List[AnswerRead]
     date: str
-    score: str
+    total_score: Optional[float] = None
+    max_score: Optional[float] = None
     flags: bool
     details: List[ResponseDetail]
     proctoring_logs: List[ProctoringLogItem]
