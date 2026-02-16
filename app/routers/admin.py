@@ -10,7 +10,7 @@ from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
-from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
+from ..schemas.responses import PaperRead, QuestionRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem
 from ..schemas.api_response import ApiResponse
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
@@ -34,7 +34,13 @@ async def list_papers(
     papers = session.exec(select(QuestionPaper).where(QuestionPaper.admin_id == current_user.id)).all()
     papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
-        question_count=len(p.questions), created_at=p.created_at.isoformat(),
+        question_count=len(p.questions), 
+        questions=[QuestionRead(
+            id=q.id, content=q.content, question_text=q.question_text,
+            topic=q.topic, difficulty=q.difficulty, marks=q.marks,
+            response_type=q.response_type
+        ) for q in p.questions],
+        created_at=p.created_at.isoformat(),
         created_by=serialize_user(p.admin, fallback_role="admin")
     ) for p in papers]
     return ApiResponse(
@@ -70,7 +76,7 @@ async def create_paper(
         raise HTTPException(status_code=500, detail=f"Failed to create paper: {str(e)}")
     paper_read = PaperRead(
         id=new_paper.id, name=new_paper.name, description=new_paper.description, 
-        question_count=0, created_at=new_paper.created_at.isoformat(),
+        question_count=0, questions=[], created_at=new_paper.created_at.isoformat(),
         created_by=serialize_user(current_user)
     )
     return ApiResponse(
@@ -91,7 +97,13 @@ async def get_paper(
         raise HTTPException(status_code=404, detail="Paper not found")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
-        question_count=len(paper.questions), created_at=paper.created_at.isoformat(),
+        question_count=len(paper.questions),
+        questions=[QuestionRead(
+            id=q.id, content=q.content, question_text=q.question_text,
+            topic=q.topic, difficulty=q.difficulty, marks=q.marks,
+            response_type=q.response_type
+        ) for q in paper.questions],
+        created_at=paper.created_at.isoformat(),
         created_by=serialize_user(paper.admin, fallback_role="admin")
     )
     return ApiResponse(
@@ -125,7 +137,13 @@ async def update_paper(
         raise HTTPException(status_code=500, detail=f"Failed to update paper: {str(e)}")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
-        question_count=len(paper.questions), created_at=paper.created_at.isoformat(),
+        question_count=len(paper.questions),
+        questions=[QuestionRead(
+            id=q.id, content=q.content, question_text=q.question_text,
+            topic=q.topic, difficulty=q.difficulty, marks=q.marks,
+            response_type=q.response_type
+        ) for q in paper.questions],
+        created_at=paper.created_at.isoformat(),
         created_by=serialize_user(paper.admin, fallback_role="admin")
     )
     return ApiResponse(
@@ -157,21 +175,6 @@ async def delete_paper(
         message="Paper and all associated questions deleted successfully"
     )
 
-@router.get("/papers/{paper_id}/questions", response_model=ApiResponse[List[Questions]])
-async def get_paper_questions(
-    paper_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
-):
-    """List all questions within a specific paper."""
-    paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_id != current_user.id:
-        raise HTTPException(status_code=404, detail="Paper not found")
-    return ApiResponse(
-        status_code=200,
-        data=paper.questions,
-        message="Paper questions retrieved successfully"
-    )
 
 @router.post("/papers/{paper_id}/questions", response_model=ApiResponse[Questions])
 async def add_question_to_paper(

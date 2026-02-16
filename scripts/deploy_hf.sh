@@ -30,6 +30,10 @@ rsync -av --progress . "$DEPLOY_DIR/" \
 # 2. Enter deploy directory
 cd "$DEPLOY_DIR" || exit
 
+# 2.5 Ensure the HF-specific Dockerfile is used
+echo "🐳 Configuring Dockerfile for Hugging Face..."
+cp Dockerfile.hf Dockerfile
+
 # 3. Commit and Push
 echo "⬆️ Pushing to Hugging Face..."
 git add .
