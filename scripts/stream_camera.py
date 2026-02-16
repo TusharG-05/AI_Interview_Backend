@@ -36,9 +36,11 @@ class CameraStreamTrack(VideoStreamTrack):
         # Making it standard: output BGR, server will read.
         video_frame = av.VideoFrame.from_ndarray(frame, format="bgr24")
         
+        from fractions import Fraction
+        
         # Monotonic timestamps
         video_frame.pts = self.pts
-        video_frame.time_base = av.time_base(1, 30) # 30 FPS
+        video_frame.time_base = Fraction(1, 30) # 30 FPS
         self.pts += 1
         
         # Artificial delay to match 30 FPS roughly
@@ -65,12 +67,14 @@ async def run_client():
     await pc.setLocalDescription(offer)
     
     # 4. Send to Server
+    # 4. Send to Server
     payload = {
         "sdp": pc.localDescription.sdp,
         "type": pc.localDescription.type,
         "interview_id": INTERVIEW_ID
     }
     
+    logger.info(f"Sending Offer for Session {INTERVIEW_ID}...")
     logger.info(f"Sending Offer for Session {INTERVIEW_ID}...")
     try:
         response = requests.post(f"{BASE_URL}/analyze/video/offer", json=payload)
