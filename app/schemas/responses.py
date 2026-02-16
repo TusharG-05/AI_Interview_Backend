@@ -14,11 +14,20 @@ class InterviewAccessResponse(BaseModel):
     schedule_time: Optional[str] = None
     duration_minutes: Optional[int] = None
 
+class QuestionRead(BaseModel):
+    id: int
+    content: Optional[str] = None
+    topic: Optional[str] = None
+    difficulty: str
+    marks: int
+    response_type: str
+
 class PaperRead(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
     question_count: int = 0
+    questions: List[QuestionRead] = []
     created_at: str
     created_by: Optional[dict] = None # {"id": ..., "email": ..., "full_name": ..., "role": ...}
 

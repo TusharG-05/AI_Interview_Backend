@@ -1,3 +1,13 @@
+import os
+import asyncio
+import edge_tts
+from faster_whisper import WhisperModel
+import numpy as np
+import torch
+import soundfile as sf
+import resampy
+from speechbrain.inference.speaker import EncoderClassifier
+from pydub import AudioSegment
 from ..core.logger import get_logger
 import os
 
@@ -39,20 +49,20 @@ class AudioService:
     @property
     def stt_model(self):
         if self._stt_model is None:
-            import torch
-            from faster_whisper import WhisperModel
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"Loading Whisper model ({self.stt_model_size}) on {device}...")
-            self._stt_model = WhisperModel(self.stt_model_size, device=device, compute_type="float32" if device=="cpu" else "float16")
+            # Upgrade: base.en with int8 quantization is faster/better on i7
+            logger.info(f"Loading Whisper Model ({self.stt_model_size})...")
+            self._stt_model = WhisperModel(
+                self.stt_model_size,
+                device="cpu",
+                compute_type="int8", 
+                cpu_threads=4 # i7 can handle more threads for faster results
+            )
         return self._stt_model
 
     @property
     def speaker_model(self):
         if self._speaker_model is None:
-            from speechbrain.inference.speaker import EncoderClassifier
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"Loading Speaker model (ecapa-voxceleb) on {device}...")
+            logger.info("Loading Speaker Verification Model...")
             self._speaker_model = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb", 
                 run_opts={"device": device},
@@ -114,14 +124,17 @@ class AudioService:
         import numpy as np
         import resampy
             
+        import soundfile as sf
         audio, sr = sf.read(audio_path)
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
 
         if target_sr and sr != target_sr:
+            import resampy
             audio = resampy.resample(audio, sr, target_sr)
             sr = target_sr
 
+        import numpy as np
         return audio.astype(np.float32), sr
 
     def save_audio(self, audio, sr, path):
@@ -152,6 +165,7 @@ class AudioService:
         return embeddings
 
     def verify_speaker(self, enrollment_audio, test_audio):
+        import torch
         # Assumes test_audio is already cleaned if desired
         import torch
         emb1 = self.get_voice_print(enrollment_audio)
