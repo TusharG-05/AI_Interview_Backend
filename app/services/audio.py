@@ -1,15 +1,6 @@
 import os
 import asyncio
-import edge_tts
-from faster_whisper import WhisperModel
-import numpy as np
-import torch
-import soundfile as sf
-import resampy
-from speechbrain.inference.speaker import EncoderClassifier
-from pydub import AudioSegment
 from ..core.logger import get_logger
-import os
 
 logger = get_logger(__name__)
 
@@ -49,12 +40,15 @@ class AudioService:
     @property
     def stt_model(self):
         if self._stt_model is None:
+            import torch
+            from faster_whisper import WhisperModel
+            device = "cuda" if torch.cuda.is_available() else "cpu"
             # Upgrade: base.en with int8 quantization is faster/better on i7
-            logger.info(f"Loading Whisper Model ({self.stt_model_size})...")
+            logger.info(f"Loading Whisper Model ({self.stt_model_size}) on {device}...")
             self._stt_model = WhisperModel(
                 self.stt_model_size,
-                device="cpu",
-                compute_type="int8", 
+                device=device,
+                compute_type="int8" if device == "cpu" else "float16", 
                 cpu_threads=4 # i7 can handle more threads for faster results
             )
         return self._stt_model
@@ -62,7 +56,10 @@ class AudioService:
     @property
     def speaker_model(self):
         if self._speaker_model is None:
-            logger.info("Loading Speaker Verification Model...")
+            import torch
+            from speechbrain.inference.speaker import EncoderClassifier
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading Speaker Verification Model on {device}...")
             self._speaker_model = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb", 
                 run_opts={"device": device},
