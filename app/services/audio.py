@@ -1,14 +1,5 @@
-import os
-import asyncio
-import edge_tts
-from faster_whisper import WhisperModel
-import numpy as np
-import torch
-import soundfile as sf
-import resampy
-from speechbrain.inference.speaker import EncoderClassifier
-from pydub import AudioSegment
 from ..core.logger import get_logger
+import os
 
 logger = get_logger(__name__)
 
@@ -48,27 +39,29 @@ class AudioService:
     @property
     def stt_model(self):
         if self._stt_model is None:
-            # Upgrade: base.en with int8 quantization is faster/better on i7
-            logger.info(f"Loading Whisper Model ({self.stt_model_size})...")
-            self._stt_model = WhisperModel(
-                self.stt_model_size,
-                device="cpu",
-                compute_type="int8", 
-                cpu_threads=4 # i7 can handle more threads for faster results
-            )
+            import torch
+            from faster_whisper import WhisperModel
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading Whisper model ({self.stt_model_size}) on {device}...")
+            self._stt_model = WhisperModel(self.stt_model_size, device=device, compute_type="float32" if device=="cpu" else "float16")
         return self._stt_model
 
     @property
     def speaker_model(self):
         if self._speaker_model is None:
-            logger.info("Loading Speaker Verification Model...")
+            from speechbrain.inference.speaker import EncoderClassifier
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading Speaker model (ecapa-voxceleb) on {device}...")
             self._speaker_model = EncoderClassifier.from_hparams(
-                source="speechbrain/spkrec-ecapa-voxceleb",
-                run_opts={"device": "cpu"}
+                source="speechbrain/spkrec-ecapa-voxceleb", 
+                run_opts={"device": device},
+                savedir="/tmp/speechbrain_model"
             )
         return self._speaker_model
 
     async def text_to_speech(self, text, output_path):
+        import edge_tts
         communicate = edge_tts.Communicate(text, self.female_voice)
         await communicate.save(output_path)
         return output_path
@@ -86,6 +79,7 @@ class AudioService:
             return False
             
         try:
+            import soundfile as sf
             # Quick check: can we read the header?
             with sf.SoundFile(file_path) as f:
                 if f.frames == 0:
@@ -101,6 +95,7 @@ class AudioService:
     def fix_audio_format(self, file_path: str):
         """Converts ANY audio (WebM, etc.) to 16kHz Mono WAV."""
         try:
+            from pydub import AudioSegment
             audio = AudioSegment.from_file(file_path)
             audio = audio.set_frame_rate(16000).set_channels(1)
             # Normalize to -20dBFS for consistent AI results
@@ -114,6 +109,10 @@ class AudioService:
     def load_audio(self, audio_path, target_sr=None):
         if not self.validate_audio_integrity(audio_path):
             raise ValueError(f"Cannot load invalid audio file: {audio_path}")
+        
+        import soundfile as sf
+        import numpy as np
+        import resampy
             
         audio, sr = sf.read(audio_path)
         if audio.ndim > 1:
@@ -126,6 +125,7 @@ class AudioService:
         return audio.astype(np.float32), sr
 
     def save_audio(self, audio, sr, path):
+        import soundfile as sf
         sf.write(path, audio, sr)
 
     def cleanup_audio(self, audio_path):
@@ -145,6 +145,7 @@ class AudioService:
             return audio_path
 
     def get_voice_print(self, audio_path):
+        import torch
         audio, sr = self.load_audio(audio_path, target_sr=16000)
         signal = torch.tensor(audio).unsqueeze(0)
         embeddings = self.speaker_model.encode_batch(signal)
@@ -152,6 +153,7 @@ class AudioService:
 
     def verify_speaker(self, enrollment_audio, test_audio):
         # Assumes test_audio is already cleaned if desired
+        import torch
         emb1 = self.get_voice_print(enrollment_audio)
         emb2 = self.get_voice_print(test_audio)
 
@@ -167,6 +169,7 @@ class AudioService:
         try:
             # Try Modal if enabled
             if USE_MODAL:
+                import asyncio
                 modal_fn = get_modal_transcribe()
                 if modal_fn:
                     logger.info(f"Using Modal for STT: {audio_path}")
@@ -184,6 +187,7 @@ class AudioService:
                     logger.warning("Modal unavailable, falling back to local STT")
             
             # Local fallback (or when USE_MODAL=false)
+            import asyncio
             loop = asyncio.get_running_loop()
             
             def _transcribe():
@@ -213,6 +217,7 @@ class AudioService:
     def calculate_energy(self, audio_path):
         """Calculates RMS energy of an audio file to detect silence."""
         try:
+            from pydub import AudioSegment
             audio = AudioSegment.from_file(audio_path)
             return audio.rms
         except Exception as e:
@@ -222,6 +227,7 @@ class AudioService:
     def convert_to_wav(self, input_path):
         """Converts any audio file to WAV format and returns the path."""
         try:
+            from pydub import AudioSegment
             output_path = input_path.rsplit(".", 1)[0] + ".wav"
             audio = AudioSegment.from_file(input_path)
             audio.export(output_path, format="wav")

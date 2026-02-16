@@ -48,14 +48,17 @@ async def lifespan(app: FastAPI):
         logger.info("Warm-up: Loading AI Models (Whisper, LLM)...")
         from .core.config import local_llm
         try:
+            # Trigger lazy loading properties
             _ = audio_service.stt_model
+            _ = audio_service.speaker_model
             local_llm.invoke("Hello")
             logger.info("Warm-up: AI Models Ready.")
         except Exception as e:
             logger.error(f"Warm-up failed: {e}")
     
-    # Warm-up disabled for stability - enable via feature flag if needed
-    # threading.Thread(target=warm_up, daemon=True).start()
+    # Start warm-up in background thread so server starts instantly
+    threading.Thread(target=warm_up, daemon=True).start()
+    logger.info("Warm-up: Started in background thread for fast startup.")
     logger.info("Model warm-up: Deferred to first request for stability.")
     
     logger.info("Lifespan: Initializing CameraService...")
@@ -142,7 +145,7 @@ ALLOW_ORIGIN_REGEX = r".*"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=ALLOW_ORIGIN_REGEX,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
