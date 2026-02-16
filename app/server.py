@@ -45,18 +45,20 @@ async def lifespan(app: FastAPI):
     # Pre-warm models in background
     import threading
     def warm_up():
-        logger.info("Warm-up: Loading AI Models (Whisper, LLM)...")
+        logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
         from .core.config import local_llm
         try:
+            # Trigger lazy loading properties
             _ = audio_service.stt_model
+            _ = audio_service.speaker_model
             local_llm.invoke("Hello")
             logger.info("Warm-up: AI Models Ready.")
         except Exception as e:
             logger.error(f"Warm-up failed: {e}")
     
-    # Warm-up disabled for stability - enable via feature flag if needed
-    # threading.Thread(target=warm_up, daemon=True).start()
-    logger.info("Model warm-up: Deferred to first request for stability.")
+    # Start warm-up in background thread so server starts instantly
+    threading.Thread(target=warm_up, daemon=True).start()
+    logger.info("Warm-up: Started in background thread for fast startup.")
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()
@@ -138,11 +140,11 @@ import os
 
 # SECURITY: Allow ALL origins (including localhost) for development convenience
 # WARNING: This effectively disables CORS protection.
-ALLOW_ORIGIN_REGEX = r".*"
+# ALLOW_ORIGIN_REGEX = r".*"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=ALLOW_ORIGIN_REGEX,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

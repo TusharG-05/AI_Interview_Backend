@@ -1,13 +1,6 @@
 import os
 import asyncio
 import edge_tts
-from faster_whisper import WhisperModel
-import numpy as np
-import torch
-import soundfile as sf
-import resampy
-from speechbrain.inference.speaker import EncoderClassifier
-from pydub import AudioSegment
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -48,6 +41,7 @@ class AudioService:
     @property
     def stt_model(self):
         if self._stt_model is None:
+            from faster_whisper import WhisperModel
             # Upgrade: base.en with int8 quantization is faster/better on i7
             logger.info(f"Loading Whisper Model ({self.stt_model_size})...")
             self._stt_model = WhisperModel(
@@ -61,6 +55,7 @@ class AudioService:
     @property
     def speaker_model(self):
         if self._speaker_model is None:
+            from speechbrain.inference.speaker import EncoderClassifier
             logger.info("Loading Speaker Verification Model...")
             self._speaker_model = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb",
@@ -86,6 +81,7 @@ class AudioService:
             return False
             
         try:
+            import soundfile as sf
             # Quick check: can we read the header?
             with sf.SoundFile(file_path) as f:
                 if f.frames == 0:
@@ -101,6 +97,7 @@ class AudioService:
     def fix_audio_format(self, file_path: str):
         """Converts ANY audio (WebM, etc.) to 16kHz Mono WAV."""
         try:
+            from pydub import AudioSegment
             audio = AudioSegment.from_file(file_path)
             audio = audio.set_frame_rate(16000).set_channels(1)
             # Normalize to -20dBFS for consistent AI results
@@ -115,17 +112,21 @@ class AudioService:
         if not self.validate_audio_integrity(audio_path):
             raise ValueError(f"Cannot load invalid audio file: {audio_path}")
             
+        import soundfile as sf
         audio, sr = sf.read(audio_path)
         if audio.ndim > 1:
             audio = audio.mean(axis=1)
 
         if target_sr and sr != target_sr:
+            import resampy
             audio = resampy.resample(audio, sr, target_sr)
             sr = target_sr
 
+        import numpy as np
         return audio.astype(np.float32), sr
 
     def save_audio(self, audio, sr, path):
+        import soundfile as sf
         sf.write(path, audio, sr)
 
     def cleanup_audio(self, audio_path):
@@ -145,12 +146,14 @@ class AudioService:
             return audio_path
 
     def get_voice_print(self, audio_path):
+        import torch
         audio, sr = self.load_audio(audio_path, target_sr=16000)
         signal = torch.tensor(audio).unsqueeze(0)
         embeddings = self.speaker_model.encode_batch(signal)
         return embeddings
 
     def verify_speaker(self, enrollment_audio, test_audio):
+        import torch
         # Assumes test_audio is already cleaned if desired
         emb1 = self.get_voice_print(enrollment_audio)
         emb2 = self.get_voice_print(test_audio)
@@ -213,6 +216,7 @@ class AudioService:
     def calculate_energy(self, audio_path):
         """Calculates RMS energy of an audio file to detect silence."""
         try:
+            from pydub import AudioSegment
             audio = AudioSegment.from_file(audio_path)
             return audio.rms
         except Exception as e:
@@ -222,6 +226,7 @@ class AudioService:
     def convert_to_wav(self, input_path):
         """Converts any audio file to WAV format and returns the path."""
         try:
+            from pydub import AudioSegment
             output_path = input_path.rsplit(".", 1)[0] + ".wav"
             audio = AudioSegment.from_file(input_path)
             audio.export(output_path, format="wav")
