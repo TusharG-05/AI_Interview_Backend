@@ -1,3 +1,13 @@
+---
+title: AI Interview Backend
+emoji: 🎥
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+app_port: 7860
+---
+
 # AI-Powered Proctoring & Interview System
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com)
