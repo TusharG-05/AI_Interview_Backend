@@ -1092,8 +1092,8 @@ async def get_result(
         "suspension_reason": interview_session.suspension_reason,
         "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
         "enrollment_audio_path": interview_session.enrollment_audio_path,
-        "candidate_name": interview_session.candidate_name,
-        "admin_name": interview_session.admin_name,
+        "candidate_name": interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name,
+        "admin_name": current_user.full_name, # Since we filtered by current_user.id
         "is_completed": interview_session.is_completed
     }
 
