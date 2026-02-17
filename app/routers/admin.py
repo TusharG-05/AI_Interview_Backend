@@ -75,13 +75,15 @@ async def list_papers(
         message="Question papers retrieved successfully"
     )
 
+from pydantic import BaseModel, Field
+
 class PaperCreate(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, description="Name of the question paper")
     description: Optional[str] = None
 
 
 
-@router.post("/papers", response_model=ApiResponse[PaperRead])
+@router.post("/papers", response_model=ApiResponse[PaperRead], status_code=201)
 async def create_paper(
     paper_data: PaperCreate,
     current_user: User = Depends(get_admin_user),
@@ -189,6 +191,14 @@ async def delete_paper(
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     
+    # Check for existing sessions using this paper
+    existing_sessions = session.exec(select(InterviewSession).where(InterviewSession.paper_id == paper_id)).first()
+    if existing_sessions:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot delete paper because it is used in scheduled or completed interviews."
+        )
+    
     session.delete(paper)
     try:
         session.commit()
@@ -202,7 +212,7 @@ async def delete_paper(
     )
 
 
-@router.post("/papers/{paper_id}/questions", response_model=ApiResponse[Questions])
+@router.post("/papers/{paper_id}/questions", response_model=ApiResponse[Questions], status_code=201)
 async def add_question_to_paper(
     paper_id: int,
     q_data: QuestionCreate,
@@ -388,7 +398,7 @@ async def update_question(
 
 # --- Interview Scheduling ---
 
-@router.post("/interviews/schedule", response_model=ApiResponse[InterviewLinkResponse])
+@router.post("/interviews/schedule", response_model=ApiResponse[InterviewLinkResponse], status_code=201)
 async def schedule_interview(
     schedule_data: InterviewScheduleCreate, 
     current_user: User = Depends(get_admin_user), 
@@ -608,16 +618,31 @@ async def get_live_status_dashboard(
         candidate_dict = serialize_user(interview_session.candidate)
         
         # Serialize interview
+        # Serialize interview
         interview_dict = {
             "id": interview_session.id,
+            "access_token": interview_session.access_token,
+            "admin_id": interview_session.admin_id,
+            "candidate_id": interview_session.candidate_id,
             "paper_id": interview_session.paper_id,
             "schedule_time": interview_session.schedule_time.isoformat(),
             "duration_minutes": interview_session.duration_minutes,
-            "status": interview_session.status.value,
+            "max_questions": interview_session.max_questions,
             "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
             "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
+            "status": interview_session.status.value,
             "total_score": interview_session.total_score,
-            "access_token": interview_session.access_token
+            "current_status": interview_session.current_status.value if interview_session.current_status else None,
+            "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+            "warning_count": interview_session.warning_count,
+            "max_warnings": interview_session.max_warnings,
+            "is_suspended": interview_session.is_suspended,
+            "suspension_reason": interview_session.suspension_reason,
+            "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
+            "enrollment_audio_path": interview_session.enrollment_audio_path,
+            "candidate_name": interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name,
+            "admin_name": current_user.full_name, # Since we filtered by current_user.id
+            "is_completed": interview_session.is_completed
         }
         
         results.append(LiveStatusItem(
@@ -935,18 +960,30 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         candidate_dict = serialize_user(s.candidate, fallback_name=s.candidate_name, fallback_role="candidate")
 
         # Serialize interview
-        # Manually constructing or using model_dump if it were a Pydantic model, but it's SQLModel
-        # Let's use a helper or manual dict for now to ensure we get what we need
         interview_dict = {
             "id": s.id,
+            "access_token": s.access_token,
+            "admin_id": s.admin_id,
+            "candidate_id": s.candidate_id,
             "paper_id": s.paper_id,
-            "schedule_time": s.schedule_time.isoformat() if s.schedule_time else None,
+            "schedule_time": s.schedule_time.isoformat(),
             "duration_minutes": s.duration_minutes,
-            "status": s.status.value,
-            "total_score": s.total_score,
+            "max_questions": s.max_questions,
             "start_time": s.start_time.isoformat() if s.start_time else None,
             "end_time": s.end_time.isoformat() if s.end_time else None,
-            "access_token": s.access_token,
+            "status": s.status.value,
+            "total_score": s.total_score,
+            "current_status": s.current_status.value if s.current_status else None,
+            "last_activity": s.last_activity.isoformat() if s.last_activity else None,
+            "warning_count": s.warning_count,
+            "max_warnings": s.max_warnings,
+            "is_suspended": s.is_suspended,
+            "suspension_reason": s.suspension_reason,
+            "suspended_at": s.suspended_at.isoformat() if s.suspended_at else None,
+            "enrollment_audio_path": s.enrollment_audio_path,
+            "candidate_name": s.candidate.full_name if s.candidate else s.candidate_name,
+            "admin_name": current_user.full_name, # Since we filtered by current_user.id
+            "is_completed": s.is_completed
         }
 
         # Answers list
@@ -998,7 +1035,8 @@ async def get_result(
         .options(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
-            selectinload(InterviewSession.proctoring_events)
+            selectinload(InterviewSession.proctoring_events),
+            selectinload(InterviewSession.selected_questions)
         )
     ).first()
     
@@ -1043,16 +1081,28 @@ async def get_result(
     # Serialize interview
     interview_dict = {
         "id": interview_session.id,
-        "paper_id": interview_session.paper_id,
-        "schedule_time": interview_session.schedule_time.isoformat() if interview_session.schedule_time else None,
-        "duration_minutes": interview_session.duration_minutes,
-        "status": interview_session.status.value,
-        "total_score": interview_session.total_score,
-        "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
-        "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
         "access_token": interview_session.access_token,
         "admin_id": interview_session.admin_id,
-        "created_at": interview_session.created_at.isoformat() if hasattr(interview_session, 'created_at') and interview_session.created_at else None
+        "candidate_id": interview_session.candidate_id,
+        "paper_id": interview_session.paper_id,
+        "schedule_time": interview_session.schedule_time.isoformat(),
+        "duration_minutes": interview_session.duration_minutes,
+        "max_questions": interview_session.max_questions,
+        "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
+        "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
+        "status": interview_session.status.value,
+        "total_score": interview_session.total_score,
+        "current_status": interview_session.current_status.value if interview_session.current_status else None,
+        "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+        "warning_count": interview_session.warning_count,
+        "max_warnings": interview_session.max_warnings,
+        "is_suspended": interview_session.is_suspended,
+        "suspension_reason": interview_session.suspension_reason,
+        "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
+        "enrollment_audio_path": interview_session.enrollment_audio_path,
+        "candidate_name": interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name,
+        "admin_name": current_user.full_name, # Since we filtered by current_user.id
+        "is_completed": interview_session.is_completed
     }
 
     # Answers list
@@ -1077,7 +1127,7 @@ async def get_result(
             answers=answers_list,
             date=interview_session.schedule_time.strftime("%Y-%m-%d %H:%M"),
             total_score=interview_session.total_score,
-            max_score=100.0,
+            max_score=float(len(interview_session.selected_questions) * 10) if interview_session.selected_questions else 0.0,
             flags=len(proctoring) > 0,
             details=details,
             proctoring_logs=[ProctoringLogItem(
@@ -1610,6 +1660,7 @@ async def get_candidate_status(
         .where(InterviewSession.id == interview_id)
         .options(
             selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.admin),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
             selectinload(InterviewSession.selected_questions),
             selectinload(InterviewSession.proctoring_events)

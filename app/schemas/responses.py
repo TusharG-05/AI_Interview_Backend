@@ -115,8 +115,33 @@ class AnswerRead(BaseModel):
     transcribed_text: Optional[str] = None
     timestamp: Optional[str] = None
 
+class InterviewSessionDetail(BaseModel):
+    id: int
+    access_token: str
+    admin_id: Optional[int] = None
+    candidate_id: Optional[int] = None
+    paper_id: int
+    schedule_time: str
+    duration_minutes: int
+    max_questions: Optional[int] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    status: str
+    total_score: Optional[float] = None
+    current_status: Optional[str] = None
+    last_activity: Optional[str] = None
+    warning_count: int
+    max_warnings: int
+    is_suspended: bool
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[str] = None
+    enrollment_audio_path: Optional[str] = None
+    candidate_name: Optional[str] = None
+    admin_name: Optional[str] = None
+    is_completed: bool
+
 class DetailedResult(BaseModel):
-    interview: dict # Full interview details
+    interview: InterviewSessionDetail # Full interview details
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     answers: List[AnswerRead]
     date: str
@@ -155,7 +180,7 @@ class ProgressInfo(BaseModel):
 
 class CandidateStatusResponse(BaseModel):
     """Complete status response for a single interview"""
-    interview_id: int
+    interview: InterviewSessionDetail # Replaced interview_id with full object
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     current_status: Optional[str] = None
     timeline: List[TimelineItem]
@@ -168,7 +193,7 @@ class CandidateStatusResponse(BaseModel):
 
 class LiveStatusItem(BaseModel):
     """Lightweight status item for batch live status view"""
-    interview: dict # InterviewSession data
+    interview: InterviewSessionDetail # InterviewSession data
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     current_status: Optional[str] = None
     warning_count: int

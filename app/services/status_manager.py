@@ -312,7 +312,10 @@ def get_status_summary(
     current_question_id = None
     if answered_questions < total_questions and interview_session.selected_questions:
         # Next unanswered question
-        answered_ids = {r.question_id for r in responses}
+        if result and result.answers:
+            answered_ids = {r.question_id for r in result.answers}
+        else:
+            answered_ids = set()
         for sq in sorted(interview_session.selected_questions, key=lambda x: x.sort_order):
             if sq.question_id not in answered_ids:
                 current_question_id = sq.question_id
@@ -323,7 +326,31 @@ def get_status_summary(
     candidate_dict = serialize_user(interview_session.candidate)
     
     return {
-        "interview_id": interview_session.id,
+        "interview": {
+            "id": interview_session.id,
+            "access_token": interview_session.access_token,
+            "admin_id": interview_session.admin_id,
+            "candidate_id": interview_session.candidate_id,
+            "paper_id": interview_session.paper_id,
+            "schedule_time": interview_session.schedule_time.isoformat(),
+            "duration_minutes": interview_session.duration_minutes,
+            "max_questions": interview_session.max_questions,
+            "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
+            "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
+            "status": interview_session.status.value,
+            "total_score": interview_session.total_score,
+            "current_status": interview_session.current_status.value if interview_session.current_status else None,
+            "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+            "warning_count": interview_session.warning_count,
+            "max_warnings": interview_session.max_warnings,
+            "is_suspended": interview_session.is_suspended,
+            "suspension_reason": interview_session.suspension_reason,
+            "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
+            "enrollment_audio_path": interview_session.enrollment_audio_path,
+            "candidate_name": interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name,
+            "admin_name": interview_session.admin.full_name if interview_session.admin else interview_session.admin_name,
+            "is_completed": interview_session.is_completed
+        },
         "candidate": candidate_dict,
         "current_status": interview_session.current_status.value if interview_session.current_status else None,
         "timeline": [
