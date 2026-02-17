@@ -1,0 +1,113 @@
+Table User {
+  id int [pk]
+  email varchar [unique]
+  full_name varchar
+  password_hash varchar
+  role varchar // enum: admin, super_admin, candidate
+  resume_text text
+  profile_image varchar // path to uploaded selfie
+  profile_image_bytes blob // binary store for selfie
+  face_embedding text // JSON string of ArcFace vector
+}
+
+Table QuestionPaper {
+  id int [pk]
+  name varchar
+  description text
+  admin_id int
+  created_at datetime
+}
+
+Table Questions {
+  id int [pk]
+  paper_id int
+  content text
+  question_text text // legacy
+  topic varchar
+  difficulty varchar
+  marks int
+  response_type varchar
+}
+
+Table InterviewSession {
+  id int [pk]
+  access_token varchar [unique]
+  admin_id int
+  candidate_id int
+  paper_id int
+  schedule_time datetime
+  duration_minutes int
+  max_questions int
+  start_time datetime
+  end_time datetime
+  status varchar // enum: scheduled, live, completed, expired, cancelled
+  total_score float
+  current_status varchar // enum: invited, link_accessed, authenticated, enrollment_started, enrollment_completed, interview_active, interview_paused, interview_completed, suspended
+  last_activity datetime
+  warning_count int
+  max_warnings int
+  is_suspended boolean
+  suspension_reason text
+  suspended_at datetime
+  enrollment_audio_path varchar
+  candidate_name varchar
+  admin_name varchar
+  is_completed boolean
+}
+
+Table SessionQuestion {
+  id int [pk]
+  interview_id int
+  question_id int
+  sort_order int
+}
+
+Table InterviewResult {
+  id int [pk]
+  interview_id int [unique]
+  total_score float
+  created_at datetime
+}
+
+Table Answers {
+  id int [pk]
+  interview_result_id int
+  question_id int
+  candidate_answer text
+  feedback text
+  score float
+  audio_path varchar
+  transcribed_text text
+  timestamp datetime
+}
+
+Table ProctoringEvent {
+  id int [pk]
+  interview_id int
+  event_type varchar
+  details text
+  timestamp datetime
+  severity varchar // info, warning, critical
+  triggered_warning boolean
+}
+
+Table StatusTimeline {
+  id int [pk]
+  interview_id int
+  status varchar
+  timestamp datetime
+  context_data text
+}
+
+Ref: QuestionPaper.admin_id > User.id
+Ref: InterviewSession.admin_id > User.id
+Ref: InterviewSession.candidate_id > User.id
+Ref: InterviewSession.paper_id > QuestionPaper.id
+Ref: Questions.paper_id > QuestionPaper.id
+Ref: SessionQuestion.interview_id > InterviewSession.id
+Ref: SessionQuestion.question_id > Questions.id
+Ref: InterviewResult.interview_id > InterviewSession.id
+Ref: Answers.interview_result_id > InterviewResult.id
+Ref: Answers.question_id > Questions.id
+Ref: ProctoringEvent.interview_id > InterviewSession.id
+Ref: StatusTimeline.interview_id > InterviewSession.id
