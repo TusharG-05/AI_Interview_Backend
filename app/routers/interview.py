@@ -397,8 +397,8 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
 
 # --- AI & Resume Specific ---
 
-@router.post("/evaluate-answer", response_model=ApiResponse[dict])
-async def evaluate_answer(request: AnswerRequest, interview_id: int, session_db: Session = Depends(get_session)):
+@router.post("/evaluate-answer/{interview_id}", response_model=ApiResponse[dict])
+async def evaluate_answer(interview_id: int, request: AnswerRequest, session_db: Session = Depends(get_session)):
     interview_session = session_db.get(InterviewSession, interview_id)
     if not interview_session: raise HTTPException(status_code=404)
 

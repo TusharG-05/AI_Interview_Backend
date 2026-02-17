@@ -19,7 +19,13 @@ def init_db():
         InterviewSession, InterviewResult, Answers,
         SessionQuestion, ProctoringEvent
     )
-    SQLModel.metadata.create_all(engine)
+    import logging
+    logger = logging.getLogger("uvicorn")
+    try:
+        SQLModel.metadata.create_all(engine)
+    except Exception as e:
+        # Gracefully handle race conditions when multiple workers attempt creation simultaneously
+        logger.warning(f"Database initialization notice: {e}")
 
 def get_db() -> Generator[Session, None, None]:
     with Session(engine) as session:
