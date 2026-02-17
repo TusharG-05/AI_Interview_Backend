@@ -1,0 +1,18 @@
+Starting Edge Case Verification...
+[INFO] --- Auth Edge Cases ---
+[PASS] PASS: Invalid Login -> Got 401
+[PASS] PASS: Access sans Token -> Got 401
+[PASS] PASS: Access with Invalid Token -> Got 401
+[PASS] PASS: Valid Admin Login -> Got 200
+[INFO] --- Registration Edge Cases ---
+[PASS] PASS: Register Duplicate Email -> Got 400
+[INFO] --- Resource Edge Cases ---
+[PASS] PASS: Create Paper Empty Name -> Got 422
+[PASS] PASS: Add Question to Invalid Paper -> Got 404
+[PASS] PASS: Get Invalid Question -> Got 404
+[PASS] PASS: Delete Invalid Paper -> Got 404
+[INFO] --- Scheduling Edge Cases ---
+[PASS] PASS: Schedule Invalid Candidate -> Got 400
+[PASS] PASS: Schedule Invalid Paper -> Got 400
+[PASS] PASS: Schedule in Past -> Got 400
+[INFO] Edge Case Verification Complete.
