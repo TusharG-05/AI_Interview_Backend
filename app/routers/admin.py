@@ -11,7 +11,7 @@ from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
-from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem, AnswerRead
+from ..schemas.responses import PaperRead, SessionRead, UserRead, DetailedResult, ResponseDetail, ProctoringLogItem, InterviewLinkResponse, InterviewDetailRead, UserDetailRead, CandidateStatusResponse, LiveStatusItem, AnswerRead, InterviewSessionDetail
 from ..schemas.api_response import ApiResponse
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
@@ -515,8 +515,36 @@ async def schedule_interview(
     admin_dict = serialize_user(current_user)  # {"admin": {...}}
     candidate_dict = serialize_user(candidate)  # {"candidate": {...}}
     
+    
+    # Construct InterviewSessionDetail
+    interview_detail = InterviewSessionDetail(
+        id=new_session.id,
+        access_token=new_session.access_token,
+        admin_id=new_session.admin_id,
+        candidate_id=new_session.candidate_id,
+        paper_id=new_session.paper_id,
+        schedule_time=new_session.schedule_time.isoformat(),
+        duration_minutes=new_session.duration_minutes,
+        max_questions=new_session.max_questions,
+        start_time=new_session.start_time.isoformat() if new_session.start_time else None,
+        end_time=new_session.end_time.isoformat() if new_session.end_time else None,
+        status=new_session.status.value,
+        total_score=new_session.total_score,
+        current_status=new_session.current_status.value if new_session.current_status else None,
+        last_activity=new_session.last_activity.isoformat() if new_session.last_activity else None,
+        warning_count=new_session.warning_count,
+        max_warnings=new_session.max_warnings,
+        is_suspended=new_session.is_suspended,
+        suspension_reason=new_session.suspension_reason,
+        suspended_at=new_session.suspended_at.isoformat() if new_session.suspended_at else None,
+        enrollment_audio_path=new_session.enrollment_audio_path,
+        candidate_name=candidate.full_name,
+        admin_name=current_user.full_name,
+        is_completed=new_session.is_completed
+    )
+
     link_response = InterviewLinkResponse(
-        interview_id=new_session.id,
+        interview=interview_detail,
         admin=admin_dict,
         candidate=candidate_dict,
         access_token=new_session.access_token,
