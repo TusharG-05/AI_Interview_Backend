@@ -61,7 +61,7 @@ async def upload_selfie(
     # 2. Save to DB (Binary Store)
     current_user.profile_image_bytes = image_bytes
     
-    # 3. Generate Embedding (ArcFace)
+    # 3. Generate Dual Embeddings (Hybrid Strategy)
     try:
         from deepface import DeepFace
         import numpy as np
@@ -69,20 +69,37 @@ async def upload_selfie(
         import tempfile
         import os
 
-        # DeepFace.represent expects a path or ndarray. 
+        embeddings_map = {}
+        
         # Using a temp file is safest for binary bytes.
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(image_bytes)
             tmp_path = tmp.name
         
         try:
-            objs = DeepFace.represent(
-                img_path=tmp_path, 
-                model_name="ArcFace", 
-                enforce_detection=False
-            )
-            embedding = objs[0]["embedding"]
-            current_user.face_embedding = json.dumps(embedding)
+            # 1. Generate ArcFace (High Accuracy - For Modal)
+            try:
+                from ..core.logger import get_logger
+                logger = get_logger(__name__)
+                logger.info("Generating ArcFace embedding...")
+                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                if arc_objs:
+                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+            except Exception as e:
+                logger.warning(f"ArcFace embedding failed: {e}")
+
+            # 2. Generate SFace (Lightweight - For Local Fallback)
+            try:
+                logger.info("Generating SFace embedding...")
+                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                if sface_objs:
+                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
+            except Exception as e:
+                logger.warning(f"SFace embedding failed: {e}")
+
+            if embeddings_map:
+                current_user.face_embedding = json.dumps(embeddings_map)
+                logger.info(f"Generated embeddings for: {list(embeddings_map.keys())}")
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
