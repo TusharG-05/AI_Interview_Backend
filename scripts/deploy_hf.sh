@@ -30,11 +30,15 @@ rsync -av --progress . "$DEPLOY_DIR/" \
 # 2. Enter deploy directory
 cd "$DEPLOY_DIR" || exit
 
+# 2.5 Ensure the HF-specific Dockerfile is used
+echo "🐳 Configuring Dockerfile for Hugging Face..."
+cp Dockerfile.hf Dockerfile
+
 # 3. Commit and Push
 echo "⬆️ Pushing to Hugging Face..."
 git add .
 git commit -m "Update: $(date +'%Y-%m-%d %H:%M:%S')"
-git push --force "https://$HF_TOKEN@huggingface.co/spaces/ichigo253/AI_Interview_Backend" main-deploy:main
+git push --force "https://user:$HF_TOKEN@huggingface.co/spaces/ichigo253/AI_Interview_Backend" main-deploy:main
 
 echo "✅ Push successful! Hugging Face is now rebuilding your Space."
 echo "🔗 Check progress here: $HF_REPO?logs=build"

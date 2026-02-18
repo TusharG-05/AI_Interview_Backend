@@ -45,18 +45,26 @@ async def lifespan(app: FastAPI):
     # Pre-warm models in background
     import threading
     def warm_up():
-        logger.info("Warm-up: Loading AI Models (Whisper, LLM)...")
+        logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
         from .core.config import local_llm
         try:
+            # Trigger lazy loading properties for audio/speech models
             _ = audio_service.stt_model
-            local_llm.invoke("Hello")
+            _ = audio_service.speaker_model
+            
+            # Local LLM (Ollama) is often absent in cloud/HF environments
+            try:
+                local_llm.invoke("Hello")
+            except Exception as llm_e:
+                logger.info(f"Warm-up: Local LLM (Ollama) unreachable, skipping pre-warm: {llm_e}")
+                
             logger.info("Warm-up: AI Models Ready.")
         except Exception as e:
-            logger.error(f"Warm-up failed: {e}")
+            logger.error(f"Warm-up process encountered an error: {e}")
     
-    # Warm-up disabled for stability - enable via feature flag if needed
-    # threading.Thread(target=warm_up, daemon=True).start()
-    logger.info("Model warm-up: Deferred to first request for stability.")
+    # Start warm-up in background thread so server starts instantly
+    threading.Thread(target=warm_up, daemon=True).start()
+    logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()
@@ -100,11 +108,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc: Exception):
     """Catch global 404 errors (unmatched paths) and wrap them."""
+    message = "Resource not found"
+    if hasattr(exc, "detail"):
+        message = str(exc.detail)
+        
     return JSONResponse(
         status_code=404,
         content=ApiErrorResponse(
             status_code=404,
-            message="Resource not found",
+            message=message,
             data={"path": request.url.path}
         ).model_dump()
     )
@@ -138,11 +150,11 @@ import os
 
 # SECURITY: Allow ALL origins (including localhost) for development convenience
 # WARNING: This effectively disables CORS protection.
-ALLOW_ORIGIN_REGEX = r".*"
+# ALLOW_ORIGIN_REGEX = r".*"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=ALLOW_ORIGIN_REGEX,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
