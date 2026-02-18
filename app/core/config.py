@@ -60,6 +60,11 @@ ASSETS_DIR = "app/assets"
 AUDIO_DIR = os.path.join(ASSETS_DIR, "audio")
 PROCTORING_LOGS_DIR = os.path.join(ASSETS_DIR, "proctoring_logs")
 
+# Configure DeepFace to use project-local storage (within venv)
+# DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights
+DEEPFACE_STORAGE_DIR = os.path.abspath(".venv/models/deepface")
+os.environ["DEEPFACE_HOME"] = DEEPFACE_STORAGE_DIR
+
 # Ensure directories exist
 for d in [ASSETS_DIR, AUDIO_DIR, PROCTORING_LOGS_DIR]:
     os.makedirs(d, exist_ok=True)

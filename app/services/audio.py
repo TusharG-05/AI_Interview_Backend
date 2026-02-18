@@ -11,15 +11,17 @@ USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
 _modal_transcribe = None
 
 def get_modal_transcribe():
-    """Lazy load Modal function to avoid import errors when Modal not installed."""
+    """Lazy load Modal Whisper class to avoid import errors."""
     global _modal_transcribe
     if _modal_transcribe is None:
         try:
-            from ..modal_whisper import transcribe
-            _modal_transcribe = transcribe
-            logger.info("Modal Whisper function loaded successfully")
-        except ImportError as e:
-            logger.warning(f"Modal not available: {e}")
+            import modal
+            # Use from_name for lazy reference to deployed class
+            # Note: Deployment name is 'interview-whisper-stt', Class name is 'WhisperSTT'
+            _modal_transcribe = modal.Cls.from_name("interview-whisper-stt", "WhisperSTT")
+            logger.info("Modal Whisper class reference obtained")
+        except Exception as e:
+            logger.warning(f"Modal Whisper not available: {e}")
             return None
     return _modal_transcribe
 
@@ -36,20 +38,23 @@ class AudioService:
         self._speaker_model = None
         self.verification_threshold = 0.25
 
-
     @property
     def stt_model(self):
+        # Prevent loading heavy local model on HF Spaces
+        if os.getenv("SPACE_ID"):
+            logger.warning("Local STT model loading blocked on HF Spaces to prevent OOM")
+            return None
+
         if self._stt_model is None:
             import torch
             from faster_whisper import WhisperModel
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            # Upgrade: base.en with int8 quantization is faster/better on i7
             logger.info(f"Loading Whisper Model ({self.stt_model_size}) on {device}...")
             self._stt_model = WhisperModel(
                 self.stt_model_size,
                 device=device,
                 compute_type="int8" if device == "cpu" else "float16", 
-                cpu_threads=4 # i7 can handle more threads for faster results
+                cpu_threads=4
             )
         return self._stt_model
 
@@ -67,156 +72,93 @@ class AudioService:
             )
         return self._speaker_model
 
-    async def text_to_speech(self, text, output_path):
-        import edge_tts
-        communicate = edge_tts.Communicate(text, self.female_voice)
-        await communicate.save(output_path)
-        return output_path
+    async def hf_inference_stt(self, audio_path: str) -> str:
+        """Secondary lightweight STT using HF Inference API."""
+        hf_token = os.getenv("HF_TOKEN")
+        if not hf_token:
+            logger.warning("HF_TOKEN not set, skipping HF Inference STT")
+            return ""
 
-    # ---------- AUDIO VALIDATION & HARDENING ----------
-
-    def validate_audio_integrity(self, file_path: str) -> bool:
-        """Verifies if the file exists, has size, and is readable as audio."""
-        if not os.path.exists(file_path):
-            logger.error(f"Validation Failed: File does not exist at {file_path}")
-            return False
-            
-        if os.path.getsize(file_path) < 100:
-            logger.error(f"Validation Failed: File too small/empty at {file_path}")
-            return False
-            
         try:
-            import soundfile as sf
-            # Quick check: can we read the header?
-            with sf.SoundFile(file_path) as f:
-                if f.frames == 0:
-                    logger.error(f"Validation Failed: Audio file has 0 frames {file_path}")
-                    return False
-            return True
-        except Exception as e:
-            logger.error(f"Validation Failed: File is not a valid audio format: {e}")
-            return False
-
-    # ---------- WINDOWS SAFE AUDIO ----------
-
-    def fix_audio_format(self, file_path: str):
-        """Converts ANY audio (WebM, etc.) to 16kHz Mono WAV."""
-        try:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(file_path)
-            audio = audio.set_frame_rate(16000).set_channels(1)
-            # Normalize to -20dBFS for consistent AI results
-            change_in_dbfs = -20.0 - audio.dBFS
-            audio = audio.apply_gain(change_in_dbfs)
-            audio.export(file_path, format="wav")
-            logger.debug(f"Converted {file_path} to 16kHz WAV.")
-        except Exception as e:
-            logger.error(f"Error converting audio {file_path}: {e}")
-
-    def load_audio(self, audio_path, target_sr=None):
-        if not self.validate_audio_integrity(audio_path):
-            raise ValueError(f"Cannot load invalid audio file: {audio_path}")
-        
-        import soundfile as sf
-        import numpy as np
-        import resampy
+            from huggingface_hub import InferenceClient
+            client = InferenceClient(token=hf_token)
             
-        import soundfile as sf
-        audio, sr = sf.read(audio_path)
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-
-        if target_sr and sr != target_sr:
-            import resampy
-            audio = resampy.resample(audio, sr, target_sr)
-            sr = target_sr
-
-        import numpy as np
-        return audio.astype(np.float32), sr
-
-    def save_audio(self, audio, sr, path):
-        import soundfile as sf
-        sf.write(path, audio, sr)
-
-    def cleanup_audio(self, audio_path):
-        """
-        Windows-safe audio fix. Disables intensive NR for speed.
-        The VAD filter in STT handles the rest.
-        """
-        if not self.validate_audio_integrity(audio_path):
-            logger.warning(f"Skipping cleanup for invalid audio: {audio_path}")
-            return audio_path
-            
-        try:
-            self.fix_audio_format(audio_path)
-            return audio_path
+            logger.info("Attempting HF Inference API for STT...")
+            # Passing the path directly allows the client to detect content type
+            result = client.automatic_speech_recognition(
+                audio=audio_path,
+                model="openai/whisper-large-v3-turbo"
+            )
+            text = result.get("text", "").strip()
+            logger.info(f"HF Inference STT successful: {text[:50]}...")
+            return text
         except Exception as e:
-            logger.error(f"Audio Cleanup Error: {e}")
-            return audio_path
-
-    def get_voice_print(self, audio_path):
-        import torch
-        audio, sr = self.load_audio(audio_path, target_sr=16000)
-        signal = torch.tensor(audio).unsqueeze(0)
-        embeddings = self.speaker_model.encode_batch(signal)
-        return embeddings
-
-    def verify_speaker(self, enrollment_audio, test_audio):
-        import torch
-        # Assumes test_audio is already cleaned if desired
-        import torch
-        emb1 = self.get_voice_print(enrollment_audio)
-        emb2 = self.get_voice_print(test_audio)
-
-        similarity = torch.nn.functional.cosine_similarity(emb1, emb2)
-        score = float(similarity[0][0])
-
-        return score >= self.verification_threshold, score
+            logger.error(f"HF Inference STT Error: {e}")
+            return ""
 
     async def speech_to_text(self, audio_path):
         if not os.path.exists(audio_path):
             return ""
 
-        try:
-            # Try Modal if enabled
-            if USE_MODAL:
-                import asyncio
-                modal_fn = get_modal_transcribe()
-                if modal_fn:
-                    logger.info(f"Using Modal for STT: {audio_path}")
-                    loop = asyncio.get_running_loop()
-                    
-                    def _modal_transcribe():
-                        with open(audio_path, "rb") as f:
-                            audio_bytes = f.read()
-                        result = modal_fn.remote(audio_bytes, self.stt_model_size)
-                        return result.get("text", "")
-                    
-                    text = await loop.run_in_executor(None, _modal_transcribe)
-                    return text if text else "[Silence/No Speech Detected]"
-                else:
-                    logger.warning("Modal unavailable, falling back to local STT")
-            
-            # Local fallback (or when USE_MODAL=false)
-            import asyncio
-            loop = asyncio.get_running_loop()
-            
-            def _transcribe():
-                segments, info = self.stt_model.transcribe(
-                    audio_path, 
-                    beam_size=1, 
-                    vad_filter=True,
-                    vad_parameters=dict(min_silence_duration_ms=500),
-                    no_speech_threshold=0.5,
-                    initial_prompt="Interview answer about technology and programming."
-                )
-                return " ".join(seg.text for seg in segments).strip()
+        last_error = None
 
-            text = await loop.run_in_executor(None, _transcribe)
-            return text if text else "[Silence/No Speech Detected]"
+        try:
+            # 1. Try Modal if enabled
+            if USE_MODAL:
+                modal_cls = get_modal_transcribe()
+                if modal_cls:
+                    try:
+                        logger.info(f"Using Modal for STT: {audio_path}")
+                        loop = asyncio.get_running_loop()
+                        
+                        def _modal_call():
+                            with open(audio_path, "rb") as f:
+                                audio_bytes = f.read()
+                            # Instantiate class and call remote method
+                            result = modal_cls().transcribe.remote(audio_bytes, self.stt_model_size)
+                            if "error" in result:
+                                raise Exception(result["error"])
+                            return result.get("text", "")
+                        
+                        text = await loop.run_in_executor(None, _modal_call)
+                        if text: return text
+                    except Exception as e:
+                        last_error = f"Modal STT failed: {str(e)}"
+                        logger.warning(last_error)
+            
+            # 2. Secondary Fallback: HF Inference API (Lightweight)
+            hf_text = await self.hf_inference_stt(audio_path)
+            if hf_text:
+                return hf_text
+
+            # 3. Local Fallback (Only if NOT on HF Spaces)
+            if not os.getenv("SPACE_ID"):
+                logger.info("Falling back to local STT...")
+                model = self.stt_model
+                if model:
+                    loop = asyncio.get_running_loop()
+                    def _transcribe():
+                        segments, info = model.transcribe(
+                            audio_path, 
+                            beam_size=1, 
+                            vad_filter=True,
+                            vad_parameters=dict(min_silence_duration_ms=500),
+                            no_speech_threshold=0.5
+                        )
+                        return " ".join(seg.text for seg in segments).strip()
+
+                    text = await loop.run_in_executor(None, _transcribe)
+                    return text if text else "[Silence/No Speech Detected]"
+            else:
+                msg = "Cloud Environment detected. Skipping heavy local STT fallback."
+                logger.error(msg)
+                if not last_error:
+                    last_error = msg
+
+            return f"[STT Error: {last_error or 'Services unavailable'}]"
             
         except Exception as e:
-            logger.error(f"STT Error: {e}")
+            logger.error(f"Overall STT Error: {e}")
             return ""
 
     def save_audio_blob(self, blob, output_path):
@@ -246,3 +188,12 @@ class AudioService:
         except Exception as e:
             logger.error(f"WAV Conversion Error: {e}")
             return None
+
+    def cleanup_audio(self, *paths):
+        """Removes specified audio files from disk."""
+        for path in paths:
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    logger.error(f"Cleanup Error for {path}: {e}")

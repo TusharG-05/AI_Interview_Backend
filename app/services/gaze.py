@@ -25,23 +25,26 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
         
         abs_model_path = os.path.abspath(model_path)
         
-        # specific fix if relative path fails in worker
+        # Resolve model path relative to app/assets
         if not os.path.exists(abs_model_path):
-             # Try absolute path relative to this file's parent (app/services/ -> app/assets/)
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            potential_path = os.path.join(base_dir, "..", "assets", "face_landmarker.task")
-            if os.path.exists(potential_path):
-                abs_model_path = os.path.abspath(potential_path)
-            else:
-                 # Fallback to project root connection
-                 potential_path = os.path.abspath(os.path.join(os.getcwd(), "app", "assets", "face_landmarker.task"))
-                 if os.path.exists(potential_path):
-                     abs_model_path = potential_path
+            curr_dir = os.path.dirname(os.path.abspath(__file__))
+            potential_paths = [
+                os.path.join(curr_dir, "..", "assets", "face_landmarker.task"),
+                os.path.join(os.getcwd(), "app", "assets", "face_landmarker.task"),
+                "/app/app/assets/face_landmarker.task" # Docker/HF common path
+            ]
+            for p in potential_paths:
+                if os.path.exists(p):
+                    abs_model_path = os.path.abspath(p)
+                    break
 
+        if os.getenv("SPACE_ID"):
+            worker_logger.info("Cloud Environment (HF Spaces) detected.")
+    
         worker_logger.info(f"GazeWorker: Initializing MediaPipe with model: {abs_model_path}")
     
         if not os.path.exists(abs_model_path):
-            worker_logger.error(f"GazeWorker: Model file not found at {abs_model_path}")
+            worker_logger.error(f"GazeWorker: CRITICAL - Model file not found. AI Proctoring will fail.")
             return
 
         base_options = python.BaseOptions(model_asset_path=abs_model_path)
