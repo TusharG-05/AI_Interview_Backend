@@ -156,7 +156,7 @@ class InterviewResult(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     session: "InterviewSession" = Relationship(back_populates="result")
-    answers: List["Answers"] = Relationship(back_populates="interview_result")
+    answers: List["Answers"] = Relationship(back_populates="interview_result", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
 class Answers(SQLModel, table=True):
     """Formerly named 'InterviewResponse'"""
