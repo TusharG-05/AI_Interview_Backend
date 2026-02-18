@@ -35,3 +35,13 @@ temp_uploads/
 *.log
 *.sqlite3
 Non_usable/
+
+# Build & Test Artifacts
+tests/
+scripts/
+docs/
+*.md
+pytest.ini
+frontend_demo.html
+cert.pem
+key.pem

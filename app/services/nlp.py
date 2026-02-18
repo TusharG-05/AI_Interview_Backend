@@ -1,9 +1,6 @@
-import os
-import fitz  # PyMuPDF
 import re
 import uuid
-from docx import Document
-import pandas as pd
+import os
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,6 +29,7 @@ class NLPService:
 
         try:
             if ext in ['.xlsx', '.xls']:
+                import pandas as pd
                 # For Excel, we use pandas
                 df = pd.read_excel(file_path)
                 
@@ -58,10 +56,12 @@ class NLPService:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
             elif ext == '.pdf':
+                import fitz  # PyMuPDF
                 doc = fitz.open(file_path)
                 content = "\n".join([page.get_text() for page in doc])
                 doc.close()
             elif ext == '.docx':
+                from docx import Document
                 doc = Document(file_path)
                 content = "\n".join([para.text for para in doc.paragraphs])
             else:

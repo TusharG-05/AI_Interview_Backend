@@ -14,7 +14,7 @@ def test_convert_to_wav_success(audio_service):
     # Since we mocked pydub in conftest, AudioSegment is already a Mock object.
     # We configure that mock instance or patch the name in the module.
     
-    with patch("app.services.audio.AudioSegment") as MockAudioSegment:
+    with patch("pydub.AudioSegment") as MockAudioSegment:
         # Arrange
         mock_segment = MagicMock()
         MockAudioSegment.from_file.return_value = mock_segment
@@ -33,7 +33,7 @@ def test_convert_to_wav_success(audio_service):
         mock_segment.export.assert_called()
 
 def test_calculate_energy(audio_service):
-    with patch("app.services.audio.AudioSegment") as MockAudioSegment:
+    with patch("pydub.AudioSegment") as MockAudioSegment:
         mock_segment = MagicMock()
         mock_segment.rms = 100
         MockAudioSegment.from_file.return_value = mock_segment
@@ -42,7 +42,7 @@ def test_calculate_energy(audio_service):
         assert energy == 100
 
 def test_convert_to_wav_failure(audio_service):
-    with patch("app.services.audio.AudioSegment") as MockAudioSegment:
+    with patch("pydub.AudioSegment") as MockAudioSegment:
         MockAudioSegment.from_file.side_effect = Exception("FFmpeg error")
         
         # The service logs error and returns None, it doesn't raise

@@ -1,37 +1,6 @@
-# --- Stage 1: Builder ---
-FROM python:3.11-slim-bookworm AS builder
-
-# Prevent Python from writing .pyc files and enable unbuffered logging
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    pkg-config \
-    libavformat-dev \
-    libavcodec-dev \
-    libavdevice-dev \
-    libavutil-dev \
-    libswscale-dev \
-    libswresample-dev \
-    libavfilter-dev \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-# Install dependencies into a virtual environment to make transfer easier
-COPY requirements.txt .
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# --- Stage 2: Runtime ---
-FROM python:3.11-slim-bookworm AS runtime
+# --- Optimized Runtime ---
+# Inherits from the local base containing heavy ML libs in /opt/venv
+FROM interview-base:latest
 
 # Runtime environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -40,24 +9,19 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV CUDA_VISIBLE_DEVICES=-1
 ENV TF_CPP_MIN_LOG_LEVEL=2
 
-# Install runtime library dependencies only
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    libsndfile1 \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy virtual environment from builder stage
-COPY --from=builder /opt/venv /opt/venv
-
+# Clean inherited /app bloat from base image before copying fresh code
 WORKDIR /app
+RUN rm -rf /app/*
 
-# Copy application code
+# Only install application-level changes
+COPY requirements-app.txt .
+RUN pip install --no-cache-dir -r requirements-app.txt
+
+# Copy clean application code (filtered by .dockerignore)
 COPY . .
 
 # Expose API Port
-EXPOSE 8000
+EXPOSE 7860
 
 # Default Command
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]

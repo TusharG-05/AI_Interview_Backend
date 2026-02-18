@@ -38,6 +38,10 @@ sys.modules["pydub"] = pydub
 sys.modules["app.services.camera"] = MagicMock()
 sys.modules["app.services.webrtc"] = MagicMock()
 
+# Mock External APIs (Modal, HF)
+sys.modules["modal"] = MagicMock()
+sys.modules["huggingface_hub"] = MagicMock()
+
 # --- 2. DB MOCKS & FIXTURES ---
 from sqlmodel import SQLModel, Session, create_engine
 from sqlmodel.pool import StaticPool
@@ -82,14 +86,23 @@ def override_dependencies(session):
     yield
     app.dependency_overrides.clear()
 
-@pytest.fixture(scope="module")
-def client():
+@pytest.fixture(name="client")
+def client_fixture(session):
     """
     TestClient fixture for FastAPI apps.
+    Overrides the get_db dependency per test function.
     """
     from app.server import app
+    from app.core.database import get_db
+    
+    def _get_test_db():
+        yield session
+
+    app.dependency_overrides[get_db] = _get_test_db
+    
     from fastapi.testclient import TestClient
-    return TestClient(app)
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -100,3 +113,18 @@ def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
+@pytest.fixture
+def auth_headers(client):
+    """
+    Creates a test user and returns JWT headers.
+    """
+    # Create test user
+    from app.models.db_models import User, UserRole
+    from app.auth.security import create_access_token
+    
+    # We can invoke the registration endpoint or just mock the token
+    # For speed, we'll mock the token generation directly
+    access_token = create_access_token(data={"sub": "test@example.com"})
+    return {"Authorization": f"Bearer {access_token}"}
+
