@@ -63,11 +63,11 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
         
         # State tracking for grace period
         suspicious_start_time = None
-        SUSPICION_THRESHOLD = 2.5  # Seconds before flagging "Looking Down"
+        SUSPICION_THRESHOLD = 3.0  # Seconds before flagging any suspicious gaze
         
         # Thresholds (Tuned based on user feedback)
-        H_MIN, H_MAX = 0.45, 0.58
-        V_MIN, V_MAX = 0.38, 0.62 
+        H_MIN, H_MAX = 0.44, 0.56
+        V_MIN, V_MAX = 0.48, 0.62 
         
         while True:
             try:
@@ -135,22 +135,21 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                             elif avg_v > V_MAX: raw_state = "Down"
                             elif is_blinking:   raw_state = "Blink"
                             
-                            # Process Grace Period
-                            if raw_state in ["Down", "Blink"]:
+                            # Process Unified Grace Period (5 Seconds)
+                            # Any state other than "Center" increments the timer
+                            if raw_state != "Center":
                                 if suspicious_start_time is None:
                                     suspicious_start_time = time.time()
                                 
                                 elapsed = time.time() - suspicious_start_time
                                 
                                 if elapsed > SUSPICION_THRESHOLD:
-                                    final_status = "WARNING: Looking Down/Sleeping"
+                                    # Formulate descriptive warning
+                                    msg = f"Looking {raw_state}" if raw_state != "Blink" else "Sleeping/Eyes Closed"
+                                    final_status = f"WARNING: {msg}"
                                 else:
-                                    final_status = "Safe: Center (Blinking/Glance)"
+                                    final_status = f"Safe: Center (Brief {raw_state})"
                                     
-                            elif raw_state in ["Left", "Right", "Up"]:
-                                final_status = f"WARNING: Looking {raw_state}"
-                                suspicious_start_time = None
-                                
                             else:
                                 final_status = "Safe: Center"
                                 suspicious_start_time = None
