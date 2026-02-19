@@ -427,6 +427,11 @@ async def evaluate_answer(interview_id: int, request: AnswerRequest, session_db:
         
         # ATOMIC COMMIT: Both Question (if new) and Response are saved together
         session_db.commit()
+        
+        # Remove interview_id from response as requested
+        if "interview_id" in evaluation:
+            del evaluation["interview_id"]
+            
         return ApiResponse(
             status_code=200,
             data=evaluation,
