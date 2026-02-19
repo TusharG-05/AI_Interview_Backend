@@ -65,8 +65,14 @@ class Questions(SQLModel, table=True):
     response_type: str = Field(default="audio") # Options: audio, text, both
 
     paper: Optional[QuestionPaper] = Relationship(back_populates="questions")
-    answers: List["Answers"] = Relationship(back_populates="question")
-    session_questions: List["SessionQuestion"] = Relationship(back_populates="question")
+    answers: List["Answers"] = Relationship(
+        back_populates="question", 
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    session_questions: List["SessionQuestion"] = Relationship(
+        back_populates="question", 
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 class InterviewSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
