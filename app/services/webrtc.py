@@ -18,12 +18,20 @@ class VideoTransformTrack(MediaStreamTrack):
         self.track = track
         self.camera_service = CameraService()
         self.interview_id = interview_id
-        logger.info(f"WebRTC Track Initialized for Session: {interview_id}")
+        self.frame_count = 0
+        logger.info(f"WebRTC Track Initialized for Session: {interview_id} (Cloud Optimization: Every 5th frame)")
 
     async def recv(self):
         try:
             frame = await self.track.recv()
+            self.frame_count += 1
             
+            # Cloud Optimization: Only process every 5th frame to save CPU
+            # (Maintains ~6fps processing which is plenty for gaze/proctoring)
+            if self.frame_count % 5 != 0:
+                # Still need to return a frame to keep the stream alive
+                return frame
+
             # Convert WebRTC frame to numpy (BGR)
             # aiortc uses pyav. 
             img = frame.to_ndarray(format="bgr24")

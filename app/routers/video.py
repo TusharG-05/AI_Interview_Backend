@@ -60,7 +60,16 @@ async def offer(params: Offer):
     Registers identity and initializes session-isolated AI.
     """
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
-    pc = RTCPeerConnection()
+    
+    # Cloud Optimization: Add Google STUN servers for NAT traversal
+    ice_config = {
+        "iceServers": [
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": "stun:stun1.l.google.com:19302"},
+            {"urls": "stun:stun2.l.google.com:19302"}
+        ]
+    }
+    pc = RTCPeerConnection(configuration=ice_config)
     
     interview_id = params.interview_id or 0
     active_sessions[interview_id] = {"pc": pc, "track": None}
@@ -123,7 +132,16 @@ async def watch(target_session_id: int, params: Offer):
         )
 
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
-    pc = RTCPeerConnection()
+    
+    # Cloud Optimization: Add Google STUN servers for NAT traversal
+    ice_config = {
+        "iceServers": [
+            {"urls": "stun:stun.l.google.com:19302"},
+            {"urls": "stun:stun1.l.google.com:19302"},
+            {"urls": "stun:stun2.l.google.com:19302"}
+        ]
+    }
+    pc = RTCPeerConnection(configuration=ice_config)
     
     # We don't store Admin PCs permanently in the session registry, 
     # but we track them to prevent GC (could use a separate set)
