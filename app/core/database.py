@@ -22,7 +22,26 @@ def init_db():
     import logging
     logger = logging.getLogger("uvicorn")
     try:
+        # 1. Base table creation (SQLModel)
         SQLModel.metadata.create_all(engine)
+        
+        # 2. Programmatic migrations (Alembic)
+        try:
+            from alembic import command
+            from alembic.config import Config
+            import os
+            
+            # Ensure we are in the right directory to find alembic.ini
+            alembic_cfg = Config("alembic.ini")
+            # Force Database URL from environment for migrations
+            alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+            
+            logger.info("Database: Running migrations (alembic upgrade head)...")
+            command.upgrade(alembic_cfg, "head")
+            logger.info("Database: Migrations complete.")
+        except Exception as migration_e:
+            logger.warning(f"Database migration notice (ignored if DB is fresh): {migration_e}")
+
     except Exception as e:
         # Gracefully handle race conditions when multiple workers attempt creation simultaneously
         logger.warning(f"Database initialization notice: {e}")

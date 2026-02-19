@@ -161,6 +161,18 @@ class AudioService:
             logger.error(f"Overall STT Error: {e}")
             return ""
 
+    async def text_to_speech(self, text, output_path):
+        """Converts text to speech using edge-tts."""
+        try:
+            import edge_tts
+            communicate = edge_tts.Communicate(text, self.female_voice)
+            await communicate.save(output_path)
+            logger.info(f"TTS generated: {output_path}")
+            return output_path
+        except Exception as e:
+            logger.error(f"TTS Error: {e}")
+            return None
+
     def save_audio_blob(self, blob, output_path):
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "wb") as f:
