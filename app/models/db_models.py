@@ -50,7 +50,10 @@ class QuestionPaper(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     admin: Optional[User] = Relationship(back_populates="question_papers")
-    questions: List["Questions"] = Relationship(back_populates="paper")
+    questions: List["Questions"] = Relationship(
+        back_populates="paper",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
     sessions: List["InterviewSession"] = Relationship(back_populates="paper")
 
 class Questions(SQLModel, table=True):
@@ -162,7 +165,10 @@ class InterviewResult(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     session: "InterviewSession" = Relationship(back_populates="result")
-    answers: List["Answers"] = Relationship(back_populates="interview_result")
+    answers: List["Answers"] = Relationship(
+        back_populates="interview_result",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 class Answers(SQLModel, table=True):
     """Formerly named 'InterviewResponse'"""
