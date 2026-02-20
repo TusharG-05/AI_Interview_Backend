@@ -1,0 +1,221 @@
+{
+  "timestamp": "2026-02-20T16:06:05.068272",
+  "results": [
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/auth/login",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/auth/login",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/auth/token",
+      "code": 200,
+      "note": "OAuth2 form-encoded"
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/auth/me",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/auth/me",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/auth/logout",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/auth/register",
+      "code": 403,
+      "note": "blocked \u2014 non-first user, no auth"
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/auth/register",
+      "code": 200,
+      "note": "admin-assisted registration"
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/papers",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/admin/papers",
+      "code": 201,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/papers/25",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "PATCH",
+      "path": "/admin/papers/25",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/admin/papers/25/questions",
+      "code": 201,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/questions",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/questions/16",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "PATCH",
+      "path": "/admin/questions/16",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/papers/25/questions",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/interviews",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/interviews/live-status",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/admin/interviews/schedule",
+      "code": 201,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/users",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/candidates",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/users/1",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/users/results",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/interview/tts",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "POST",
+      "path": "/interview/tools/speech-to-text",
+      "code": 422,
+      "note": "no file \u2192 validation error expected"
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/candidate/history",
+      "code": 200,
+      "note": ""
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/candidate/profile-image/1",
+      "code": 404,
+      "note": "404 if no image"
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/admin/users",
+      "code": 403,
+      "note": "must be blocked for candidate role"
+    },
+    {
+      "status": "PASS",
+      "method": "GET",
+      "path": "/status/",
+      "code": 200,
+      "note": ""
+    }
+  ],
+  "summary": {
+    "pass": 30,
+    "fail": 0,
+    "warn": 0,
+    "total": 30
+  }
+}

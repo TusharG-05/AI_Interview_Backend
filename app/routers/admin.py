@@ -257,6 +257,23 @@ async def add_question_to_paper(
         message="Question added to paper successfully"
     )
 
+@router.get("/papers/{paper_id}/questions", response_model=ApiResponse[List[Questions]])
+async def list_paper_questions(
+    paper_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """List all questions belonging to a specific question paper."""
+    paper = session.get(QuestionPaper, paper_id)
+    if not paper or paper.admin_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    questions = session.exec(select(Questions).where(Questions.paper_id == paper_id)).all()
+    return ApiResponse(
+        status_code=200,
+        data=questions,
+        message=f"Questions for paper '{paper.name}' retrieved successfully"
+    )
+
 @router.post("/upload-doc", response_model=ApiResponse[dict])
 async def upload_document(
     paper_id: int,
