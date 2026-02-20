@@ -17,6 +17,9 @@ from ..schemas.responses import (
     InterviewDetailRead, UserDetailRead, CandidateStatusResponse, 
     LiveStatusItem, AnswerRead, InterviewSessionDetail
 )
+from ..schemas.interview_result import (
+    InterviewResultDetail, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested
+)
 from ..schemas.api_response import ApiResponse
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
@@ -944,127 +947,121 @@ async def list_candidates(current_user: User = Depends(get_admin_user), session:
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=ApiResponse[List[DetailedResult]])
+@router.get("/users/results", response_model=ApiResponse[List[InterviewResultDetail]])
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
-    # Only show sessions created by this admin
+    
     # Only show sessions created by this admin
     sessions = session.exec(
         select(InterviewSession)
         .where(InterviewSession.admin_id == current_user.id)
         .options(
             selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
-            selectinload(InterviewSession.proctoring_events)
+            selectinload(InterviewSession.paper),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
+            selectinload(InterviewSession.admin)
         )
     ).all()
     
     results = []
     for s in sessions:
-        responses = s.result.answers if s.result else []
-        proctoring = s.proctoring_events
+        if not s.result: continue 
         
-        from ..utils import calculate_average_score
-        valid_scores = [r.score for r in responses if r.score is not None]
-        avg_score = calculate_average_score(valid_scores)
+        # Build nested objects
+        # 1. Admin
+        admin_obj = None
+        if s.admin:
+            admin_obj = UserNested(
+                id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, role=s.admin.role.value,
+                profile_image=s.admin.profile_image
+            )
+        elif s.admin_name:
+             pass
+             
+        # 2. Candidate
+        candidate_obj = None
+        if s.candidate:
+            candidate_obj = UserNested(
+                id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, role=s.candidate.role.value,
+                 profile_image=s.candidate.profile_image
+            )
+            
+        # 3. Paper
+        paper_obj = None
+        if s.paper:
+            paper_obj = QuestionPaperNested(
+                id=s.paper.id, name=s.paper.name, description=s.paper.description, 
+                admin_id=s.paper.admin_id, created_at=s.paper.created_at
+            )
+            
+        # 4. Session Nested
+        session_nested = InterviewSessionNested(
+            id=s.id, access_token=s.access_token,
+            admin=admin_obj, candidate=candidate_obj, paper=paper_obj,
+            schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
+            max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
+            status=s.status.value, total_score=s.total_score,
+            current_status=s.current_status.value if s.current_status else None,
+            last_activity=s.last_activity, warning_count=s.warning_count,
+            max_warnings=s.max_warnings, is_suspended=s.is_suspended,
+            suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
+            enrollment_audio_path=s.enrollment_audio_path,
+            candidate_name=s.candidate_name, admin_name=s.admin_name,
+            is_completed=s.is_completed
+        )
         
-        details = []
-        for r in responses:
-            res_status = "Skipped"
-            if r.score is not None:
-                res_status = "Answered"
-            elif r.candidate_answer or r.transcribed_text or r.audio_path:
-                res_status = "Pending AI"
-                
-            details.append(ResponseDetail(
-                question=r.question.question_text or r.question.content or "Dynamic",
-                answer=r.candidate_answer or r.transcribed_text or "[No Answer]",
-                score=f"{round(r.score * 100, 1) if r.score is not None else 0}%",
-                status=res_status,
-                audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
+        # 5. Answers
+        answers_nested = []
+        for ans in s.result.answers:
+            q_nested = None
+            if ans.question:
+                q_nested = QuestionNested(
+                    id=ans.question.id, content=ans.question.content,
+                    question_text=ans.question.question_text, topic=ans.question.topic,
+                    difficulty=ans.question.difficulty, marks=ans.question.marks,
+                    response_type=ans.question.response_type
+                )
+            
+            answers_nested.append(AnswersNested(
+                id=ans.id, interview_result_id=ans.interview_result_id,
+                question=q_nested,
+                candidate_answer=ans.candidate_answer, feedback=ans.feedback,
+                score=ans.score, audio_path=ans.audio_path,
+                transcribed_text=ans.transcribed_text, timestamp=ans.timestamp
             ))
-
-        # Serialize candidate, handling NULL
-        candidate_dict = serialize_user(s.candidate, fallback_name=s.candidate_name, fallback_role="candidate")
-
-        # Serialize interview
-        interview_dict = {
-            "id": s.id,
-            "access_token": s.access_token,
-            "admin_id": s.admin_id,
-            "candidate_id": s.candidate_id,
-            "paper_id": s.paper_id,
-            "schedule_time": s.schedule_time.isoformat(),
-            "duration_minutes": s.duration_minutes,
-            "max_questions": s.max_questions,
-            "start_time": s.start_time.isoformat() if s.start_time else None,
-            "end_time": s.end_time.isoformat() if s.end_time else None,
-            "status": s.status.value,
-            "total_score": s.total_score,
-            "current_status": s.current_status.value if s.current_status else None,
-            "last_activity": s.last_activity.isoformat() if s.last_activity else None,
-            "warning_count": s.warning_count,
-            "max_warnings": s.max_warnings,
-            "is_suspended": s.is_suspended,
-            "suspension_reason": s.suspension_reason,
-            "suspended_at": s.suspended_at.isoformat() if s.suspended_at else None,
-            "enrollment_audio_path": s.enrollment_audio_path,
-            "candidate_name": s.candidate.full_name if s.candidate else s.candidate_name,
-            "admin_name": current_user.full_name, # Since we filtered by current_user.id
-            "is_completed": s.is_completed
-        }
-
-        # Answers list
-        answers_list = [
-            AnswerRead(
-                id=r.id,
-                question_id=r.question_id,
-                candidate_answer=r.candidate_answer,
-                feedback=r.feedback,
-                score=r.score,
-                audio_path=r.audio_path,
-                transcribed_text=r.transcribed_text,
-                timestamp=r.timestamp.isoformat() if r.timestamp else None
-            ) for r in responses
-        ]
-
-        results.append(DetailedResult(
-            interview=interview_dict,
-            candidate=candidate_dict,
-            answers=answers_list,
-            date=s.schedule_time.strftime("%Y-%m-%d %H:%M"),
-            total_score=s.total_score, # Use session's cached score or avg_score
-            max_score=100.0, # Assuming percentage based for now
-            flags=len(proctoring) > 0,
-            details=details,
-            proctoring_logs=[ProctoringLogItem(
-                type=e.event_type,
-                time=e.timestamp.strftime("%H:%M:%S"),
-                details=e.details
-            ) for e in proctoring]
+            
+        # 6. Top Level Result
+        results.append(InterviewResultDetail(
+            id=s.result.id,
+            interview=session_nested,
+            interview_response=answers_nested,
+            total_score=s.result.total_score,
+            created_at=s.result.created_at
         ))
+
     return ApiResponse(
         status_code=200,
         data=results,
         message="All results retrieved successfully"
     )
 
-@router.get("/results/{interview_id}", response_model=ApiResponse[DetailedResult])
+@router.get("/results/{interview_id}", response_model=ApiResponse[InterviewResultDetail])
 async def get_result(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Get detailed result for a specific interview session."""
+
     # Get the interview session
     interview_session = session.exec(
         select(InterviewSession)
         .where(InterviewSession.id == interview_id)
         .options(
             selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
-            selectinload(InterviewSession.proctoring_events),
-            selectinload(InterviewSession.selected_questions)
+            selectinload(InterviewSession.paper),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
+            selectinload(InterviewSession.admin)
         )
     ).first()
     
@@ -1077,93 +1074,84 @@ async def get_result(
             status_code=403,
             detail="Not authorized to view this result"
         )
-    
-    # Build detailed result (reuse logic from get_all_results)
-    responses = interview_session.result.answers if interview_session.result else []
-    proctoring = interview_session.proctoring_events
-    
-    from ..utils import calculate_average_score
-    valid_scores = [r.score for r in responses if r.score is not None]
-    avg_score = calculate_average_score(valid_scores)
-    
-    details = []
-    for r in responses:
-        res_status = "Skipped"
-        if r.score is not None:
-            res_status = "Answered"
-        elif r.candidate_answer or r.transcribed_text or r.audio_path:
-            res_status = "Pending AI"
-            
-        details.append(ResponseDetail(
-            question=r.question.question_text or r.question.content or "Dynamic",
-            answer=r.candidate_answer or r.transcribed_text or "[No Answer]",
-            score=f"{round(r.score * 100, 1) if r.score is not None else 0}%",
-            status=res_status,
-            audio_url=f"/api/admin/results/audio/{r.id}" if r.audio_path else None
-        ))
-    
-    
-    # Serialize candidate with role-based key, handling NULL
-    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
-    
-    # Serialize interview
-    interview_dict = {
-        "id": interview_session.id,
-        "access_token": interview_session.access_token,
-        "admin_id": interview_session.admin_id,
-        "candidate_id": interview_session.candidate_id,
-        "paper_id": interview_session.paper_id,
-        "schedule_time": interview_session.schedule_time.isoformat(),
-        "duration_minutes": interview_session.duration_minutes,
-        "max_questions": interview_session.max_questions,
-        "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
-        "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
-        "status": interview_session.status.value,
-        "total_score": interview_session.total_score,
-        "current_status": interview_session.current_status.value if interview_session.current_status else None,
-        "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
-        "warning_count": interview_session.warning_count,
-        "max_warnings": interview_session.max_warnings,
-        "is_suspended": interview_session.is_suspended,
-        "suspension_reason": interview_session.suspension_reason,
-        "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
-        "enrollment_audio_path": interview_session.enrollment_audio_path,
-        "candidate_name": interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name,
-        "admin_name": current_user.full_name, # Since we filtered by current_user.id
-        "is_completed": interview_session.is_completed
-    }
+        
+    s = interview_session
+    if not s.result:
+         raise HTTPException(status_code=404, detail="Result not found for this interview")
 
-    # Answers list
-    answers_list = [
-        AnswerRead(
-            id=r.id,
-            question_id=r.question_id,
-            candidate_answer=r.candidate_answer,
-            feedback=r.feedback,
-            score=r.score,
-            audio_path=r.audio_path,
-            transcribed_text=r.transcribed_text,
-            timestamp=r.timestamp.isoformat() if r.timestamp else None
-        ) for r in responses
-    ]
+    # Build nested objects
+    # 1. Admin
+    admin_obj = None
+    if s.admin:
+        admin_obj = UserNested(
+            id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, role=s.admin.role.value,
+            profile_image=s.admin.profile_image 
+        )
+         
+    # 2. Candidate
+    candidate_obj = None
+    if s.candidate:
+        candidate_obj = UserNested(
+            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, role=s.candidate.role.value,
+             profile_image=s.candidate.profile_image
+        )
+        
+    # 3. Paper
+    paper_obj = None
+    if s.paper:
+        paper_obj = QuestionPaperNested(
+            id=s.paper.id, name=s.paper.name, description=s.paper.description, 
+            admin_id=s.paper.admin_id, created_at=s.paper.created_at
+        )
+        
+    # 4. Session Nested
+    session_nested = InterviewSessionNested(
+        id=s.id, access_token=s.access_token,
+        admin=admin_obj, candidate=candidate_obj, paper=paper_obj,
+        schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
+        max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
+        status=s.status.value, total_score=s.total_score,
+        current_status=s.current_status.value if s.current_status else None,
+        last_activity=s.last_activity, warning_count=s.warning_count,
+        max_warnings=s.max_warnings, is_suspended=s.is_suspended,
+        suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
+        enrollment_audio_path=s.enrollment_audio_path,
+        candidate_name=s.candidate_name, admin_name=s.admin_name,
+        is_completed=s.is_completed
+    )
+    
+    # 5. Answers
+    answers_nested = []
+    for ans in s.result.answers:
+        q_nested = None
+        if ans.question:
+            q_nested = QuestionNested(
+                id=ans.question.id, content=ans.question.content,
+                question_text=ans.question.question_text, topic=ans.question.topic,
+                difficulty=ans.question.difficulty, marks=ans.question.marks,
+                response_type=ans.question.response_type
+            )
+        
+        answers_nested.append(AnswersNested(
+            id=ans.id, interview_result_id=ans.interview_result_id,
+            question=q_nested,
+            candidate_answer=ans.candidate_answer, feedback=ans.feedback,
+            score=ans.score, audio_path=ans.audio_path,
+            transcribed_text=ans.transcribed_text, timestamp=ans.timestamp
+        ))
+        
+    # 6. Top Level Result
+    result_detail = InterviewResultDetail(
+        id=s.result.id,
+        interview=session_nested,
+        interview_response=answers_nested,
+        total_score=s.result.total_score,
+        created_at=s.result.created_at
+    )
 
     return ApiResponse(
         status_code=200,
-        data=DetailedResult(
-            interview=interview_dict,
-            candidate=candidate_dict,
-            answers=answers_list,
-            date=interview_session.schedule_time.strftime("%Y-%m-%d %H:%M"),
-            total_score=interview_session.total_score,
-            max_score=float(len(interview_session.selected_questions) * 10) if interview_session.selected_questions else 0.0,
-            flags=len(proctoring) > 0,
-            details=details,
-            proctoring_logs=[ProctoringLogItem(
-                type=e.event_type,
-                time=e.timestamp.strftime("%H:%M:%S"),
-                details=e.details
-            ) for e in proctoring]
-        ),
+        data=result_detail,
         message="Result details retrieved successfully"
     )
 
