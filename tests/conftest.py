@@ -102,8 +102,17 @@ def client_fixture(session):
     
     from fastapi.testclient import TestClient
     yield TestClient(app)
-    
     app.dependency_overrides.clear()
+
+@pytest.fixture(scope="session")
+def event_loop():
+    """
+    Create an instance of the default event loop for each test case.
+    """
+    import asyncio
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
 
 @pytest.fixture
 def auth_headers(client):
@@ -118,3 +127,4 @@ def auth_headers(client):
     # For speed, we'll mock the token generation directly
     access_token = create_access_token(data={"sub": "test@example.com"})
     return {"Authorization": f"Bearer {access_token}"}
+
