@@ -1,0 +1,71 @@
+from typing import List, Optional
+from pydantic import BaseModel
+from datetime import datetime
+
+class UserNested(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    role: str
+    profile_image: Optional[str] = None
+
+class QuestionPaperNested(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    admin_id: Optional[int] = None
+    created_at: datetime
+
+class QuestionNested(BaseModel):
+    id: int
+    content: Optional[str] = None
+    question_text: Optional[str] = None
+    topic: Optional[str] = None
+    difficulty: str
+    marks: int
+    response_type: str
+
+class InterviewSessionNested(BaseModel):
+    id: int
+    access_token: str
+    admin: Optional[UserNested] = None
+    candidate: Optional[UserNested] = None
+    paper: Optional[QuestionPaperNested] = None
+    
+    schedule_time: datetime
+    duration_minutes: int
+    max_questions: Optional[int] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    status: str
+    total_score: Optional[float] = None
+    current_status: Optional[str] = None
+    last_activity: Optional[datetime] = None
+    warning_count: int
+    max_warnings: int
+    is_suspended: bool
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[datetime] = None
+    enrollment_audio_path: Optional[str] = None
+    candidate_name: Optional[str] = None
+    admin_name: Optional[str] = None
+    is_completed: bool
+
+class AnswersNested(BaseModel):
+    id: int
+    interview_result_id: int
+    question: Optional[QuestionNested] = None
+    
+    candidate_answer: Optional[str] = None
+    feedback: Optional[str] = None
+    score: Optional[float] = None
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
+    timestamp: datetime
+
+class InterviewResultDetail(BaseModel):
+    id: int
+    interview: InterviewSessionNested
+    interview_response: List[AnswersNested] = []
+    total_score: Optional[float] = None
+    created_at: datetime

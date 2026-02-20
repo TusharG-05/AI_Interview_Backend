@@ -62,13 +62,50 @@ class AudioService:
     def speaker_model(self):
         if self._speaker_model is None:
             import torch
-            from speechbrain.inference.speaker import EncoderClassifier
+            from huggingface_hub import snapshot_download
+
             device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(f"Loading Speaker Verification Model on {device}...")
+            
+            # Fix for Windows Symlink Error (WinError 1314)
+            # Force download/copy files instead of symlinking
+            save_path = os.path.abspath("models/speechbrain") # Use absolute path for safety
+            try:
+                if not os.path.exists(os.path.join(save_path, "hyperparams.yaml")):
+                    logger.info("Downloading SpeechBrain model to local directory (no symlinks)...")
+                    snapshot_download(
+                        repo_id="speechbrain/spkrec-ecapa-voxceleb",
+                        local_dir=save_path,
+                        local_dir_use_symlinks=False
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to pre-download model (SpeechBrain): {e}")
+
+            # CRITICAL: Monkey-patch SpeechBrain's fetching to use COPY instead of SYMLINK
+            # This prevents WinError 1314 when from_hparams internally fetches files
+            try:
+                import speechbrain.utils.fetching as sb_fetching
+                from speechbrain.utils.fetching import LocalStrategy
+                _original_fetch = sb_fetching.fetch
+
+                def _patched_fetch(*args, **kwargs):
+                    kwargs.setdefault("local_strategy", LocalStrategy.COPY)
+                    if kwargs.get("local_strategy") == LocalStrategy.SYMLINK:
+                        kwargs["local_strategy"] = LocalStrategy.COPY
+                    return _original_fetch(*args, **kwargs)
+
+                sb_fetching.fetch = _patched_fetch
+                logger.info("Patched SpeechBrain fetch strategy: SYMLINK -> COPY")
+            except Exception as patch_err:
+                logger.warning(f"Could not patch SpeechBrain fetch strategy: {patch_err}")
+
+            from speechbrain.inference.speaker import EncoderClassifier
+
+            # CRITICAL: Use local path as source to verify files are local and avoid HF Hub symlinks
             self._speaker_model = EncoderClassifier.from_hparams(
-                source="speechbrain/spkrec-ecapa-voxceleb", 
+                source=save_path, 
                 run_opts={"device": device},
-                savedir="/tmp/speechbrain_model"
+                savedir=save_path
             )
         return self._speaker_model
 

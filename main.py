@@ -6,8 +6,6 @@ import multiprocessing
 from app.server import app
 
 if __name__ == "__main__":
-    # Removed multiprocessing.freeze_support() and set_start_method('spawn') 
-    # as they were causing segmentation faults with certain AI libraries on Linux.
     
     print("Starting Server in API-ONLY Mode...")
     
