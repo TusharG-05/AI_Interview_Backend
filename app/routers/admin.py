@@ -1,6 +1,6 @@
 from typing import List, Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
@@ -10,7 +10,15 @@ from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
-from ..schemas.requests import QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
+
+from ..schemas.requests import (
+    QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, 
+    QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
+)
 from ..schemas.responses import (
     PaperRead, QuestionRead, SessionRead, UserRead, DetailedResult, 
     ResponseDetail, ProctoringLogItem, InterviewLinkResponse, 
@@ -404,6 +412,7 @@ async def update_question(
 @router.post("/interviews/schedule", response_model=ApiResponse[InterviewLinkResponse], status_code=201)
 async def schedule_interview(
     schedule_data: InterviewScheduleCreate, 
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_admin_user), 
     session: Session = Depends(get_session)
 ):
@@ -462,6 +471,8 @@ async def schedule_interview(
             "email_sent": True
         }
     )
+
+    # Email Invitation will be sent at the end using BackgroundTasks
     
     # Random Question Selection
     import random
@@ -511,8 +522,9 @@ async def schedule_interview(
     from ..core.config import APP_BASE_URL
     link = f"{APP_BASE_URL}/interview/access/{new_session.access_token}"
     
-    # Send Email
-    success = email_service.send_interview_invitation(
+    # Send Email Invitation Asynchronously (prevent UI hang)
+    background_tasks.add_task(
+        email_service.send_interview_invitation,
         to_email=candidate.email, 
         candidate_name=candidate.full_name,
         link=link,
@@ -520,7 +532,7 @@ async def schedule_interview(
         duration_minutes=new_session.duration_minutes
     )
     
-    warning = None if success else "Email failed to send. Check server logs for mock link."
+    warning = "Email invitation queued for sending."
     
     # Serialize users with role-based keys
     admin_dict = serialize_user(current_user)  # {"admin": {...}}
@@ -932,15 +944,52 @@ async def delete_interview(
         message="Interview session and all related data deleted successfully"
     )
 
-@router.get("/candidates", response_model=ApiResponse[List[dict]])
-async def list_candidates(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    """List all users with CANDIDATE role."""
+@router.get("/candidates", response_model=ApiResponse[dict])
+async def list_candidates(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
+    """List users with CANDIDATE role with pagination and search."""
     from ..schemas.user_schemas import serialize_user
+    from sqlalchemy import func
     
-    candidates = session.exec(select(User).where(User.role == UserRole.CANDIDATE)).all()
+    query = select(User)
+    
+    # Role-based visibility logic
+    if current_user.role == UserRole.SUPER_ADMIN:
+        # Super admin sees both candidates and regular admins
+        query = query.where(User.role.in_([UserRole.CANDIDATE, UserRole.ADMIN]))
+    else:
+        # Regular admin sees only candidates
+        query = query.where(User.role == UserRole.CANDIDATE)
+    
+    if search:
+        search_filter = f"%{search}%"
+        # Using ilike for case-insensitive search
+        query = query.where(
+            (User.full_name.ilike(search_filter)) | 
+            (User.email.ilike(search_filter))
+        )
+        
+    # Get total count before pagination
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    # Apply pagination
+    query = query.order_by(User.id.desc()).offset(skip).limit(limit)
+    candidates = session.exec(query).all()
+    
     return ApiResponse(
         status_code=200,
-        data=[serialize_user(c) for c in candidates],
+        data={
+            "items": [serialize_user(c) for c in candidates],
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Candidates retrieved successfully"
     )
 
@@ -1701,4 +1750,61 @@ async def get_candidate_status(
         data=CandidateStatusResponse(**status_data),
         message="Candidate status retrieved successfully"
     )
+
+@router.get("/test-email")
+async def test_email(
+    background_tasks: BackgroundTasks,
+    email: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Simple endpoint to test email configuration without scheduling an interview."""
+    target_email = email or current_user.email
+    subject = "AI Interview Platform - Diagnostic Test (Async)"
+    link = f"{APP_BASE_URL}/admin/dashboard"
+    
+    logger.info(f"Queuing async test email for {target_email}")
+    background_tasks.add_task(
+        email_service.send_interview_invitation,
+        to_email=target_email,
+        candidate_name=current_user.full_name,
+        link=link,
+        time_str="Just Now (Diagnostic Async)",
+        duration_minutes=0
+    )
+    
+    return ApiResponse(
+        status_code=200,
+        data={"sent_to": target_email, "mode": "async"},
+        message="Test email queued. Check server logs for delivery status."
+    )
+
+@router.get("/test-email-sync")
+async def test_email_sync(
+    email: Optional[str] = None,
+    current_user: User = Depends(get_admin_user)
+):
+    """Synchronous version of test-email to see errors immediately in Swagger."""
+    target_email = email or current_user.email
+    link = f"{APP_BASE_URL}/admin/dashboard"
+    
+    logger.info(f"Sending SYNC test email for {target_email}")
+    success = email_service.send_interview_invitation(
+        to_email=target_email,
+        candidate_name=current_user.full_name,
+        link=link,
+        time_str="Just Now (Diagnostic Sync)",
+        duration_minutes=0
+    )
+    
+    if success:
+        return ApiResponse(
+            status_code=200,
+            data={"sent_to": target_email, "mode": "sync"},
+            message="Test email sent successfully (Synchronous)."
+        )
+    else:
+        raise HTTPException(
+            status_code=500, 
+            detail="Failed to send email synchronously. Check server logs for SMTP errors."
+        )
 

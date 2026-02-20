@@ -25,7 +25,8 @@ rsync -av --progress . "$DEPLOY_DIR/" \
     --exclude .pytest_cache \
     --exclude .vscode \
     --exclude app.log \
-    --exclude .env
+    --exclude .env \
+    --exclude frontend
 
 # 2. Enter deploy directory
 cd "$DEPLOY_DIR" || exit

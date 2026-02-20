@@ -1,26 +1,34 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldCheck, User, ArrowRight, Loader2 } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { ShieldCheck, User, ArrowRight, Loader2, Mail, Lock, AlertCircle } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { authService } from '../services/authService';
 
 const Login = () => {
     const navigate = useNavigate();
-    const [loading, setLoading] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [error, setError] = useState(null);
 
-    const handleLogin = (role) => {
-        setLoading(role);
-        // Simulate API delay
-        setTimeout(() => {
-            const mockUser = {
-                id: role === 'admin' ? 1 : 2,
-                full_name: role === 'admin' ? 'System Administrator' : 'John Candidate',
-                email: role === 'admin' ? 'admin@visionai.com' : 'john@example.com',
-                role: role
-            };
-            localStorage.setItem('token', 'mock-jwt-token');
-            localStorage.setItem('user', JSON.stringify(mockUser));
-            navigate(`/${role}`);
-        }, 1200);
+    const handleLogin = async (e) => {
+        e.preventDefault();
+        setError(null);
+        setLoading(true);
+
+        try {
+            const result = await authService.login(email, password);
+            const user = result;
+            if (user.role === 'admin' || user.role === 'super_admin') {
+                navigate('/admin');
+            } else {
+                navigate('/candidate');
+            }
+        } catch (err) {
+            setError(err.message || 'Invalid credentials. Please try again.');
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -32,7 +40,7 @@ const Login = () => {
                         <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center">
                             <span className="text-brand-orange font-bold text-2xl">v</span>
                         </div>
-                        <span className="font-bold text-3xl tracking-tight">VisionAI</span>
+                        <span className="font-bold text-3xl tracking-tight leading-none">VisionAI</span>
                     </div>
 
                     <motion.div
@@ -50,90 +58,103 @@ const Login = () => {
                     </motion.div>
                 </div>
 
-                <div className="mt-12 md:mt-0 z-10">
-                    <div className="flex gap-4 items-center">
-                        <div className="flex -space-x-2">
-                            {[1, 2, 3, 4].map((i) => (
-                                <div key={i} className="w-10 h-10 rounded-full border-2 border-brand-orange bg-gray-200" />
-                            ))}
-                        </div>
-                        <p className="text-sm font-medium">Joined by 10,000+ candidates today</p>
+                <div className="mt-12 md:mt-0 z-10 flex gap-4 items-center">
+                    <div className="flex -space-x-2">
+                        {[1, 2, 3, 4].map((i) => (
+                            <div key={i} className="w-10 h-10 rounded-full border-2 border-brand-orange bg-white/20" />
+                        ))}
                     </div>
+                    <p className="text-sm font-medium">Joined by 10,000+ candidates today</p>
                 </div>
 
-                {/* Decorative Circles */}
-                <div className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-white/10 rounded-full blur-3xl" />
-                <div className="absolute bottom-[10%] left-[-5%] w-48 h-48 bg-black/10 rounded-full blur-2xl" />
+                {/* Decorative Elements */}
+                <div className="absolute top-[-10%] right-[-10%] w-64 h-64 bg-white/10 rounded-full blur-3xl text-brand-orange" />
+                <div className="absolute bottom-[10%] left-[-5%] w-48 h-48 bg-black/10 rounded-full blur-2xl text-brand-orange" />
             </div>
 
-            {/* Right Side - Login Forms */}
+            {/* Right Side - Login Form */}
             <div className="md:w-1/2 p-8 md:p-24 flex flex-col justify-center bg-gray-50">
                 <div className="max-w-md w-full mx-auto">
-                    <div className="mb-12">
-                        <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back</h2>
-                        <p className="text-gray-500">Choose your role to continue to the dashboard.</p>
+                    <div className="mb-10 text-center md:text-left">
+                        <h2 className="text-4xl font-black text-gray-900 mb-3 tracking-tight">Welcome Back</h2>
+                        <p className="text-gray-500 font-medium">Enter your credentials to access the portal.</p>
                     </div>
 
-                    <div className="space-y-4">
-                        {/* Admin Option */}
-                        <motion.div
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            className={`p-6 bg-white rounded-2xl border-2 cursor-pointer transition-all duration-300 ${loading === 'admin' ? 'border-brand-orange ring-4 ring-brand-orange/10' : 'border-transparent hover:border-brand-orange/30 shadow-sm hover:shadow-md'
-                                }`}
-                            onClick={() => !loading && handleLogin('admin')}
-                        >
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-4">
-                                    <div className="w-14 h-14 bg-brand-orange/10 rounded-2xl flex items-center justify-center text-brand-orange">
-                                        <ShieldCheck size={32} />
-                                    </div>
-                                    <div>
-                                        <h3 className="font-bold text-xl text-gray-900">Admin Control</h3>
-                                        <p className="text-sm text-gray-500">Manage papers and candidates</p>
-                                    </div>
+                    <AnimatePresence>
+                        {error && (
+                            <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="mb-6 p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600 text-sm font-semibold"
+                            >
+                                <AlertCircle size={18} />
+                                {error}
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    <form onSubmit={handleLogin} className="space-y-6">
+                        <div className="space-y-2">
+                            <label className="text-sm font-bold text-gray-700 ml-1">Email Address</label>
+                            <div className="relative group">
+                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400 group-focus-within:text-brand-orange transition-colors">
+                                    <Mail size={20} />
                                 </div>
-                                {loading === 'admin' ? (
-                                    <Loader2 className="animate-spin text-brand-orange" />
-                                ) : (
-                                    <ArrowRight className="text-gray-300 group-hover:text-brand-orange" />
-                                )}
+                                <input
+                                    type="email"
+                                    required
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    className="block w-full pl-11 pr-4 py-4 bg-white border border-gray-200 rounded-2xl focus:ring-4 focus:ring-brand-orange/10 focus:border-brand-orange outline-none transition-all font-medium text-gray-900"
+                                    placeholder="admin@test.com"
+                                />
                             </div>
-                        </motion.div>
+                        </div>
 
-                        {/* Candidate Option */}
-                        <motion.div
-                            whileHover={{ scale: 1.02 }}
-                            whileTap={{ scale: 0.98 }}
-                            className={`p-6 bg-white rounded-2xl border-2 cursor-pointer transition-all duration-300 ${loading === 'candidate' ? 'border-brand-orange ring-4 ring-brand-orange/10' : 'border-transparent hover:border-brand-orange/30 shadow-sm hover:shadow-md'
-                                }`}
-                            onClick={() => !loading && handleLogin('candidate')}
-                        >
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-4">
-                                    <div className="w-14 h-14 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600">
-                                        <User size={32} />
-                                    </div>
-                                    <div>
-                                        <h3 className="font-bold text-xl text-gray-900">Candidate Portal</h3>
-                                        <p className="text-sm text-gray-500">View invitations and take tests</p>
-                                    </div>
+                        <div className="space-y-2">
+                            <div className="flex justify-between items-center ml-1">
+                                <label className="text-sm font-bold text-gray-700">Password</label>
+                                <button type="button" onClick={() => alert('Please contact your administrator to reset your password.')} className="text-xs font-bold text-brand-orange hover:underline">Forgot?</button>
+                            </div>
+                            <div className="relative group">
+                                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400 group-focus-within:text-brand-orange transition-colors">
+                                    <Lock size={20} />
                                 </div>
-                                {loading === 'candidate' ? (
-                                    <Loader2 className="animate-spin text-blue-600" />
-                                ) : (
-                                    <ArrowRight className="text-gray-300" />
-                                )}
+                                <input
+                                    type="password"
+                                    required
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="block w-full pl-11 pr-4 py-4 bg-white border border-gray-200 rounded-2xl focus:ring-4 focus:ring-brand-orange/10 focus:border-brand-orange outline-none transition-all font-medium text-gray-900"
+                                    placeholder="••••••••"
+                                />
                             </div>
-                        </motion.div>
-                    </div>
+                        </div>
 
-                    <div className="mt-12 pt-8 border-t border-gray-200 text-center">
-                        <p className="text-sm text-gray-500">
-                            Need technical support? <br />
-                            <a href="#" className="text-brand-orange font-semibold hover:underline">Contact System Admin</a>
-                        </p>
-                    </div>
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            className="w-full btn-primary py-4 rounded-2xl text-lg flex items-center justify-center gap-3 shadow-xl shadow-brand-orange/20 mt-8 disabled:opacity-70"
+                        >
+                            {loading ? (
+                                <>
+                                    <Loader2 className="animate-spin" size={24} />
+                                    <span>Authenticating...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <span>Sign In</span>
+                                    <ArrowRight size={20} />
+                                </>
+                            )}
+                        </button>
+                    </form>
+
+                    <p className="mt-10 text-center text-sm text-gray-400 font-medium">
+                        Having trouble logging in? <br className="md:hidden" />
+                        <button type="button" onClick={() => alert('Please contact support@visionai.com')} className="text-brand-orange font-bold hover:underline">Contact System Admin</button>
+                    </p>
                 </div>
             </div>
         </div>
