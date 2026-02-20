@@ -60,6 +60,10 @@ ASSETS_DIR = "app/assets"
 AUDIO_DIR = os.path.join(ASSETS_DIR, "audio")
 PROCTORING_LOGS_DIR = os.path.join(ASSETS_DIR, "proctoring_logs")
 
+# Cloud Configuration
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "https://huggingface.co/spaces/TusharG-05/Face-Gaze-AI-Interview")
+APP_BASE_URL = os.getenv("APP_BASE_URL", HF_SPACE_URL)
+
 # Configure DeepFace to use project-local storage (within venv)
 # DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights
 DEEPFACE_STORAGE_DIR = os.path.abspath(".venv/models/deepface")

@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-orange: #ff6b00;
+  --color-brand-orange-light: #ff914d;
+  --color-brand-orange-dark: #cc5500;
+}
+
+:root {
+  font-family: 'Inter', system-ui, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 255, 255, 255;
+  --background-end-rgb: 255, 255, 255;
+}
+
+h1,
+h2,
+h3,
+h4,
+.font-outfit {
+  font-family: 'Outfit', sans-serif;
+}
+
+body {
+  @apply bg-white text-gray-900;
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-brand-orange text-white px-4 py-2 rounded-lg font-semibold hover:bg-brand-orange-dark transition-colors duration-200;
+  }
+
+  .card {
+    @apply bg-white border border-gray-200 rounded-xl shadow-sm p-6;
+  }
+}
