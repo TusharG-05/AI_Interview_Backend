@@ -538,7 +538,6 @@ async def schedule_interview(
     # Generate Link
     from ..core.config import APP_BASE_URL
     link = f"{APP_BASE_URL}/interview/access/{new_session.access_token}"
-    
     # Send Email Invitation Asynchronously (prevent UI hang)
     background_tasks.add_task(
         email_service.send_interview_invitation,
@@ -1805,7 +1804,7 @@ async def test_email_sync(
     link = f"{APP_BASE_URL}/admin/dashboard"
     
     logger.info(f"Sending SYNC test email for {target_email}")
-    success = email_service.send_interview_invitation(
+    success, message = email_service.send_interview_invitation(
         to_email=target_email,
         candidate_name=current_user.full_name,
         link=link,
@@ -1816,12 +1815,14 @@ async def test_email_sync(
     if success:
         return ApiResponse(
             status_code=200,
-            data={"sent_to": target_email, "mode": "sync"},
+            data={"sent_to": target_email, "mode": "sync", "details": message},
             message="Test email sent successfully (Synchronous)."
         )
     else:
-        raise HTTPException(
-            status_code=500, 
-            detail="Failed to send email synchronously. Check server logs for SMTP errors."
+        return ApiResponse(
+            status_code=500,
+            data={"sent_to": target_email, "mode": "sync", "error": message},
+            message="Failed to send email. Check error details.",
+            success=False
         )
 

@@ -27,13 +27,13 @@ const CandidateDashboard = () => {
             ]);
             // Filter invites for non-completed
             const active = (invitesRes.data || []).filter(i =>
-                !['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
+                i.status && !['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
             );
             setInvitations(active);
 
             // Filter history for completed/expired
             const past = (invitesRes.data || []).filter(i =>
-                ['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
+                i.status && ['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
             );
             // If getHistory returns duplicate or specific structure, rely on it, 
             // but for now reusing getMyInterviews logic or just using what's there if distinct.

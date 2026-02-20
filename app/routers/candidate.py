@@ -33,6 +33,7 @@ async def my_history(
             interview_id=s.id,
             paper_name=s.paper.name if s.paper else "General",
             date=s.start_time.strftime("%Y-%m-%d %H:%M") if s.start_time else "Scheduled",
+            status=s.status,
             score=s.total_score
         ))
     return ApiResponse(
@@ -60,6 +61,7 @@ async def my_interviews(
             interview_id=s.id,
             paper_name=s.paper.name if s.paper else "General",
             date=s.schedule_time.isoformat(),
+            status=s.status,
             score=None
         ))
     return ApiResponse(

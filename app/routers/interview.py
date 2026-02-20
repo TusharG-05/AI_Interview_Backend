@@ -395,40 +395,16 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
         message="Interview finished. Results are being processed."
     )
 
-# --- AI & Resume Specific ---
-
-@router.post("/evaluate-answer/{interview_id}", response_model=ApiResponse[dict])
-async def evaluate_answer(interview_id: int, request: AnswerRequest, session_db: Session = Depends(get_session)):
-    interview_session = session_db.get(InterviewSession, interview_id)
-    if not interview_session: raise HTTPException(status_code=404)
-
+@router.post("/evaluate-answer", response_model=ApiResponse[dict])
+async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(get_session)):
+    """
+    Stateless endpoint to evaluate a candidate's answer against a question.
+    Does not save the result to any specific interview session.
+    """
     try:
         evaluation = interview_service.evaluate_answer_content(request.question, request.answer)
         
-        # This now only flushes, doesn't commit
-        db_question = interview_service.get_or_create_question(session_db, request.question, topic="Dynamic")
-
-        # Get or Create InterviewResult
-        result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
-        if not result:
-            result = InterviewResult(interview_id=interview_id)
-            session_db.add(result)
-            session_db.commit()
-            session_db.refresh(result)
-
-        new_answer = Answers(
-            interview_result_id=result.id,
-            question_id=db_question.id,
-            candidate_answer=request.answer,
-            feedback=evaluation["feedback"],
-            score=evaluation["score"]
-        )
-        session_db.add(new_answer)
-        
-        # ATOMIC COMMIT: Both Question (if new) and Response are saved together
-        session_db.commit()
-        
-        # Remove interview_id from response as requested
+        # Remove interview_id from response if it existed in the prompt output
         if "interview_id" in evaluation:
             del evaluation["interview_id"]
             
@@ -438,7 +414,6 @@ async def evaluate_answer(interview_id: int, request: AnswerRequest, session_db:
             message="Answer evaluated successfully"
         )
     except Exception as e:
-        session_db.rollback()
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 

@@ -16,7 +16,7 @@ const CandidateHistory = () => {
                 const res = await interviewService.getMyInterviews();
                 // Filter for completed/expired
                 const past = (res.data || []).filter(i =>
-                    ['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
+                    i.status && ['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
                 );
                 setHistory(past);
             } catch (err) {
@@ -29,6 +29,7 @@ const CandidateHistory = () => {
     }, []);
 
     const StatusIcon = ({ status }) => {
+        if (!status) return <AlertCircle className="text-gray-400" size={20} />;
         switch (status.toLowerCase()) {
             case 'completed': return <CheckCircle2 className="text-emerald-500" size={20} />;
             case 'expired': return <Clock className="text-gray-400" size={20} />;
@@ -51,11 +52,11 @@ const CandidateHistory = () => {
                         <div className="divide-y divide-gray-100">
                             {history.map((interview) => (
                                 <div
-                                    key={interview.id}
+                                    key={interview.interview_id}
                                     className="p-6 border-b border-gray-100 last:border-0 flex items-center justify-between group"
                                 >
                                     <div className="flex items-center gap-4">
-                                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${interview.status === 'COMPLETED' ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'
+                                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${interview.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-400'
                                             }`}>
                                             <StatusIcon status={interview.status} />
                                         </div>
@@ -64,13 +65,13 @@ const CandidateHistory = () => {
                                                 {interview.paper_name || 'Assessment Interview'}
                                             </h3>
                                             <p className="text-sm text-gray-500">
-                                                {format(new Date(interview.scheduled_at), 'MMMM d, yyyy • h:mm a')}
+                                                {interview.date}
                                             </p>
                                         </div>
                                     </div>
 
                                     <div className="text-right">
-                                        <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${interview.status === 'COMPLETED' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'
+                                        <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${interview.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-400'
                                             }`}>
                                             {interview.status}
                                         </span>
