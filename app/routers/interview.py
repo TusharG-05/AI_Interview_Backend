@@ -461,72 +461,78 @@ async def process_session_results_unified(interview_id: int):
             # Retrieve Result Object
             result_obj = db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
             if not result_obj:
-                 # If no result object, try creating or just return if no answers?
-                 # If we are finishing, we expect something? 
-                 # If not present, maybe no questions answered.
                  logger.warning(f"No InterviewResult for session {interview_id}")
-                 # Initialize if needed to prevent crash or just return
                  result_obj = InterviewResult(interview_id=interview_id)
                  db.add(result_obj)
                  db.commit()
                  db.refresh(result_obj)
             
-            # Fetch answers
-            # answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
-            # Or use relationship
-            answers = result_obj.answers
+            # Fetch answers via direct query (safer than relationship for mutation loop)
+            answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+            logger.info(f"Session {interview_id}: processing {len(answers)} answer(s)")
             
             for resp in answers:
-                # Process Audio Responses
+                # ── Audio transcription ──────────────────────────────────────
                 if resp.audio_path and not (resp.candidate_answer or resp.transcribed_text):
                     audio_service.cleanup_audio(resp.audio_path)
-                    
-                    # 1. Verification & Transcription (Async)
                     text = await audio_service.speech_to_text(resp.audio_path)
                     if session.enrollment_audio_path:
                         match, _ = audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path)
                         if not match: text = f"[VOICE MISMATCH] {text}"
-                    
                     resp.candidate_answer = text
-                    resp.transcribed_text = text 
+                    resp.transcribed_text = text
                 
-                # Evaluation (for both Audio and Text responses)
-                if resp.candidate_answer and not resp.feedback:
-                    # Fetch question text
+                # ── LLM Evaluation ───────────────────────────────────────────
+                # Skip only if score is already set (non-None).
+                # If feedback exists but score is None, still run evaluation.
+                if resp.candidate_answer and resp.score is None:
                     q = db.get(Questions, resp.question_id)
                     q_text = q.question_text or q.content or "General Question"
                     
+                    logger.info(f"  Answer {resp.id}: evaluating (question: '{q_text[:60]}...')")
                     evaluation = interview_service.evaluate_answer_content(q_text, resp.candidate_answer)
                     
-                    resp.feedback = evaluation["feedback"]
-                    resp.score = evaluation["score"]
+                    resp.feedback = evaluation.get("feedback", "")
+                    resp.score = evaluation.get("score")
+                    
+                    logger.info(f"  Answer {resp.id}: score={resp.score}, error={evaluation.get('error', False)}")
                     db.add(resp)
                     db.commit()
+                elif resp.score is not None:
+                    logger.info(f"  Answer {resp.id}: already scored ({resp.score}) — skipping")
+                else:
+                    logger.info(f"  Answer {resp.id}: no answer text — skipping evaluation")
             
-            # Final Score Aggregation
+            # ── Final Score Aggregation ──────────────────────────────────────
+            # Re-fetch from DB to get fresh committed scores (avoids stale cache)
+            fresh_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+            all_scores = [r.score for r in fresh_answers if r.score is not None]
+            logger.info(f"Session {interview_id}: individual scores = {all_scores}")
+            
             from ..utils import calculate_average_score
-            all_scores = [r.score for r in answers if r.score is not None]
+            computed_score = calculate_average_score(all_scores)
+            logger.info(f"Session {interview_id}: computed average score = {computed_score}")
             
             # Update InterviewResult
-            result_obj.total_score = calculate_average_score(all_scores)
+            result_obj.total_score = computed_score
             db.add(result_obj)
             
-            # Update Session Legacy/Cache Field
-            session.total_score = result_obj.total_score
+            # Update Session cache field
+            session.total_score = computed_score
             db.add(session)
             
             db.commit()
-            logger.info(f"Session {interview_id} processing complete. Score: {session.total_score}")
+            logger.info(f"Session {interview_id} processing complete. Final score: {session.total_score}")
         except Exception as e:
-            logger.error(f"Session {interview_id} processing failed: {e}")
-            # Mark session with error state so frontend can show appropriate message
+            logger.error(f"Session {interview_id} processing failed: {e}", exc_info=True)
             try:
                 session = db.get(InterviewSession, interview_id)
                 if session:
-                    # status is already completed, maybe add error flag?
                     pass
             except Exception:
                 db.rollback()
+
+
 
 
 # --- Standalone Tools ---
