@@ -41,6 +41,33 @@ async def my_history(
         message="Interview history retrieved successfully"
     )
 
+@router.get("/interviews", response_model=ApiResponse[List[HistoryItem]])
+async def my_interviews(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Fetch scheduled and upcoming interviews for the candidate."""
+    statement = select(InterviewSession).where(
+        InterviewSession.candidate_id == current_user.id,
+        InterviewSession.status == "scheduled"
+    ).order_by(InterviewSession.schedule_time.asc())
+    
+    sessions = session.exec(statement).all()
+    
+    interviews = []
+    for s in sessions:
+        interviews.append(HistoryItem(
+            interview_id=s.id,
+            paper_name=s.paper.name if s.paper else "General",
+            date=s.schedule_time.isoformat(),
+            score=None
+        ))
+    return ApiResponse(
+        status_code=200,
+        data=interviews,
+        message="Upcoming interviews retrieved successfully"
+    )
+
 import shutil
 import os
 from fastapi import UploadFile, File

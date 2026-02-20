@@ -505,8 +505,8 @@ async def schedule_interview(
         raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
     
     # Generate Link
-    base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
-    link = f"{base_url}/interview/access/{new_session.access_token}"
+    from ..core.config import APP_BASE_URL
+    link = f"{APP_BASE_URL}/interview/access/{new_session.access_token}"
     
     # Send Email
     success = email_service.send_interview_invitation(
