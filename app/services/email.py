@@ -1,37 +1,30 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os
+import resend
 from ..core.logger import get_logger
-from ..core.config import MAIL_USERNAME, MAIL_PASSWORD
+from ..core.config import MAIL_USERNAME
 
 logger = get_logger(__name__)
 
 class EmailService:
     def __init__(self):
-        self.smtp_server = "smtp.gmail.com"
-        self.smtp_port = 587
+        # We still pull MAIL_USERNAME to act as the 'From' or fallback
         self.username = MAIL_USERNAME
-        self.password = MAIL_PASSWORD
-
+        
     def send_interview_invitation(self, to_email: str, candidate_name: str, link: str, time_str: str, duration_minutes: int):
         """
-        Sends an email with the interview link. 
-        Tries Port 465 (SSL) first, then 587 (TLS) as fallback.
+        Sends an email with the interview link using Resend HTTP API.
         """
-        logger.info(f"--- EMAIL TASK STARTING: Sending invite to {to_email} ---")
-        # Refresh credentials from environment in case they were added after startup
-        from ..core.config import MAIL_USERNAME, MAIL_PASSWORD
-        user = MAIL_USERNAME or os.getenv("MAIL_USERNAME")
-        password = MAIL_PASSWORD or os.getenv("MAIL_PASSWORD")
+        logger.info(f"--- EMAIL TASK STARTING: Sending invite to {to_email} via Resend ---")
+        
+        # Load API key directly from environment for maximum safety
+        resend_api_key = os.getenv("RESEND_API_KEY")
+        
+        if not resend_api_key:
+            logger.warning(f"MOCK MODE: No RESEND_API_KEY found. Link: {link}")
+            return True, "Mock Mode: Sent successfully (simulated - No API Key)"
+            
+        resend.api_key = resend_api_key
 
-        if not user or not password or "example" in user:
-            logger.warning(f"MOCK MODE: No valid credentials for {to_email}. Link: {link}")
-            return True
-
-        msg = MIMEMultipart()
-        msg["From"] = user
-        msg["To"] = to_email
-        msg["Subject"] = "Your AI Interview Invitation"
         body = f"""Hi {candidate_name},
 
 You have been invited to an AI-Proctored Interview.
@@ -45,28 +38,25 @@ Please click the link at the scheduled time to begin.
 Note: The link will not work before the scheduled time.
 
 Good Luck!"""
-        msg.attach(MIMEText(body, "plain"))
 
-        # Try Port 465 (SSL) first - more reliable in many cloud environments
+        # Resend free tier requires the sender to be onboarding@resend.dev 
+        # unless a custom domain is verified.
+        from_email = "onboarding@resend.dev"
+
+        params = {
+            "from": f"AI Interview Platform <{from_email}>",
+            "to": [to_email],
+            "subject": "Your AI Interview Invitation",
+            "text": body,
+        }
+
         try:
-            logger.info(f"Attempting email to {to_email} via Port 465 (SSL)...")
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-                server.login(user, password)
-                server.sendmail(user, to_email, msg.as_string())
-            logger.info(f"Email sent successfully via 465 to {to_email}")
-            return True
-        except Exception as e465:
-            logger.warning(f"Port 465 failed: {e465}. Trying Port 587 (TLS)...")
-            
-            # Fallback to Port 587 (TLS)
-            try:
-                with smtplib.SMTP("smtp.gmail.com", 587, timeout=15) as server:
-                    server.starttls()
-                    server.login(user, password)
-                    server.sendmail(user, to_email, msg.as_string())
-                logger.info(f"Email sent successfully via 587 to {to_email}")
-                return True
-            except Exception as e587:
-                logger.error(f"All SMTP methods failed. 465: {e465}, 587: {e587}")
-                logger.warning(f"FALLBACK MOCK LINK FOR {to_email}: {link}")
-                return False
+            logger.info(f"Attempting Resend API call to {to_email}...")
+            email_response = resend.Emails.send(params)
+            logger.info(f"Resend Request Successful! ID: {email_response.get('id', 'unknown')}")
+            return True, "Success (Resend HTTP API)"
+        except Exception as e:
+            err_msg = f"Resend API Failed: {str(e)}"
+            logger.error(err_msg)
+            logger.warning(f"FALLBACK MOCK LINK FOR {to_email}: {link}")
+            return False, err_msg

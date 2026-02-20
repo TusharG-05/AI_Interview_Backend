@@ -6,6 +6,7 @@ class HistoryItem(BaseModel):
     interview_id: int
     paper_name: str
     date: str
+    status: str
     score: Optional[float] = None
 
 class InterviewAccessResponse(BaseModel):
