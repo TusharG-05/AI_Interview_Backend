@@ -7,11 +7,14 @@ export const authService = {
         // But assuming backend has /auth/token or similar
         try {
             const response = await api.post('/auth/login', { email, password });
-            if (response.data?.access_token) {
-                localStorage.setItem('token', response.data.access_token);
-                localStorage.setItem('user', JSON.stringify(response.data.user));
+            // The audit tool confirmed the structure is: { status_code, data: { access_token, id, email, full_name, role, ... }, message, success }
+            if (response.success && response.data?.access_token) {
+                const { access_token, ...userData } = response.data;
+                localStorage.setItem('token', access_token);
+                localStorage.setItem('user', JSON.stringify(userData));
+                return response.data;
             }
-            return response.data;
+            throw new Error(response.message || 'Login failed');
         } catch (error) {
             console.error('Login failed', error);
             throw error;

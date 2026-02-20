@@ -6,29 +6,54 @@ import {
 import { format } from 'date-fns';
 import { interviewService } from '../services/interviewService';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
+import CreatePaperModal from '../components/CreatePaperModal';
+import ScheduleInterviewModal from '../components/ScheduleInterviewModal';
 
 const AdminDashboard = () => {
+    const navigate = useNavigate();
     const [interviews, setInterviews] = useState([]);
     const [papers, setPapers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [isPaperModalOpen, setIsPaperModalOpen] = useState(false);
+    const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+
+    const [liveCount, setLiveCount] = useState(0);
 
     useEffect(() => {
-        fetchData();
+        const load = async () => {
+            const count = await fetchData();
+            setLiveCount(count);
+        };
+        load();
+
+        // Poll every 30s
+        const interval = setInterval(async () => {
+            const res = await interviewService.getLiveStatus();
+            setLiveCount(res.data?.length || 0);
+        }, 30000);
+        return () => clearInterval(interval);
     }, []);
 
     const fetchData = async () => {
         try {
             setLoading(true);
-            const [interviewsRes, papersRes] = await Promise.all([
+            const [interviewsRes, papersRes, liveRes] = await Promise.all([
                 interviewService.getInterviews(),
-                interviewService.getPapers()
+                interviewService.getPapers(),
+                interviewService.getLiveStatus()
             ]);
             setInterviews(interviewsRes.data || []);
             setPapers(papersRes.data || []);
+
+            // Store live count for stats
+            const liveCount = liveRes.data?.length || 0;
+            return liveCount;
         } catch (err) {
             setError('Failed to fetch dashboard data');
             console.error(err);
+            return 0;
         } finally {
             setLoading(false);
         }
@@ -37,7 +62,7 @@ const AdminDashboard = () => {
     const stats = [
         { name: 'Total Interviews', value: interviews.length, icon: Calendar, color: 'bg-brand-orange/10 text-brand-orange' },
         { name: 'Active Papers', value: papers.length, icon: BookOpen, color: 'bg-blue-50 text-blue-600' },
-        { name: 'Avg. Score', value: '78%', icon: Clock, color: 'bg-emerald-50 text-emerald-600' },
+        { name: 'Live Now', value: liveCount, icon: Clock, color: 'bg-emerald-50 text-emerald-600 animate-pulse' },
     ];
 
     if (loading) return (
@@ -49,13 +74,28 @@ const AdminDashboard = () => {
 
     return (
         <div className="space-y-8 animate-in fade-in duration-500">
+            {/* Modals */}
+            <CreatePaperModal
+                isOpen={isPaperModalOpen}
+                onClose={() => setIsPaperModalOpen(false)}
+                onCreated={fetchData}
+            />
+            <ScheduleInterviewModal
+                isOpen={isScheduleModalOpen}
+                onClose={() => setIsScheduleModalOpen(false)}
+                onScheduled={fetchData}
+            />
+
             {/* Welcome Section */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
                     <p className="text-gray-500 mt-1">Manage your interview pipeline and assessment papers.</p>
                 </div>
-                <button className="btn-primary flex items-center gap-2 shadow-lg shadow-brand-orange/20">
+                <button
+                    onClick={() => setIsScheduleModalOpen(true)}
+                    className="btn-primary flex items-center gap-2 shadow-lg shadow-brand-orange/20"
+                >
                     <Plus size={18} />
                     <span>New Interview</span>
                 </button>
@@ -86,7 +126,12 @@ const AdminDashboard = () => {
                 <div className="xl:col-span-2 space-y-4">
                     <div className="flex justify-between items-center px-2">
                         <h2 className="text-xl font-bold text-gray-800">Recent Interviews</h2>
-                        <button className="text-brand-orange text-sm font-semibold hover:underline">View All</button>
+                        <button
+                            onClick={() => navigate('/admin/schedules')}
+                            className="text-brand-orange text-sm font-semibold hover:underline"
+                        >
+                            View All
+                        </button>
                     </div>
 
                     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -116,19 +161,19 @@ const AdminDashboard = () => {
                                                 </div>
                                             </td>
                                             <td className="px-6 py-4">
-                                                <status-badge status={interview.status} />
+                                                <StatusBadge status={interview.status} />
                                             </td>
                                             <td className="px-6 py-4">
-                                                <p className="text-sm text-gray-600">{format(new Date(interview.scheduled_at), 'MMM d, h:mm a')}</p>
+                                                <p className="text-sm text-gray-600">{format(new Date(interview.scheduled_at || interview.schedule_time), 'MMM d, h:mm a')}</p>
                                             </td>
                                             <td className="px-6 py-4">
-                                                {interview.score !== null ? (
+                                                {interview.total_score !== null && interview.total_score !== undefined ? (
                                                     <div className="flex items-center gap-1.5">
-                                                        <span className="font-bold text-gray-900">{interview.score}</span>
+                                                        <span className="font-bold text-gray-900">{interview.total_score}</span>
                                                         <span className="text-xs text-gray-400">/ 100</span>
                                                     </div>
                                                 ) : (
-                                                    <span className="text-xs text-gray-300 italic">Pending</span>
+                                                    <span className="text-xs text-gray-300 italic">No Score</span>
                                                 )}
                                             </td>
                                             <td className="px-6 py-4 text-right">
@@ -154,7 +199,10 @@ const AdminDashboard = () => {
                 <div className="space-y-4">
                     <div className="flex justify-between items-center px-2">
                         <h2 className="text-xl font-bold text-gray-800">Question Papers</h2>
-                        <button className="text-brand-orange text-sm font-semibold hover:underline flex items-center gap-1">
+                        <button
+                            onClick={() => setIsPaperModalOpen(true)}
+                            className="text-brand-orange text-sm font-semibold hover:underline flex items-center gap-1"
+                        >
                             <Plus size={14} /> New
                         </button>
                     </div>
@@ -190,9 +238,11 @@ const AdminDashboard = () => {
 const StatusBadge = ({ status }) => {
     const styles = {
         scheduled: 'bg-blue-50 text-blue-600 border-blue-100',
+        invited: 'bg-purple-50 text-purple-600 border-purple-100',
         live: 'bg-brand-orange/10 text-brand-orange border-brand-orange/20',
         completed: 'bg-emerald-50 text-emerald-600 border-emerald-100',
-        cancelled: 'bg-red-50 text-red-600 border-red-100'
+        cancelled: 'bg-red-50 text-red-600 border-red-100',
+        expired: 'bg-gray-50 text-gray-600 border-gray-100'
     };
 
     const current = styles[status?.toLowerCase()] || styles.scheduled;
@@ -203,11 +253,5 @@ const StatusBadge = ({ status }) => {
         </span>
     );
 };
-
-// Note: In a real environment, this component should be defined properly. 
-// For this script, I'll export StatusBadge and use it.
-const CustomDashboard = () => (
-    <AdminDashboard />
-);
 
 export default AdminDashboard;

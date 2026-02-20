@@ -613,3 +613,5 @@ async def standalone_tts(text: str, background_tasks: BackgroundTasks):
                 except Exception as e:
                     logger.error(f"TTS Cleanup Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")
+        
+        raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")

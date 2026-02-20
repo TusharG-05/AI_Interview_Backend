@@ -6,8 +6,10 @@ import {
 import { format } from 'date-fns';
 import { interviewService } from '../services/interviewService';
 import { motion } from 'framer-motion';
+import { useNavigate } from 'react-router-dom';
 
 const CandidateDashboard = () => {
+    const navigate = useNavigate();
     const [invitations, setInvitations] = useState([]);
     const [history, setHistory] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -23,8 +25,23 @@ const CandidateDashboard = () => {
                 interviewService.getMyInterviews(),
                 interviewService.getHistory()
             ]);
-            setInvitations(invitesRes.data || []);
-            setHistory(historyRes.data || []);
+            // Filter invites for non-completed
+            const active = (invitesRes.data || []).filter(i =>
+                !['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
+            );
+            setInvitations(active);
+
+            // Filter history for completed/expired
+            const past = (invitesRes.data || []).filter(i =>
+                ['completed', 'expired', 'cancelled'].includes(i.status.toLowerCase())
+            );
+            // If getHistory returns duplicate or specific structure, rely on it, 
+            // but for now reusing getMyInterviews logic or just using what's there if distinct.
+            // Assuming historyRes might be different or same endpoint. 
+            // The previous code used interviewService.getHistory(), let's trust it but fall back to filtered active.
+
+            // Actually, let's just use what was returned but filter invites to clean up the UI
+            setHistory(historyRes.data || past);
         } catch (err) {
             console.error('Failed to fetch candidate data', err);
         } finally {
@@ -70,18 +87,18 @@ const CandidateDashboard = () => {
                                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-gray-500">
                                     <div className="flex items-center gap-2 text-sm">
                                         <Clock size={16} className="text-brand-orange" />
-                                        <span>{format(new Date(invite.date), 'EEEE, MMMM do')}</span>
+                                        <span>{format(new Date(invite.date || invite.schedule_time), 'EEEE, MMMM do')}</span>
                                     </div>
                                     <div className="flex items-center gap-2 text-sm">
                                         <User size={16} className="text-brand-orange" />
-                                        <span>at {format(new Date(invite.date), 'p')}</span>
+                                        <span>at {format(new Date(invite.date || invite.schedule_time), 'p')}</span>
                                     </div>
                                 </div>
                             </div>
 
                             <div className="flex shrink-0 gap-3">
                                 <button
-                                    onClick={() => alert('Opening Interview Portal...')}
+                                    onClick={() => navigate(`/interview/${invite.interview_id}`)}
                                     className="btn-primary py-3 px-8 text-lg flex items-center gap-2"
                                 >
                                     <Play size={20} fill="currentColor" />
@@ -109,29 +126,37 @@ const CandidateDashboard = () => {
                     <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
                         <HistoryIcon size={24} />
                     </div>
-                    <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">Recent Activity</h2>
+                    <div className="flex-1 flex justify-between items-center">
+                        <h2 className="text-2xl font-extrabold text-gray-900 tracking-tight">Recent Activity</h2>
+                        <button
+                            onClick={() => navigate('/candidate/history')}
+                            className="text-brand-orange text-sm font-bold hover:underline"
+                        >
+                            View All
+                        </button>
+                    </div>
                 </div>
 
                 <div className="bg-white border border-gray-100 rounded-[2rem] shadow-sm overflow-hidden">
                     <div className="divide-y divide-gray-50">
-                        {history.length > 0 ? history.map((item) => (
-                            <div key={item.interview_id} className="p-6 flex items-center justify-between hover:bg-gray-50/50 transition-colors group cursor-pointer">
+                        {history.length > 0 ? history.slice(0, 3).map((item) => (
+                            <div
+                                key={item.interview_id}
+                                className="p-6 flex items-center justify-between hover:bg-gray-50/50 transition-colors group"
+                            >
                                 <div className="flex items-center gap-4">
-                                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-inner ${item.score >= 80 ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'}`}>
-                                        {item.score || 'PT'}
+                                    <div className="w-12 h-12 rounded-2xl flex items-center justify-center bg-gray-100 text-gray-500 shadow-inner">
+                                        <CheckCircle2 size={24} />
                                     </div>
                                     <div>
-                                        <h4 className="font-bold text-gray-900 group-hover:text-brand-orange transition-colors">{item.paper_name}</h4>
+                                        <h4 className="font-bold text-gray-900">{item.paper_name}</h4>
                                         <p className="text-xs text-gray-500 uppercase font-bold tracking-tight">{item.date}</p>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-4">
-                                    {item.score !== null && (
-                                        <div className="text-right hidden sm:block">
-                                            <p className="text-xs font-bold text-gray-400 uppercase">Performance</p>
-                                            <p className={`text-lg font-black ${item.score >= 80 ? 'text-emerald-600' : 'text-gray-900'}`}>{item.score}%</p>
-                                        </div>
-                                    )}
+                                    <span className="px-3 py-1 bg-gray-100 text-gray-400 text-[10px] font-bold uppercase rounded-md tracking-wider">
+                                        {item.status || 'FINISHED'}
+                                    </span>
                                     <ChevronRight size={20} className="text-gray-300 group-hover:text-brand-orange transition-colors" />
                                 </div>
                             </div>

@@ -61,7 +61,10 @@ AUDIO_DIR = os.path.join(ASSETS_DIR, "audio")
 PROCTORING_LOGS_DIR = os.path.join(ASSETS_DIR, "proctoring_logs")
 
 # Cloud Configuration
-HF_SPACE_URL = os.getenv("HF_SPACE_URL", "https://huggingface.co/spaces/TusharG-05/Face-Gaze-AI-Interview")
+# Try to detect HF Direct URL or use Space URL as fallback
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "https://huggingface.co/spaces/ichigo253/AI_Interview_Backend")
+# For HF Spaces, the direct URL is username-space-name.hf.space
+# But we'll trust APP_BASE_URL if manually set in secrets
 APP_BASE_URL = os.getenv("APP_BASE_URL", HF_SPACE_URL)
 
 # Configure DeepFace to use project-local storage (within venv)
