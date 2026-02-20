@@ -184,6 +184,38 @@ class Answers(SQLModel, table=True):
     question: Questions = Relationship(back_populates="answers")
 
 
+class AgentSession(SQLModel, table=True):
+    """Represents a standalone AI-agent-led interview session."""
+    __tablename__ = "agentsession"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    candidate_name: str = Field(index=True)
+    job_role: str = Field(default="General")
+    status: str = Field(default="active")  # active | completed
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    finished_at: Optional[datetime] = None
+
+    # Relationships
+    turns: List["AgentConversationTurn"] = Relationship(
+        back_populates="session",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan", "order_by": "AgentConversationTurn.turn_index"},
+    )
+
+
+class AgentConversationTurn(SQLModel, table=True):
+    """Stores one message (question or answer) in an agent interview conversation."""
+    __tablename__ = "agentconversationturn"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(foreign_key="agentsession.id", index=True)
+    turn_index: int = Field(default=0)          # 0-based ordering
+    speaker: str                                 # "agent" or "candidate"
+    message: str                                 # The question or answer text
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    session: AgentSession = Relationship(back_populates="turns")
+
+
 # Rebuild models
 User.model_rebuild()
 QuestionPaper.model_rebuild()
@@ -194,3 +226,5 @@ InterviewResult.model_rebuild()
 Answers.model_rebuild()
 ProctoringEvent.model_rebuild()
 StatusTimeline.model_rebuild()
+AgentSession.model_rebuild()
+AgentConversationTurn.model_rebuild()

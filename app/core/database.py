@@ -17,7 +17,8 @@ def init_db():
     from ..models.db_models import (
         User, QuestionPaper, Questions, 
         InterviewSession, InterviewResult, Answers,
-        SessionQuestion, ProctoringEvent
+        SessionQuestion, ProctoringEvent,
+        AgentSession, AgentConversationTurn,
     )
     import logging
     logger = logging.getLogger("uvicorn")

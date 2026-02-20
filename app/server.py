@@ -164,7 +164,7 @@ app.add_middleware(
 
 # Lazy include routers to ensure AI models (imported within routers) 
 # don't conflict with database initialization logic.
-from .routers import video, settings, admin, interview, auth, candidate
+from .routers import video, settings, admin, interview, auth, candidate, agent
 
 app.include_router(video.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
@@ -172,6 +172,7 @@ app.include_router(admin.router, prefix="/api")
 app.include_router(interview.router, prefix="/api")
 app.include_router(auth.router, prefix="/api")
 app.include_router(candidate.router, prefix="/api")
+app.include_router(agent.router, prefix="/api")
 
 from fastapi.responses import RedirectResponse
 
