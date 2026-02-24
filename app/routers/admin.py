@@ -27,7 +27,7 @@ from ..schemas.responses import (
     LiveStatusItem, AnswerRead, InterviewSessionDetail
 )
 from ..schemas.interview_result import (
-    InterviewResultDetail, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested
+    InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested
 )
 from ..schemas.api_response import ApiResponse
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
@@ -1033,7 +1033,7 @@ async def list_candidates(
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=ApiResponse[List[InterviewResultDetail]])
+@router.get("/users/results", response_model=ApiResponse[List[InterviewResultBrief]])
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
     
@@ -1095,33 +1095,11 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             candidate_name=s.candidate_name, admin_name=s.admin_name,
             is_completed=s.is_completed
         )
-        
-        # 5. Answers
-        answers_nested = []
-        for ans in s.result.answers:
-            q_nested = None
-            if ans.question:
-                q_nested = QuestionNested(
-                    id=ans.question.id, paper_id=ans.question.paper_id,
-                    content=ans.question.content,
-                    question_text=ans.question.question_text, topic=ans.question.topic,
-                    difficulty=ans.question.difficulty, marks=ans.question.marks,
-                    response_type=ans.question.response_type
-                )
             
-            answers_nested.append(AnswersNested(
-                id=ans.id, interview_result_id=ans.interview_result_id,
-                question=q_nested,
-                candidate_answer=ans.candidate_answer, feedback=ans.feedback,
-                score=ans.score, audio_path=ans.audio_path,
-                transcribed_text=ans.transcribed_text, timestamp=ans.timestamp
-            ))
-            
-        # 6. Top Level Result
-        results.append(InterviewResultDetail(
+        # 5. Top Level Result
+        results.append(InterviewResultBrief(
             id=s.result.id,
             interview=session_nested,
-            interview_response=answers_nested,
             total_score=s.result.total_score,
             created_at=s.result.created_at
         ))

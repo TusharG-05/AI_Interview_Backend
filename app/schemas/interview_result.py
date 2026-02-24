@@ -70,4 +70,11 @@ class InterviewResultDetail(BaseModel):
     interview_response: List[AnswersNested] = []
     total_score: Optional[float] = None
     created_at: datetime
-    proctoring_logs: List = []  # List of proctoring events from face/gaze detection
+    proctoring_logs: List = []  
+
+class InterviewResultBrief(BaseModel):
+    id: int
+    interview: InterviewSessionNested
+    total_score: Optional[float] = None
+    created_at: datetime
+    proctoring_logs: List = []   
