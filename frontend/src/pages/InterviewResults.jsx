@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { interviewService } from '../services/interviewService';
-import { ChevronLeft, CheckCircle2, XCircle, Play, Pause, FileText, Clock, Award } from 'lucide-react';
+import { ChevronLeft, CheckCircle2, XCircle, Play, Pause, FileText, Clock, Award, AlertCircle, Camera } from 'lucide-react';
 import { format } from 'date-fns';
 
 const InterviewResults = () => {
@@ -117,6 +117,65 @@ const InterviewResults = () => {
                     </div>
                 </div>
             </div>
+
+
+            {/* Proctoring Summary */}
+            {result.proctoring_logs && result.proctoring_logs.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-3xl p-8 space-y-6">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+                            <Camera size={20} className="text-amber-700" />
+                        </div>
+                        <div>
+                            <h2 className="text-xl font-bold text-gray-900">Proctoring Report</h2>
+                            <p className="text-sm text-gray-600">Face & Gaze Detection Analysis</p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-3 max-h-64 overflow-y-auto">
+                        {result.proctoring_logs.map((log, index) => (
+                            <div key={index} className={`flex gap-4 p-4 rounded-2xl ${
+                                log.severity === 'critical' ? 'bg-red-100' :
+                                log.severity === 'warning' ? 'bg-yellow-100' :
+                                'bg-blue-100'
+                            }`}>
+                                <div className="flex-shrink-0 mt-1">
+                                    {log.severity === 'critical' ? (
+                                        <XCircle size={20} className="text-red-600" />
+                                    ) : log.severity === 'warning' ? (
+                                        <AlertCircle size={20} className="text-yellow-600" />
+                                    ) : (
+                                        <CheckCircle2 size={20} className="text-blue-600" />
+                                    )}
+                                </div>
+                                <div className="flex-1">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className={`font-semibold ${
+                                            log.severity === 'critical' ? 'text-red-900' :
+                                            log.severity === 'warning' ? 'text-yellow-900' :
+                                            'text-blue-900'
+                                        }`}>
+                                            {log.type.replace(/_/g, ' ').toUpperCase()}
+                                        </h4>
+                                        <span className="text-xs text-gray-600">
+                                            {format(new Date(log.time), 'HH:mm:ss')}
+                                        </span>
+                                    </div>
+                                    {log.details && (
+                                        <p className="text-sm text-gray-700 mt-1">{log.details}</p>
+                                    )}
+                                    {log.triggered_warning && (
+                                        <span className="inline-block text-xs font-bold text-red-700 mt-2 bg-red-200 px-2 py-1 rounded">
+                                            ⚠ Warning Triggered
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
 
             {/* Questions Breakdown */}
             <div className="space-y-8">

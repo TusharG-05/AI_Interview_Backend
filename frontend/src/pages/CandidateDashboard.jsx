@@ -98,7 +98,7 @@ const CandidateDashboard = () => {
 
                             <div className="flex shrink-0 gap-3">
                                 <button
-                                    onClick={() => navigate(`/interview/${invite.interview_id}`)}
+                                    onClick={() => navigate(`/interview/${invite.access_token}`)}
                                     className="btn-primary py-3 px-8 text-lg flex items-center gap-2"
                                 >
                                     <Play size={20} fill="currentColor" />

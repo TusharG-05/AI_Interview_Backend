@@ -4,20 +4,34 @@ from pydantic import BaseModel
 # Candidate Responses
 class HistoryItem(BaseModel):
     interview_id: int
+    access_token: str
     paper_name: str
     date: str
     status: str
     score: Optional[float] = None
+    duration_minutes: Optional[int] = None
+    max_questions: Optional[int] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    warning_count: int = 0
+    is_completed: bool = False
+    current_status: Optional[str] = None
 
 class InterviewAccessResponse(BaseModel):
     interview_id: int
+    candidate_id: Optional[int] = None
+    admin_id: Optional[int] = None
+    paper_id: Optional[int] = None
     message: str # "START" or "WAIT"
     schedule_time: Optional[str] = None
     duration_minutes: Optional[int] = None
+    status: Optional[str] = None
+    max_questions: Optional[int] = None
 
 class QuestionRead(BaseModel):
     id: int
     content: Optional[str] = None
+    question_text: Optional[str] = None
     topic: Optional[str] = None
     difficulty: str
     marks: int
@@ -44,6 +58,17 @@ class UserRead(BaseModel):
     email: str
     full_name: str
     role: str
+
+class UserMeResponse(BaseModel):
+    """Complete user profile response for /auth/me endpoint"""
+    id: int
+    email: str
+    full_name: str
+    role: str
+    profile_image: Optional[str] = None
+    has_profile_image: bool = False
+    has_face_embedding: bool = False
+    resume_text: Optional[str] = None
 
 class Token(BaseModel):
     access_token: str

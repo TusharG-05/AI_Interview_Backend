@@ -2,17 +2,20 @@ import axios from 'axios';
 
 const api = axios.create({
     baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-    headers: {
-        'Content-Type': 'application/json',
-    },
 });
 
-// Request interceptor to add auth token
+// Request interceptor to add auth token and set proper Content-Type
 api.interceptors.request.use(
     (config) => {
+        console.log(`🚀 API Request: ${config.method?.toUpperCase()} ${config.url}`);
         const token = localStorage.getItem('token');
         if (token) {
             config.headers.Authorization = `Bearer ${token}`;
+        }
+        // Only set application/json if data is NOT FormData
+        // FormData requires multipart/form-data (browser sets it automatically)
+        if (config.data && !(config.data instanceof FormData)) {
+            config.headers['Content-Type'] = 'application/json';
         }
         return config;
     },

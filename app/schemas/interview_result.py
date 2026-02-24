@@ -18,6 +18,7 @@ class QuestionPaperNested(BaseModel):
 
 class QuestionNested(BaseModel):
     id: int
+    paper_id: Optional[int] = None
     content: Optional[str] = None
     question_text: Optional[str] = None
     topic: Optional[str] = None
@@ -28,9 +29,9 @@ class QuestionNested(BaseModel):
 class InterviewSessionNested(BaseModel):
     id: int
     access_token: str
-    admin: Optional[UserNested] = None
-    candidate: Optional[UserNested] = None
-    paper: Optional[QuestionPaperNested] = None
+    admin_user: Optional[UserNested] = None
+    candidate_user: Optional[UserNested] = None
+    question_paper: Optional[QuestionPaperNested] = None
     
     schedule_time: datetime
     duration_minutes: int
@@ -69,3 +70,4 @@ class InterviewResultDetail(BaseModel):
     interview_response: List[AnswersNested] = []
     total_score: Optional[float] = None
     created_at: datetime
+    proctoring_logs: List = []  # List of proctoring events from face/gaze detection

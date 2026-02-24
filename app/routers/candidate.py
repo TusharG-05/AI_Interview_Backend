@@ -4,7 +4,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 import random
-from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions
+from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions, InterviewStatus
 from ..schemas.api_response import ApiResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
@@ -13,6 +13,7 @@ from ..schemas.requests import UserUpdate
 from ..schemas.responses import HistoryItem
 from ..auth.dependencies import get_current_user
 from datetime import datetime
+from ..utils import format_iso_datetime
 
 
 
@@ -23,7 +24,7 @@ async def my_history(
 ):
     statement = select(InterviewSession).where(
         InterviewSession.candidate_id == current_user.id
-    ).order_by(InterviewSession.start_time.desc())
+    ).order_by(InterviewSession.schedule_time.desc())
     
     sessions = session.exec(statement).all()
     
@@ -31,10 +32,18 @@ async def my_history(
     for s in sessions:
         history.append(HistoryItem(
             interview_id=s.id,
+            access_token=s.access_token,
             paper_name=s.paper.name if s.paper else "General",
-            date=s.start_time.strftime("%Y-%m-%d %H:%M") if s.start_time else "Scheduled",
-            status=s.status,
-            score=s.total_score
+            date=format_iso_datetime(s.start_time) if s.start_time else "Scheduled",
+            status=s.status.value,
+            score=s.total_score,
+            duration_minutes=s.duration_minutes,
+            max_questions=s.max_questions,
+            start_time=format_iso_datetime(s.start_time) if s.start_time else None,
+            end_time=format_iso_datetime(s.end_time) if s.end_time else None,
+            warning_count=s.warning_count,
+            is_completed=s.is_completed,
+            current_status=s.current_status.value if s.current_status else None
         ))
     return ApiResponse(
         status_code=200,
@@ -50,7 +59,7 @@ async def my_interviews(
     """Fetch scheduled and upcoming interviews for the candidate."""
     statement = select(InterviewSession).where(
         InterviewSession.candidate_id == current_user.id,
-        InterviewSession.status == "scheduled"
+        InterviewSession.status == InterviewStatus.SCHEDULED
     ).order_by(InterviewSession.schedule_time.asc())
     
     sessions = session.exec(statement).all()
@@ -59,10 +68,18 @@ async def my_interviews(
     for s in sessions:
         interviews.append(HistoryItem(
             interview_id=s.id,
+            access_token=s.access_token,
             paper_name=s.paper.name if s.paper else "General",
-            date=s.schedule_time.isoformat(),
-            status=s.status,
-            score=None
+            date=format_iso_datetime(s.schedule_time) if s.schedule_time else "Scheduled",
+            status=s.status.value,
+            score=None,
+            duration_minutes=s.duration_minutes,
+            max_questions=s.max_questions,
+            start_time=format_iso_datetime(s.start_time) if s.start_time else None,
+            end_time=format_iso_datetime(s.end_time) if s.end_time else None,
+            warning_count=s.warning_count,
+            is_completed=s.is_completed,
+            current_status=s.current_status.value if s.current_status else None
         ))
     return ApiResponse(
         status_code=200,
@@ -174,20 +191,34 @@ async def get_profile_image(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Streams the user's profile image (selfie) directly to the browser."""
+    """
+    Streams the user's profile image (selfie) directly to the browser.
+    
+    Returns:
+        - Raw image bytes with appropriate Content-Type header if image found
+        - 404 if no image exists
+    """
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
-    # 1. Try DB Bytes
+    # 1. Try DB Bytes (preferred storage location)
     if user.profile_image_bytes:
         from fastapi.responses import Response
         import imghdr
         ext = imghdr.what(None, h=user.profile_image_bytes) or "jpeg"
-        return Response(content=user.profile_image_bytes, media_type=f"image/{ext}")
+        return Response(
+            content=user.profile_image_bytes, 
+            media_type=f"image/{ext}",
+            headers={"Content-Disposition": "inline"}
+        )
         
     # 2. Try Disk Fallback
     if user.profile_image and os.path.exists(user.profile_image):
-        return FileResponse(user.profile_image)
+        return FileResponse(
+            user.profile_image,
+            media_type="image/jpeg",
+            headers={"Content-Disposition": "inline"}
+        )
         
     raise HTTPException(status_code=404, detail="No profile image found for this user")

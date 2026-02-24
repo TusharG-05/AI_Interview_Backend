@@ -13,3 +13,14 @@ def calculate_average_score(scores: List[Optional[float]]) -> float:
     """
     valid_scores = [s for s in scores if s is not None]
     return sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
+
+
+def format_iso_datetime(dt):
+    """
+    Ensures that ISO strings always include a timezone offset or 'Z' suffix.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.isoformat() + "Z"
+    return dt.isoformat()

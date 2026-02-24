@@ -176,12 +176,22 @@ async def register(
 
 @router.get("/me", response_model=ApiResponse[dict])
 async def read_users_me(current_user: User = Depends(get_current_user)):
-    """Get current logged in user details."""
+    """Get current logged in user details with complete profile information."""
     from ..schemas.user_schemas import serialize_user
+    
+    # Get complete user data
+    user_data = serialize_user(current_user)
+    
+    # Add additional profile information
+    user_data.update({
+        "has_profile_image": current_user.profile_image_bytes is not None or current_user.profile_image is not None,
+        "has_face_embedding": current_user.face_embedding is not None,
+        "resume_text": current_user.resume_text
+    })
     
     return ApiResponse(
         status_code=200,
-        data=serialize_user(current_user),
+        data=user_data,
         message="User profile retrieved successfully"
     )
 

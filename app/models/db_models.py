@@ -1,6 +1,6 @@
 from typing import Optional, List
 from datetime import datetime, timedelta
-from sqlmodel import Field, SQLModel, Relationship
+from sqlmodel import Field, SQLModel, Relationship, Column, ForeignKey, Integer
 from enum import Enum
 import uuid
 
@@ -21,6 +21,7 @@ class CandidateStatus(str, Enum):
     INVITED = "invited"  # Email sent
     LINK_ACCESSED = "link_accessed"  # Candidate opened interview link
     AUTHENTICATED = "authenticated"  # Candidate logged in (future use)
+    SELFIE_UPLOADED = "selfie_uploaded" # Selfie verification uploaded
     ENROLLMENT_STARTED = "enrollment_started"  # Selfie/enrollment in progress
     ENROLLMENT_COMPLETED = "enrollment_completed"  # Ready to start interview
     INTERVIEW_ACTIVE = "interview_active"  # Currently answering questions
@@ -88,7 +89,7 @@ class InterviewSession(SQLModel, table=True):
     
     # Timing
     schedule_time: datetime
-    duration_minutes: int = Field(default=180) # 3 Hours default
+    duration_minutes: int = Field(default=1440) # 1 Day default
     max_questions: Optional[int] = None  # Limit questions per interview, None = use all
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -128,7 +129,9 @@ class InterviewSession(SQLModel, table=True):
 class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    interview_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
+    )
     question_id: int = Field(foreign_key="questions.id")
     sort_order: int = Field(default=0)
     
@@ -137,7 +140,9 @@ class SessionQuestion(SQLModel, table=True):
 
 class ProctoringEvent(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    interview_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
+    )
     event_type: str 
     details: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -151,7 +156,9 @@ class ProctoringEvent(SQLModel, table=True):
 class StatusTimeline(SQLModel, table=True):
     """Tracks status changes throughout the interview lifecycle"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    interview_id: int = Field(foreign_key="interviewsession.id")
+    interview_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
+    )
     status: CandidateStatus
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     context_data: Optional[str] = None  # JSON string for additional context (renamed from metadata)
@@ -160,7 +167,9 @@ class StatusTimeline(SQLModel, table=True):
 
 class InterviewResult(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    interview_id: int = Field(foreign_key="interviewsession.id", unique=True)
+    interview_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"), unique=True)
+    )
     total_score: Optional[float] = Field(default=0.0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
@@ -176,7 +185,9 @@ class Answers(SQLModel, table=True):
     __tablename__ = "answers"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    interview_result_id: int = Field(foreign_key="interviewresult.id")
+    interview_result_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewresult.id", ondelete="CASCADE"))
+    )
     question_id: int = Field(foreign_key="questions.id")
     
     # Legacy fields mapping

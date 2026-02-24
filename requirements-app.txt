@@ -7,6 +7,8 @@ email-validator
 python-multipart==0.0.21
 pydantic==2.12.5
 pydantic_core==2.41.5
+sentry-sdk[fastapi]==2.22.0
+fastapi-limiter==0.1.6
 
 # Database
 sqlmodel==0.0.31
@@ -45,6 +47,8 @@ tenacity==9.1.2
 watchfiles==1.1.1
 pyyaml
 pytest==9.0.2
+celery==5.4.0
+redis==5.2.0
 
 # Additional App Dependencies (Restored)
 absl-py==2.3.1
@@ -242,4 +246,3 @@ zipp==3.23.0
 zope.event==6.1
 zope.interface==8.2
 zstandard==0.25.0
-resend>=0.7.1

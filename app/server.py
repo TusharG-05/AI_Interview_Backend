@@ -1,19 +1,40 @@
 import os
 import shutil
 import contextlib
+import sentry_sdk
 from fastapi import FastAPI
 from .core.database import init_db
 from .core.logger import setup_logging, get_logger
+from .core.config import SENTRY_DSN, REDIS_URL
 
 # PRE-INIT: Database must be initialized before heavy AI imports (Torch/TensorFlow)
 # to avoid segmentation faults in the database driver (psycopg2-binary).
 setup_logging()
 logger = get_logger(__name__)
 
+# SENTRY: Professional Error Tracking
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=1.0,
+        profiles_sample_rate=1.0,
+    )
+    logger.info("Lifespan: Sentry monitoring initialized.")
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Lifespan: Starting Application (API-Only Mode)...")
+    
+    # RATE LIMITING: Protect AI resources
+    try:
+        import redis.asyncio as redis
+        from fastapi_limiter import FastAPILimiter
+        redis_conn = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        await FastAPILimiter.init(redis_conn)
+        logger.info("Lifespan: API Rate Limiting initialized (Redis).")
+    except Exception as re_e:
+        logger.warning(f"Lifespan: Rate Limiter failed to start: {re_e}")
     
     # Ensure ffmpeg is available for local environments (port 8001)
     if not shutil.which("ffmpeg"):
@@ -68,6 +89,7 @@ async def lifespan(app: FastAPI):
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()
+    service.start()  # ✅ CRITICAL: Start detectors for proctoring
     logger.info("Lifespan: Startup Complete.")
     yield
     

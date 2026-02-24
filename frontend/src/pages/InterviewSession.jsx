@@ -27,33 +27,54 @@ const InterviewSession = () => {
     const videoRef = useRef(null);
     const mediaRecorderRef = useRef(null);
     const chunksRef = useRef([]);
+    const audioLevelsRef = useRef(Array(20).fill(10));
+    const [, forceVisUpdate] = useState(0); // Force visualizer re-renders
+    const questionAudioRef = useRef(null);
+    
+    // WebRTC Proctoring Refs
+    const pcRef = useRef(null); // RTCPeerConnection
+    const [webrtcStatus, setWebrtcStatus] = useState('idle'); // idle, connecting, connected, failed
+    const [proctoringActive, setProctoringActive] = useState(false);
+
+    // 0. Sync Media Stream to Video Ref
+    useEffect(() => {
+        if (videoRef.current && mediaStream) {
+            videoRef.current.srcObject = mediaStream;
+        }
+    }, [status, mediaStream]);
 
     // 1. Verify Token on Mount
     useEffect(() => {
         verifyToken();
-        return () => stopMedia(); // Cleanup on unmount
+        const handleStop = () => stopMedia();
+        return handleStop;
     }, [token]);
 
     // Countdown Effect
     useEffect(() => {
         let timer;
-        if (status === 'waiting' && sessionData?.schedule_time) {
-            timer = setInterval(() => {
-                const now = new Date();
-                const start = new Date(sessionData.schedule_time);
-                const diff = start - now;
+        const updateTimer = () => {
+            if (!sessionData?.schedule_time) return;
+            const now = new Date();
+            const start = new Date(sessionData.schedule_time);
+            const diff = start - now;
 
-                if (diff <= 30000 && status === 'waiting') {
-                    setStatus('selfie');
-                }
+            if (diff <= 30000 && status === 'waiting') {
+                setStatus('selfie');
+            }
 
-                if (diff <= 0) {
-                    clearInterval(timer);
-                    if (status === 'waiting') setStatus('selfie');
-                } else {
-                    setTimeLeft(diff);
-                }
-            }, 1000);
+            if (diff <= 0) {
+                if (timer) clearInterval(timer);
+                if (status === 'waiting') setStatus('selfie');
+                setTimeLeft(0);
+            } else {
+                setTimeLeft(diff);
+            }
+        };
+
+        if (status === 'waiting' || status === 'selfie') {
+            updateTimer(); // Run once immediately
+            timer = setInterval(updateTimer, 1000);
         }
         return () => clearInterval(timer);
     }, [status, sessionData]);
@@ -61,7 +82,6 @@ const InterviewSession = () => {
     const verifyToken = async () => {
         try {
             const res = await interviewService.getInterviewAccess(token);
-            setSessionData(res.data);
             setSessionData(res.data);
             if (res.data.message === 'WAIT') {
                 setStatus('waiting');
@@ -78,22 +98,48 @@ const InterviewSession = () => {
 
     // 2. Request Permissions
     const requestPermissions = async () => {
+        setLoading(true);
+        setError(null);
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: true,
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true
+                }
+            });
             setMediaStream(stream);
-            if (videoRef.current) {
-                videoRef.current.srcObject = stream;
+            console.log("Media stream obtained successfully");
+            // If we are in 'permission' mode, move to 'ready'
+            if (status === 'permission') {
+                setStatus('ready');
             }
-            setStatus('ready');
         } catch (err) {
-            setError("Camera and Microphone access is required to proceed.");
+            console.error("Camera/Mic Permission Error:", err);
+            if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+                setError("Hardware Error: Camera or Microphone not found. Please connect your hardware.");
+            } else if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                setError("Permission Denied: Please enable camera and microphone access in your browser settings.");
+            } else {
+                setError(`Hardware Access Failed: ${err.message || "Unknown error"}. Please check your browser's site permissions.`);
+            }
+        } finally {
+            setLoading(false);
         }
     };
 
     const captureSelfie = async () => {
         if (!videoRef.current || !mediaStream) return;
 
+        const interviewId = sessionData?.interview_id;
+        if (!interviewId) {
+            setError("Session data is missing. Please refresh and try again.");
+            console.error("captureSelfie: sessionData.interview_id is missing!", sessionData);
+            return;
+        }
+
         setLoading(true);
+        setError(null);
         try {
             const canvas = document.createElement('canvas');
             canvas.width = videoRef.current.videoWidth;
@@ -101,15 +147,32 @@ const InterviewSession = () => {
             const ctx = canvas.getContext('2d');
             ctx.drawImage(videoRef.current, 0, 0);
 
-            canvas.toBlob(async (blob) => {
-                const formData = new FormData();
-                formData.append('file', blob, 'selfie.jpg');
-                await interviewService.uploadSelfie(formData);
+            // Wrap toBlob in a Promise so we can properly await it & catch errors
+            const blob = await new Promise((resolve) => {
+                canvas.toBlob(resolve, 'image/jpeg', 0.9);
+            });
+
+            if (!blob) throw new Error("Failed to capture image from camera.");
+
+            const formData = new FormData();
+            formData.append('interview_id', interviewId);
+            formData.append('file', blob, 'selfie.jpg');
+
+            console.log(`📸 Uploading selfie for interview_id: ${interviewId}`);
+            await interviewService.uploadSelfie(formData);
+            console.log("✅ Selfie uploaded successfully.");
+
+            // Streamline: if mic stream is active, skip the separate permission screen
+            if (mediaStream.getAudioTracks().length > 0) {
+                setStatus('ready');
+            } else {
                 setStatus('permission');
-                setLoading(false);
-            }, 'image/jpeg', 0.9);
+            }
         } catch (err) {
-            setError("Failed to verify identity. Please try again.");
+            console.error("Selfie upload failed:", err);
+            const detail = err?.detail || err?.message || "Failed to verify identity. Please try again.";
+            setError(detail);
+        } finally {
             setLoading(false);
         }
     };
@@ -121,6 +184,93 @@ const InterviewSession = () => {
         }
     };
 
+    // WebRTC Proctoring Setup
+    const setupWebRTCProctoring = async () => {
+        if (!mediaStream || !sessionData) return;
+
+        try {
+            setWebrtcStatus('connecting');
+            console.log('🎥 Initializing WebRTC proctoring...');
+
+            // Create RTCPeerConnection
+            const configuration = {
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                ]
+            };
+            const pc = new RTCPeerConnection(configuration);
+            pcRef.current = pc;
+
+            // Add video and audio tracks from mediaStream
+            mediaStream.getTracks().forEach(track => {
+                pc.addTrack(track, mediaStream);
+                console.log(`✅ Added ${track.kind} track to WebRTC`);
+            });
+
+            // Handle remote stream (server sends annotated video back)
+            pc.ontrack = (event) => {
+                console.log('📹 Receiving remote video track from server');
+                if (event.track.kind === 'video' && videoRef.current) {
+                    const remoteStream = new MediaStream([event.track]);
+                    videoRef.current.srcObject = remoteStream;
+                }
+            };
+
+            // Handle connection state changes
+            pc.onconnectionstatechange = () => {
+                console.log(`🔗 WebRTC connection state: ${pc.connectionState}`);
+                if (pc.connectionState === 'connected' || pc.connectionState === 'completed') {
+                    setWebrtcStatus('connected');
+                    setProctoringActive(true);
+                    console.log('✅ WebRTC proctoring active!');
+                } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                    setWebrtcStatus('failed');
+                    setProctoringActive(false);
+                    console.warn('⚠️ WebRTC connection failed');
+                }
+            };
+
+            // Create and send offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            console.log('📤 Sending WebRTC offer to backend...');
+            const response = await interviewService.offerVideoStream(
+                offer.sdp,
+                sessionData.interview_id
+            );
+
+            const answerSdp = response.data.data.sdp;
+            const answer = new RTCSessionDescription({
+                type: 'answer',
+                sdp: answerSdp
+            });
+
+            await pc.setRemoteDescription(answer);
+            console.log('✅ WebRTC offer/answer handshake complete');
+            setWebrtcStatus('connected');
+            setProctoringActive(true);
+
+        } catch (err) {
+            console.error('❌ WebRTC setup failed:', err);
+            setWebrtcStatus('failed');
+            setProctoringActive(false);
+            setError('Proctoring setup failed. Interview may still proceed.');
+        }
+    };
+
+    // Cleanup WebRTC on unmount
+    useEffect(() => {
+        return () => {
+            if (pcRef.current) {
+                pcRef.current.close();
+                console.log('🔌 WebRTC connection closed');
+            }
+        };
+    }, []);
+
     // 3. Start Interview
     const startInterview = async () => {
         setLoading(true);
@@ -128,6 +278,8 @@ const InterviewSession = () => {
             // Ideally notify backend we started
             await interviewService.startSession(sessionData.interview_id);
             setStatus('live');
+            // Initialize WebRTC proctoring
+            await setupWebRTCProctoring();
             fetchNextQuestion();
         } catch (err) {
             setError("Failed to start session.");
@@ -136,7 +288,7 @@ const InterviewSession = () => {
         }
     };
 
-    // Countdown Effect
+    // Question timer countdown
     useEffect(() => {
         let timer;
         if (status === 'live' && question && recording && qTimeLeft > 0) {
@@ -154,12 +306,33 @@ const InterviewSession = () => {
         return () => clearInterval(timer);
     }, [status, question, recording, qTimeLeft]);
 
-    const speakQuestion = (text) => {
-        if (!window.speechSynthesis) return;
-        window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.rate = 0.9;
-        window.speechSynthesis.speak(utterance);
+    // Audio visualizer animation (only during recording)
+    useEffect(() => {
+        let interval;
+        if (recording) {
+            interval = setInterval(() => {
+                audioLevelsRef.current = audioLevelsRef.current.map(() => Math.random() * 90 + 10);
+                forceVisUpdate(n => n + 1);
+            }, 120);
+        } else {
+            audioLevelsRef.current = Array(20).fill(10);
+            forceVisUpdate(n => n + 1);
+        }
+        return () => clearInterval(interval);
+    }, [recording]);
+
+    const playQuestionAudio = (audioUrl) => {
+        try {
+            if (questionAudioRef.current) {
+                questionAudioRef.current.pause();
+                questionAudioRef.current.src = '';
+            }
+            const audio = new Audio(audioUrl);
+            questionAudioRef.current = audio;
+            audio.play().catch(e => console.warn('Audio autoplay blocked:', e));
+        } catch (e) {
+            console.warn('Could not play question audio:', e);
+        }
     };
 
     // 4. Fetch Question
@@ -168,15 +341,21 @@ const InterviewSession = () => {
         setQuestion(null);
         try {
             const res = await interviewService.getNextQuestion(sessionData.interview_id);
+            console.log('📋 Next question received:', res.data);
             if (res.data.status === 'finished') {
                 finishInterview();
             } else {
+                console.log('🔄 Setting question:', res.data.text, 'Index:', res.data.question_index);
                 setQuestion(res.data);
                 const limit = parseInt(res.data.topic?.split('|')[1]) || 60;
                 setQTimeLeft(limit);
-                speakQuestion(res.data.content);
+                // Use server-generated MP3 audio (better quality than browser TTS)
+                if (res.data.audio_url) {
+                    playQuestionAudio(`${import.meta.env.VITE_API_BASE_URL || '/api'}${res.data.audio_url}`);
+                }
             }
         } catch (err) {
+            console.error('❌ Failed to load question:', err);
             setError("Failed to load question.");
         } finally {
             setLoading(false);
@@ -269,10 +448,24 @@ const InterviewSession = () => {
                     <div className="relative aspect-video bg-black rounded-3xl overflow-hidden border border-gray-700 shadow-2xl ring-1 ring-white/10">
                         <video ref={videoRef} autoPlay muted playsInline className="w-full h-full object-cover transform scale-x-[-1]" />
                         {!mediaStream && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-gray-900/80 backdrop-blur-sm">
-                                <button onClick={requestPermissions} className="btn-primary py-3 px-8">
-                                    Enable Camera
+                            <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900/80 backdrop-blur-sm p-6 text-center">
+                                {error && (
+                                    <div className="mb-6 max-w-sm flex flex-col items-center gap-3 text-red-400 bg-red-400/10 px-4 py-3 rounded-2xl border border-red-400/20">
+                                        <AlertCircle size={24} />
+                                        <p className="text-sm font-bold leading-tight">{error}</p>
+                                    </div>
+                                )}
+                                <button
+                                    onClick={requestPermissions}
+                                    disabled={loading}
+                                    className="btn-primary py-3 px-8 flex items-center gap-2"
+                                >
+                                    {loading ? <Loader2 className="animate-spin" /> : <Camera size={20} />}
+                                    {error ? "Try Again" : "Enable Camera"}
                                 </button>
+                                <p className="mt-4 text-xs text-gray-500 max-w-xs leading-relaxed">
+                                    Identity verification requires camera access. Please check your browser address bar for blocked icons.
+                                </p>
                             </div>
                         )}
                         <div className="absolute bottom-6 inset-x-0 flex justify-center">
@@ -288,9 +481,13 @@ const InterviewSession = () => {
                         </div>
                     </div>
 
-                    <p className="text-center text-xs text-gray-500">
+                    <p className="text-center text-xs text-gray-500 uppercase tracking-widest font-black">
                         Verification is mandatory before the interview starts.
-                        Remaining Time: {Math.floor(timeLeft / 1000)}s
+                        {timeLeft !== null && (
+                            <span className="block mt-2 text-brand-orange-light text-[10px] animate-pulse">
+                                Starting in {Math.floor(timeLeft / 1000)}s
+                            </span>
+                        )}
                     </p>
                 </div>
             </div>
@@ -487,27 +684,48 @@ const InterviewSession = () => {
                         <div className="absolute top-2 left-2 px-2 py-0.5 bg-red-600/80 rounded text-[10px] font-bold text-white flex items-center gap-1">
                             <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" /> REC
                         </div>
+                        {/* Proctoring Status Indicator */}
+                        <div className="absolute bottom-2 right-2 px-3 py-1.5 bg-black/70 rounded-lg text-xs font-semibold flex items-center gap-2">
+                            {proctoringActive ? (
+                                <>
+                                    <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                                    <span className="text-emerald-400">Proctoring ON</span>
+                                </>
+                            ) : webrtcStatus === 'connecting' ? (
+                                <>
+                                    <div className="w-2 h-2 bg-yellow-500 rounded-full animate-spin" />
+                                    <span className="text-yellow-400">Connecting...</span>
+                                </>
+                            ) : (
+                                <>
+                                    <div className="w-2 h-2 bg-red-500 rounded-full" />
+                                    <span className="text-red-400">Proctoring OFF</span>
+                                </>
+                            )}
+                        </div>
                     </div>
 
                     <div className="flex-1 bg-gray-900/50 rounded-xl p-4 border border-gray-800">
                         <h4 className="text-white font-bold text-sm mb-3 flex items-center gap-2">
                             <Volume2 size={16} className="text-brand-orange" /> Audio Level
                         </h4>
-                        {/* Fake Audio Visualizer */}
+                        {/* Audio Visualizer */}
                         <div className="flex items-end justify-between h-12 gap-1">
-                            {[...Array(20)].map((_, i) => (
+                            {audioLevelsRef.current.map((level, i) => (
                                 <div
                                     key={i}
-                                    className="w-1.5 bg-brand-orange/50 rounded-full transition-all duration-75"
+                                    className="w-1.5 bg-brand-orange/50 rounded-full transition-all duration-100"
                                     style={{
-                                        height: recording ? `${Math.random() * 100}%` : '10%',
+                                        height: `${level}%`,
                                         opacity: recording ? 1 : 0.3
                                     }}
                                 />
                             ))}
                         </div>
                         <p className="text-xs text-gray-500 mt-4 text-center">
-                            Proctoring Active. Please stay in frame.
+                            {proctoringActive 
+                                ? '✓ Face & Gaze Detection Active. Please stay in frame.' 
+                                : '⚠ Proctoring connection establishing...'}
                         </p>
                     </div>
                 </aside>

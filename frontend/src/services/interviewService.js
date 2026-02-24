@@ -16,7 +16,7 @@ export const interviewService = {
     getInterviews: () => api.get('/admin/interviews'),
     scheduleInterview: (data) => api.post('/admin/interviews/schedule', data),
     deleteInterview: (id) => api.delete(`/admin/interviews/${id}`), // Method to delete interview
-    watchInterview: (id, offer) => api.post(`/video/watch/${id}`, offer),
+    watchInterview: (id, offer) => api.post(`/analyze/video/watch/${id}`, offer),
     getLiveStatus: () => api.get('/admin/interviews/live-status'),
 
     // Candidates
@@ -32,7 +32,7 @@ export const interviewService = {
     // Candidate APIs
     getMyInterviews: () => api.get('/candidate/interviews'),
     getHistory: () => api.get('/candidate/history'),
-    uploadSelfie: (formData) => api.post('/candidate/upload-selfie', formData),
+    uploadSelfie: (formData) => api.post('/interview/upload-selfie', formData),
 
     // Interview Flow
     getInterviewAccess: (token) => api.get(`/interview/access/${token}`),
@@ -42,6 +42,13 @@ export const interviewService = {
     submitAnswerText: (data) => api.post('/interview/submit-answer-text', data),
     finishInterview: (id) => api.post(`/interview/finish/${id}`),
     getAudioUrl: (responseId) => `${api.defaults.baseURL}/admin/results/audio/${responseId}`,
+
+    // WebRTC Proctoring
+    offerVideoStream: (sdp, interview_id) => api.post('/analyze/video/offer', {
+        sdp,
+        type: 'offer',
+        interview_id
+    }),
 
     // General
     getInterviewResult: (id) => api.get(`/admin/results/${id}`),

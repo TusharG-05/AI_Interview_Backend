@@ -12,7 +12,8 @@ from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD
 from ..core.logger import get_logger
-
+from ..utils import calculate_average_score, format_iso_datetime
+from fastapi_limiter.depends import RateLimiter
 logger = get_logger(__name__)
 
 from ..schemas.requests import (
@@ -43,6 +44,7 @@ email_service = EmailService()
 # --- WebSocket Dashboard ---
 from ..services.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
+from ..tasks.email_tasks import send_interview_invitation_task
 
 @router.websocket("/dashboard/ws")
 async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
@@ -441,10 +443,13 @@ async def schedule_interview(
     if not paper or paper.admin_id != current_user.id:
         raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
 
-    # Validate Candidate
     candidate = session.get(User, schedule_data.candidate_id)
     if not candidate or candidate.role != UserRole.CANDIDATE:
          raise HTTPException(status_code=400, detail="Invalid Candidate ID")
+
+    # Access fields before any commits to prevent DetachedInstanceError in background tasks
+    candidate_email = candidate.email.strip()
+    candidate_full_name = candidate.full_name
 
     # Availability Check (Optional - can be expanded later)
 
@@ -531,24 +536,30 @@ async def schedule_interview(
     
     try:
         session.commit()
+        # Refresh to ensure relationships are available if we need them later
+        session.refresh(new_session)
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
     
-    # Generate Link
+    # Generate Link - Must match frontend route: /interview/:token
     from ..core.config import APP_BASE_URL
-    link = f"{APP_BASE_URL}/interview/access/{new_session.access_token}"
-    # Send Email Invitation Asynchronously (prevent UI hang)
-    background_tasks.add_task(
-        email_service.send_interview_invitation,
-        to_email=candidate.email, 
-        candidate_name=candidate.full_name,
-        link=link,
-        time_str=new_session.schedule_time.isoformat(),
-        duration_minutes=new_session.duration_minutes
-    )
-    
-    warning = "Email invitation queued for sending."
+    link = f"{APP_BASE_URL}/interview/{new_session.access_token}"
+    # Send Email Invitation Asynchronously (prevent UI hang without Redis)
+    try:
+        background_tasks.add_task(
+            email_service.send_interview_invitation,
+            to_email=candidate_email, 
+            candidate_name=candidate_full_name,
+            link=link,
+            time_str=format_iso_datetime(new_session.schedule_time),
+            duration_minutes=new_session.duration_minutes
+        )
+    except Exception as cel_e:
+        logger.error(f"Failed to queue email task: {cel_e}")
+        warning = "Interview scheduled, but email invitation could not be queued."
+    else:
+        warning = "Email invitation queued for sending."
     
     # Serialize users with role-based keys
     admin_dict = serialize_user(current_user)  # {"admin": {...}}
@@ -562,20 +573,20 @@ async def schedule_interview(
         admin_id=new_session.admin_id,
         candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
-        schedule_time=new_session.schedule_time.isoformat(),
+        schedule_time=format_iso_datetime(new_session.schedule_time),
         duration_minutes=new_session.duration_minutes,
         max_questions=new_session.max_questions,
-        start_time=new_session.start_time.isoformat() if new_session.start_time else None,
-        end_time=new_session.end_time.isoformat() if new_session.end_time else None,
+        start_time=format_iso_datetime(new_session.start_time),
+        end_time=format_iso_datetime(new_session.end_time),
         status=new_session.status.value,
         total_score=new_session.total_score,
         current_status=new_session.current_status.value if new_session.current_status else None,
-        last_activity=new_session.last_activity.isoformat() if new_session.last_activity else None,
+        last_activity=format_iso_datetime(new_session.last_activity),
         warning_count=new_session.warning_count,
         max_warnings=new_session.max_warnings,
         is_suspended=new_session.is_suspended,
         suspension_reason=new_session.suspension_reason,
-        suspended_at=new_session.suspended_at.isoformat() if new_session.suspended_at else None,
+        suspended_at=format_iso_datetime(new_session.suspended_at),
         enrollment_audio_path=new_session.enrollment_audio_path,
         candidate_name=candidate.full_name,
         admin_name=current_user.full_name,
@@ -588,7 +599,7 @@ async def schedule_interview(
         candidate=candidate_dict,
         access_token=new_session.access_token,
         link=link,
-        scheduled_at=new_session.schedule_time.isoformat(),
+        scheduled_at=format_iso_datetime(new_session.schedule_time),
         warning=warning
     )
     return ApiResponse(
@@ -624,7 +635,7 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             admin=admin_dict,
             candidate=candidate_dict,
             status=s.status.value,
-            scheduled_at=s.schedule_time.isoformat(),
+            scheduled_at=format_iso_datetime(s.schedule_time),
             score=s.total_score
         ))
     return ApiResponse(
@@ -684,20 +695,20 @@ async def get_live_status_dashboard(
             "admin_id": interview_session.admin_id,
             "candidate_id": interview_session.candidate_id,
             "paper_id": interview_session.paper_id,
-            "schedule_time": interview_session.schedule_time.isoformat(),
+            "schedule_time": format_iso_datetime(interview_session.schedule_time),
             "duration_minutes": interview_session.duration_minutes,
             "max_questions": interview_session.max_questions,
-            "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
-            "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
+            "start_time": format_iso_datetime(interview_session.start_time),
+            "end_time": format_iso_datetime(interview_session.end_time),
             "status": interview_session.status.value,
             "total_score": interview_session.total_score,
             "current_status": interview_session.current_status.value if interview_session.current_status else None,
-            "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+            "last_activity": format_iso_datetime(interview_session.last_activity),
             "warning_count": interview_session.warning_count,
             "max_warnings": interview_session.max_warnings,
             "is_suspended": interview_session.is_suspended,
             "suspension_reason": interview_session.suspension_reason,
-            "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
+            "suspended_at": format_iso_datetime(interview_session.suspended_at),
             "enrollment_audio_path": interview_session.enrollment_audio_path,
             "candidate_name": interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name,
             "admin_name": current_user.full_name, # Since we filtered by current_user.id
@@ -711,7 +722,7 @@ async def get_live_status_dashboard(
             warning_count=interview_session.warning_count,
             warnings_remaining=max(0, interview_session.max_warnings - interview_session.warning_count),
             is_suspended=interview_session.is_suspended,
-            last_activity=interview_session.last_activity.isoformat() if interview_session.last_activity else None,
+            last_activity=format_iso_datetime(interview_session.last_activity),
             progress_percent=round(progress_percent, 1)
         ))
     
@@ -925,8 +936,18 @@ async def delete_interview(
     session: Session = Depends(get_session)
 ):
     """Hard delete an interview session and all related data (responses, proctoring events, etc.)."""
-    # Retrieve the interview session
-    interview_session = session.get(InterviewSession, interview_id)
+    # Retrieve the interview session with relationships loaded
+    interview_session = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.id == interview_id)
+        .options(
+            selectinload(InterviewSession.result),
+            selectinload(InterviewSession.proctoring_events),
+            selectinload(InterviewSession.selected_questions),
+            selectinload(InterviewSession.status_timeline),
+            selectinload(InterviewSession.candidate)
+        )
+    ).first()
     
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
@@ -940,7 +961,7 @@ async def delete_interview(
     
     # Store info for response before deletion
     candidate_name = interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name or "Unknown"
-    scheduled_time = interview_session.schedule_time.isoformat()
+    scheduled_time = format_iso_datetime(interview_session.schedule_time)
     
     # Hard delete: this will cascade to responses, proctoring_events, selected_questions, status_timeline
     session.delete(interview_session)
@@ -1062,7 +1083,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         # 4. Session Nested
         session_nested = InterviewSessionNested(
             id=s.id, access_token=s.access_token,
-            admin=admin_obj, candidate=candidate_obj, paper=paper_obj,
+            admin_user=admin_obj, candidate_user=candidate_obj, question_paper=paper_obj,
             schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
             max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
             status=s.status.value, total_score=s.total_score,
@@ -1081,7 +1102,8 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             q_nested = None
             if ans.question:
                 q_nested = QuestionNested(
-                    id=ans.question.id, content=ans.question.content,
+                    id=ans.question.id, paper_id=ans.question.paper_id,
+                    content=ans.question.content,
                     question_text=ans.question.question_text, topic=ans.question.topic,
                     difficulty=ans.question.difficulty, marks=ans.question.marks,
                     response_type=ans.question.response_type
@@ -1172,7 +1194,7 @@ async def get_result(
     # 4. Session Nested
     session_nested = InterviewSessionNested(
         id=s.id, access_token=s.access_token,
-        admin=admin_obj, candidate=candidate_obj, paper=paper_obj,
+        admin_user=admin_obj, candidate_user=candidate_obj, question_paper=paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
         status=s.status.value, total_score=s.total_score,
@@ -1191,7 +1213,8 @@ async def get_result(
         q_nested = None
         if ans.question:
             q_nested = QuestionNested(
-                id=ans.question.id, content=ans.question.content,
+                id=ans.question.id, paper_id=ans.question.paper_id,
+                content=ans.question.content,
                 question_text=ans.question.question_text, topic=ans.question.topic,
                 difficulty=ans.question.difficulty, marks=ans.question.marks,
                 response_type=ans.question.response_type
@@ -1204,14 +1227,36 @@ async def get_result(
             score=ans.score, audio_path=ans.audio_path,
             transcribed_text=ans.transcribed_text, timestamp=ans.timestamp
         ))
+    
+    # 6. Fetch Proctoring Events
+    proctoring_logs = []
+    try:
+        from ..models.db_models import ProctoringEvent
+        events = session.exec(
+            select(ProctoringEvent)
+            .where(ProctoringEvent.interview_id == interview_id)
+            .order_by(ProctoringEvent.timestamp)
+        ).all()
         
-    # 6. Top Level Result
+        for event in events:
+            proctoring_logs.append({
+                "type": event.event_type,
+                "time": event.timestamp.isoformat() if event.timestamp else None,
+                "details": event.details,
+                "severity": event.severity,
+                "triggered_warning": event.triggered_warning
+            })
+    except Exception as e:
+        logger.warning(f"Failed to fetch proctoring logs for interview {interview_id}: {e}")
+        
+    # 7. Top Level Result
     result_detail = InterviewResultDetail(
         id=s.result.id,
         interview=session_nested,
         interview_response=answers_nested,
         total_score=s.result.total_score,
-        created_at=s.result.created_at
+        created_at=s.result.created_at,
+        proctoring_logs=proctoring_logs
     )
 
     return ApiResponse(
@@ -1345,33 +1390,44 @@ async def delete_result(
         message="Results deleted, interview session preserved"
     )
 
-@router.get("/interviews/response/{response_id}")
+@router.get("/interviews/response/{response_id}", response_model=ApiResponse[dict])
 async def get_response(response_id: int, session: Session = Depends(get_session), current_user: User = Depends(get_admin_user)):
     """
     Get a specific response/answer details (for audio playback etc)
     """
-    answer = session.get(Answers, response_id)
+    # Load answer with result and session to avoid detached instance errors
+    answer = session.exec(
+        select(Answers)
+        .where(Answers.id == response_id)
+        .options(
+            selectinload(Answers.interview_result).selectinload(InterviewResult.session)
+        )
+    ).first()
+
     if not answer:
        raise HTTPException(status_code=404, detail="Answer not found")
        
     # Authorization: Only admin who created the interview session associated with this answer
-    if answer.interview_session.admin_id != current_user.id:
+    if answer.interview_result.session.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to access this response")
 
     # We might need to construct a response that matches what UI expects if UI hasn't changed
-    # Logic: return data
-    return {
-        "id": answer.id,
-        "question_id": answer.question_id,
-        "candidate_answer": answer.candidate_answer,
-        "feedback": answer.feedback,
-        "score": answer.score,
-        "timestamp": answer.timestamp.isoformat() if answer.timestamp else None,
-        "audio_path": answer.audio_path,
-        "transcribed_text": answer.transcribed_text,
-        "evaluation_text": answer.evaluation_text,
-        "interview_id": answer.interview_id
-    }
+    return ApiResponse(
+        status_code=200,
+        data={
+            "id": answer.id,
+            "question_id": answer.question_id,
+            "candidate_answer": answer.candidate_answer,
+            "feedback": answer.feedback,
+            "score": answer.score,
+            "timestamp": format_iso_datetime(answer.timestamp),
+            "audio_path": answer.audio_path,
+            "transcribed_text": answer.transcribed_text,
+            "evaluation_text": getattr(answer, "feedback", None), # Map feedback to evaluation_text if needed by UI
+            "interview_id": answer.interview_result.interview_id
+        },
+        message="Response details retrieved successfully"
+    )
 
 @router.get("/results/audio/{response_id}")
 async def get_response_audio(

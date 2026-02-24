@@ -31,11 +31,13 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
             potential_paths = [
                 os.path.join(curr_dir, "..", "assets", "face_landmarker.task"),
                 os.path.join(os.getcwd(), "app", "assets", "face_landmarker.task"),
-                "/app/app/assets/face_landmarker.task" # Docker/HF common path
+                "/app/app/assets/face_landmarker.task", # Docker/HF common path
+                "/app/assets/face_landmarker.task" # Alternative HF path
             ]
             for p in potential_paths:
                 if os.path.exists(p):
                     abs_model_path = os.path.abspath(p)
+                    worker_logger.info(f"GazeWorker: Found model at: {p}")
                     break
 
         if os.getenv("SPACE_ID"):
