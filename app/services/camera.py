@@ -65,7 +65,7 @@ class CameraService:
                 self.face_detector = FaceDetector()
                 logger.info("Background: FaceDetector ready.")
             except Exception as e:
-                logger.error(f"Background: FaceDetector failed: {e}")
+                logger.error(f"Background: FaceDetector failed: {e}", exc_info=True)
             
             if os.path.exists(gaze_path):
                 try:
@@ -73,10 +73,13 @@ class CameraService:
                     self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
                     logger.info("Background: GazeDetector ready.")
                 except Exception as e:
-                    logger.error(f"Background: GazeDetector failed: {e}")
+                    logger.error(f"Background: GazeDetector failed: {e}", exc_info=True)
+            else:
+                logger.warning(f"Background: Gaze model not found at {gaze_path}. Checking alternative paths...")
             
+            # Mark ready even if one detector fails - allows partial proctoring
             self._detectors_ready = True
-            logger.info("Background: All Detectors Initialized.")
+            logger.info(f"Background: Detectors Initialized (Face: {'✓' if self.face_detector else '✗'}, Gaze: {'✓' if self.gaze_detector else '✗'}).")
 
         threading.Thread(target=init_detectors, daemon=True).start()
         self.running = True

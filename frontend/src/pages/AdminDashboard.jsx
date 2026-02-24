@@ -30,8 +30,12 @@ const AdminDashboard = () => {
 
         // Poll every 30s
         const interval = setInterval(async () => {
-            const res = await interviewService.getLiveStatus();
-            setLiveCount(res.data?.length || 0);
+            try {
+                const res = await interviewService.getLiveStatus();
+                setLiveCount(res.data?.length || 0);
+            } catch (e) {
+                console.warn('Live status poll failed:', e);
+            }
         }, 30000);
         return () => clearInterval(interval);
     }, []);
@@ -147,7 +151,10 @@ const AdminDashboard = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
-                                    {interviews.length > 0 ? interviews.slice(0, 5).map((interview) => (
+                                    {interviews.length > 0 ? interviews
+                                        .sort((a, b) => new Date(b.schedule_time || b.scheduled_at) - new Date(a.schedule_time || a.scheduled_at))
+                                        .slice(0, 5)
+                                        .map((interview) => (
                                         <tr key={interview.id} className="hover:bg-gray-50/50 transition-colors group">
                                             <td className="px-6 py-4">
                                                 <div className="flex items-center gap-3">

@@ -19,6 +19,8 @@ from pydub import AudioSegment
 import logging
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
+from ..utils import format_iso_datetime
+from ..tasks.interview_tasks import process_session_results_task
 logger = logging.getLogger(__name__)
 audio_service = AudioService()
 
@@ -52,9 +54,14 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
         # Too early
         access_data = InterviewAccessResponse(
             interview_id=session.id,
+            candidate_id=session.candidate_id,
+            admin_id=session.admin_id,
+            paper_id=session.paper_id,
             message="WAIT",
-            schedule_time=session.schedule_time.isoformat(),
-            duration_minutes=session.duration_minutes
+            schedule_time=format_iso_datetime(session.schedule_time),
+            duration_minutes=session.duration_minutes,
+            status=session.status.value,
+            max_questions=session.max_questions
         )
         return ApiResponse(
             status_code=200,
@@ -85,9 +92,14 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     # 5. Success - Allow Entry
     access_data = InterviewAccessResponse(
         interview_id=session.id,
+        candidate_id=session.candidate_id,
+        admin_id=session.admin_id,
+        paper_id=session.paper_id,
         message="START",
-        schedule_time=session.schedule_time.isoformat(),
-        duration_minutes=session.duration_minutes
+        schedule_time=format_iso_datetime(session.schedule_time),
+        duration_minutes=session.duration_minutes,
+        status=session.status.value,
+        max_questions=session.max_questions
     )
     return ApiResponse(
         status_code=200,
@@ -164,6 +176,113 @@ async def start_session_logic(
         status_code=200,
         data={"interview_id": session.id, "status": "LIVE", "warning": warning},
         message="Interview session started successfully"
+    )
+
+@router.post("/upload-selfie", response_model=ApiResponse[dict])
+async def upload_selfie_session(
+    interview_id: int = Form(...),
+    file: UploadFile = File(...),
+    session_db: Session = Depends(get_session)
+):
+    """
+    Allows candidate to upload their reference selfie via interview session context.
+    Does NOT require JWT authentication.
+    """
+    from ..models.db_models import CandidateStatus, User
+    import os, json, tempfile
+    from ..core.logger import get_logger
+    _logger = get_logger(__name__)
+    
+    # 1. Verify Session
+    interview_session = session_db.get(InterviewSession, interview_id)
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+        
+    candidate = interview_session.candidate
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found for this session")
+
+    # Relaxed content type check: canvas.toBlob can send application/octet-stream in some browsers
+    if file.content_type and not (file.content_type.startswith("image/") or file.content_type == "application/octet-stream"):
+        raise HTTPException(status_code=400, detail=f"File must be an image, got: {file.content_type}")
+        
+    # 2. Read bytes
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="Received empty file")
+    
+    # 3. Save to User object
+    candidate.profile_image_bytes = image_bytes
+    
+    # 4. Generate Embeddings (best effort — never block on failure)
+    try:
+        from deepface import DeepFace
+        embeddings_map = {}
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+            tmp.write(image_bytes)
+            tmp_path = tmp.name
+        
+        try:
+            try:
+                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                if arc_objs:
+                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+            except Exception as e:
+                _logger.warning(f"ArcFace embedding failed: {e}")
+
+            try:
+                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                if sface_objs:
+                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
+            except Exception as e:
+                _logger.warning(f"SFace embedding failed: {e}")
+
+            if embeddings_map:
+                candidate.face_embedding = json.dumps(embeddings_map)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+    except Exception as e:
+        _logger.error(f"Embedding generation failed (non-fatal): {e}")
+
+    # 5. Save to disk
+    upload_dir = "app/assets/images/profiles"
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = f"{upload_dir}/user_{candidate.id}.jpg"
+    with open(file_path, "wb") as buffer:
+        buffer.write(image_bytes)
+    
+    candidate.profile_image = file_path
+    session_db.add(candidate)
+    
+    # 6. Track Status (best effort — don't let enum issues block the upload)
+    try:
+        from ..services.status_manager import record_status_change
+        record_status_change(
+            session=session_db,
+            interview_session=interview_session,
+            new_status=CandidateStatus.SELFIE_UPLOADED
+        )
+    except Exception as e:
+        _logger.warning(f"Status tracking failed (non-fatal): {e}")
+        try:
+            session_db.commit()
+        except Exception:
+            session_db.rollback()
+    
+    try:
+        session_db.commit()
+    except Exception as e:
+        session_db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save identity data")
+    
+    return ApiResponse(
+        status_code=200,
+        data={
+            "interview_id": interview_id,
+            "candidate_id": candidate.id
+        },
+        message="Selfie uploaded and identity verified successfully"
     )
 
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
@@ -301,13 +420,20 @@ async def submit_answer_audio(
     content = await audio.read()
     audio_service.save_audio_blob(content, audio_path)
     
-    # Get or Create InterviewResult
+    # Get or Create InterviewResult (Thread-safe-ish check)
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
-        result = InterviewResult(interview_id=interview_id)
-        session_db.add(result)
-        session_db.commit()
-        session_db.refresh(result)
+        try:
+            result = InterviewResult(interview_id=interview_id)
+            session_db.add(result)
+            session_db.commit()
+            session_db.refresh(result)
+        except Exception:
+            # Another request probably created it simultaneously
+            session_db.rollback()
+            result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+            if not result:
+                raise HTTPException(status_code=500, detail="Failed to initialize interview results")
     
     # Save Answer
     answer = Answers(
@@ -346,10 +472,16 @@ async def submit_answer_text(
     # Get or Create InterviewResult
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
-        result = InterviewResult(interview_id=interview_id)
-        session_db.add(result)
-        session_db.commit()
-        session_db.refresh(result)
+        try:
+            result = InterviewResult(interview_id=interview_id)
+            session_db.add(result)
+            session_db.commit()
+            session_db.refresh(result)
+        except Exception:
+            session_db.rollback()
+            result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+            if not result:
+                raise HTTPException(status_code=500, detail="Failed to initialize interview results")
 
     answer = Answers(
         interview_result_id=result.id,
@@ -382,17 +514,19 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
         session=session_db,
         interview_session=interview_session,
         new_status=CandidateStatus.INTERVIEW_COMPLETED,
-        metadata={"completed_at": datetime.now(timezone.utc).isoformat()}
+        metadata={"completed_at": format_iso_datetime(datetime.now(timezone.utc))}
     )
     
     session_db.add(interview_session)
     session_db.commit()
     
-    background_tasks.add_task(process_session_results_unified, interview_id)
+    # Process results in background using plain function (no Celery dependency)
+    from ..tasks.interview_tasks import process_session_results
+    background_tasks.add_task(process_session_results, interview_id)
     return ApiResponse(
         status_code=200,
         data={"status": "finished"},
-        message="Interview finished. Results are being processed."
+        message="Interview finished. Results are being processed in background."
     )
 
 @router.post("/evaluate-answer", response_model=ApiResponse[dict])
@@ -419,93 +553,7 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
 
 # --- Background Unified Processor ---
 
-async def process_session_results_unified(interview_id: int):
-    from ..core.database import engine
-    from ..core.logger import get_logger
-    from sqlmodel import Session, select
-    
-    logger = get_logger(__name__)
-    
-    with Session(engine) as db:
-        try:
-            session = db.get(InterviewSession, interview_id)
-            if not session: 
-                logger.warning(f"Session {interview_id} not found for processing")
-                return
-            
-            # Retrieve Result Object
-            result_obj = db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
-            if not result_obj:
-                 logger.warning(f"No InterviewResult for session {interview_id}")
-                 result_obj = InterviewResult(interview_id=interview_id)
-                 db.add(result_obj)
-                 db.commit()
-                 db.refresh(result_obj)
-            
-            # Fetch answers via direct query (safer than relationship for mutation loop)
-            answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
-            logger.info(f"Session {interview_id}: processing {len(answers)} answer(s)")
-            
-            for resp in answers:
-                # ── Audio transcription ──────────────────────────────────────
-                if resp.audio_path and not (resp.candidate_answer or resp.transcribed_text):
-                    audio_service.cleanup_audio(resp.audio_path)
-                    text = await audio_service.speech_to_text(resp.audio_path)
-                    if session.enrollment_audio_path:
-                        match, _ = audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path)
-                        if not match: text = f"[VOICE MISMATCH] {text}"
-                    resp.candidate_answer = text
-                    resp.transcribed_text = text
-                
-                # ── LLM Evaluation ───────────────────────────────────────────
-                # Skip only if score is already set (non-None).
-                # If feedback exists but score is None, still run evaluation.
-                if resp.candidate_answer and resp.score is None:
-                    q = db.get(Questions, resp.question_id)
-                    q_text = q.question_text or q.content or "General Question"
-                    
-                    logger.info(f"  Answer {resp.id}: evaluating (question: '{q_text[:60]}...')")
-                    evaluation = interview_service.evaluate_answer_content(q_text, resp.candidate_answer)
-                    
-                    resp.feedback = evaluation.get("feedback", "")
-                    resp.score = evaluation.get("score")
-                    
-                    logger.info(f"  Answer {resp.id}: score={resp.score}, error={evaluation.get('error', False)}")
-                    db.add(resp)
-                    db.commit()
-                elif resp.score is not None:
-                    logger.info(f"  Answer {resp.id}: already scored ({resp.score}) — skipping")
-                else:
-                    logger.info(f"  Answer {resp.id}: no answer text — skipping evaluation")
-            
-            # ── Final Score Aggregation ──────────────────────────────────────
-            # Re-fetch from DB to get fresh committed scores (avoids stale cache)
-            fresh_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
-            all_scores = [r.score for r in fresh_answers if r.score is not None]
-            logger.info(f"Session {interview_id}: individual scores = {all_scores}")
-            
-            from ..utils import calculate_average_score
-            computed_score = calculate_average_score(all_scores)
-            logger.info(f"Session {interview_id}: computed average score = {computed_score}")
-            
-            # Update InterviewResult
-            result_obj.total_score = computed_score
-            db.add(result_obj)
-            
-            # Update Session cache field
-            session.total_score = computed_score
-            db.add(session)
-            
-            db.commit()
-            logger.info(f"Session {interview_id} processing complete. Final score: {session.total_score}")
-        except Exception as e:
-            logger.error(f"Session {interview_id} processing failed: {e}", exc_info=True)
-            try:
-                session = db.get(InterviewSession, interview_id)
-                if session:
-                    pass
-            except Exception:
-                db.rollback()
+# --- Legacy Processor Removed (Migrated to Celery) ---
 
 
 

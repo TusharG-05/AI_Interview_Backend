@@ -52,8 +52,9 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
 # Email Configuration
-MAIL_USERNAME = os.getenv("MAIL_USERNAME", "")
+MAIL_USERNAME = os.getenv("MAIL_USERNAME", "tushar@chicmicstudios.in")
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 
 # Assets and Paths
 ASSETS_DIR = "app/assets"
@@ -66,6 +67,10 @@ HF_SPACE_URL = os.getenv("HF_SPACE_URL", "https://huggingface.co/spaces/ichigo25
 # For HF Spaces, the direct URL is username-space-name.hf.space
 # But we'll trust APP_BASE_URL if manually set in secrets
 APP_BASE_URL = os.getenv("APP_BASE_URL", HF_SPACE_URL)
+
+# Sentry & Redis (for Rate Limiting)
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Configure DeepFace to use project-local storage (within venv)
 # DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights

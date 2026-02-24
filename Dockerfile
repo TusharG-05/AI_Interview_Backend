@@ -17,11 +17,19 @@ RUN rm -rf /app/*
 COPY requirements-app.txt .
 RUN pip install --no-cache-dir -r requirements-app.txt
 
+# Install Redis server for Celery
+USER root
+RUN apt-get update && apt-get install -y redis-server && rm -rf /var/lib/apt/lists/*
+USER user
+
 # Copy clean application code (filtered by .dockerignore)
 COPY . .
+
+# Ensure start script is executable
+RUN chmod +x start.sh
 
 # Expose API Port
 EXPOSE 7860
 
 # Default Command
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["./start.sh"]

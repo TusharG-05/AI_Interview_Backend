@@ -10,12 +10,6 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None  # String, will be converted to UserRole
     resume_text: Optional[str] = None
 
-class AdminCreate(BaseModel):
-    email: str
-    password: str
-    full_name: str
-
-
 class UserCreate(BaseModel):
     email: str
     password: str
@@ -27,7 +21,7 @@ class InterviewScheduleCreate(BaseModel):
     candidate_id: int
     paper_id: int
     schedule_time: str # ISO format expected from frontend
-    duration_minutes: int = 180
+    duration_minutes: int = 1440
     max_questions: Optional[int] = None  # Limit questions, None = use all
 
 class InterviewUpdate(BaseModel):
@@ -59,6 +53,7 @@ class PaperUpdate(BaseModel):
 
 class QuestionUpdate(BaseModel):
     content: Optional[str] = None
+    question_text: Optional[str] = None
     topic: Optional[str] = None
     difficulty: Optional[str] = None
     marks: Optional[int] = None

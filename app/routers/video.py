@@ -122,9 +122,24 @@ async def offer(params: Offer):
 async def watch(target_session_id: int, params: Offer):
     """
     Admin Ghost Mode: Watch an active session.
+    Waits up to 10 seconds for candidate stream to be available.
     """
-    if target_session_id not in active_sessions or not active_sessions[target_session_id]["track"]:
-        # Session not active or no video yet: Admin waits
+    import asyncio
+    import time
+    
+    # Check if session exists and wait for track (up to 10 seconds)
+    start_time = time.time()
+    max_wait = 10
+    track = None
+    
+    while time.time() - start_time < max_wait:
+        if target_session_id in active_sessions and active_sessions[target_session_id]["track"]:
+            track = active_sessions[target_session_id]["track"]
+            break
+        await asyncio.sleep(0.5)  # Poll every 500ms
+    
+    if not track:
+        logger.info(f"WebRTC: Admin waiting for Session {target_session_id} - no candidate stream yet")
         return ApiResponse(
             status_code=200,
             data={"status": "WAITING_FOR_CANDIDATE"},
@@ -143,27 +158,38 @@ async def watch(target_session_id: int, params: Offer):
     }
     pc = RTCPeerConnection(configuration=ice_config)
     
-    # We don't store Admin PCs permanently in the session registry, 
-    # but we track them to prevent GC (could use a separate set)
-    # For now, just a set is fine
+    # Track the admin PC to prevent garbage collection
     pcs.add(pc)
 
-    logger.info(f"WebRTC: Admin watching Session {target_session_id}")
+    logger.info(f"WebRTC: Admin watching Session {target_session_id} - track found, establishing connection")
     
     # Add the Candidate's track to Admin's PC
-    candidate_track = active_sessions[target_session_id]["track"]
-    pc.addTrack(candidate_track)
+    try:
+        pc.addTrack(track)
+        logger.info(f"WebRTC: Track added to Admin PC for Session {target_session_id}")
+    except Exception as e:
+        logger.error(f"WebRTC: Failed to add track to Admin PC: {e}")
+        await pc.close()
+        pcs.discard(pc)
+        return ApiResponse(
+            status_code=500,
+            data={"error": str(e)},
+            message="Failed to add video track"
+        )
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
+        logger.info(f"WebRTC: Admin connection state: {pc.connectionState}")
         if pc.connectionState in ["failed", "closed"]:
             await pc.close()
             pcs.discard(pc)
+            logger.info(f"WebRTC: Admin PC closed for Session {target_session_id}")
 
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
+    logger.info(f"WebRTC: Admin answer sent for Session {target_session_id}")
     return ApiResponse(
         status_code=200,
         data={"sdp": pc.localDescription.sdp, "type": pc.localDescription.type},

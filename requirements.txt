@@ -67,6 +67,10 @@ email-validator
 python-multipart==0.0.21
 pydantic==2.12.5
 pydantic_core==2.41.5
+sentry-sdk[fastapi]==2.22.0
+fastapi-limiter==0.1.6
+redis==5.2.0
+celery==5.4.0
 
 # Database
 sqlmodel==0.0.31
@@ -302,4 +306,4 @@ zipp==3.23.0
 zope.event==6.1
 zope.interface==8.2
 zstandard==0.25.0
-resend>=0.7.1
+# Removed resend

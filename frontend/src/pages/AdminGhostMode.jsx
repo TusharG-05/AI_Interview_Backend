@@ -26,47 +26,69 @@ const AdminGhostMode = () => {
     const setupGhostMode = async () => {
         try {
             setStatus('connecting');
+            setError(null);
 
             // 1. Create Peer Connection
             const pc = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+                iceServers: [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                ]
             });
             pcRef.current = pc;
 
             // 2. Handle incoming tracks
             pc.ontrack = (event) => {
+                console.log('📹 Admin received track:', event.track.kind);
                 if (videoRef.current && event.streams[0]) {
                     videoRef.current.srcObject = event.streams[0];
                     setStatus('live');
                 }
             };
 
-            // 3. Create Offer (Recv-Only)
+            // 3. Handle connection state changes
+            pc.onconnectionstatechange = () => {
+                console.log(`🔗 Admin WebRTC connection state: ${pc.connectionState}`);
+                if (pc.connectionState === 'failed') {
+                    setError('Connection failed. Retrying...');
+                    setTimeout(() => setupGhostMode(), 2000);
+                }
+            };
+
+            // 4. Create Offer (Recv-Only)
             pc.addTransceiver('video', { direction: 'recvonly' });
             pc.addTransceiver('audio', { direction: 'recvonly' });
 
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            // 4. Send to Backend
+            console.log('📤 Sending ghost mode watch request...');
+            // 5. Send to Backend
             const res = await interviewService.watchInterview(id, {
                 sdp: pc.localDescription.sdp,
                 type: pc.localDescription.type
             });
 
+            console.log('📥 Watch response:', res.data);
+
             if (res.data.status === 'WAITING_FOR_CANDIDATE') {
                 setStatus('waiting');
+                console.log('⏳ Waiting for candidate to connect...');
+                // Retry after 3 seconds
+                setTimeout(() => setupGhostMode(), 3000);
             } else {
-                // 5. Set Remote Answer
+                // 6. Set Remote Answer
                 await pc.setRemoteDescription(new RTCSessionDescription({
                     sdp: res.data.sdp,
                     type: res.data.type
                 }));
+                console.log('✅ Ghost mode connection established');
             }
 
         } catch (err) {
             console.error("Ghost Mode Error:", err);
-            setError("Failed to establish live connection. The session might not be active.");
+            setError(`Failed to establish live connection: ${err.message}`);
             setStatus('error');
         }
     };

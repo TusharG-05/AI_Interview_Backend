@@ -79,6 +79,22 @@ async def get_system_status(interview_id: int):
     if camera_service.running:
         hw_status = "active (streaming)"
     
+    # Enhanced proctoring status
+    proctoring_status = "initializing/off"
+    proctoring_details = {}
+    if camera_service._detectors_ready:
+        proctoring_status = "healthy"
+        proctoring_details = {
+            "face_detector": "✓ active" if camera_service.face_detector else "✗ failed",
+            "gaze_detector": "✓ active" if camera_service.gaze_detector else "✗ failed"
+        }
+    else:
+        proctoring_details = {
+            "status": "Initializing detectors...",
+            "face_detector": "initializing",
+            "gaze_detector": "initializing"
+        }
+    
     return ApiResponse(
         status_code=200,
         data={
@@ -87,7 +103,8 @@ async def get_system_status(interview_id: int):
                 "llm": llm_status,
                 "modal_enabled": USE_MODAL,
                 "modal_status": modal_status,
-                "proctoring_engine": "healthy" if camera_service._detectors_ready else "initializing/off",
+                "proctoring_engine": proctoring_status,
+                "proctoring_details": proctoring_details,
                 "camera_access": hw_status,
                 "current_warning": camera_service.get_current_warning(interview_id)
             }
