@@ -52,14 +52,14 @@ def test_audio_service_skips_local_on_cloud(mock_getenv, dummy_wav):
     assert "[STT Error: Cloud Environment detected. Skipping heavy local STT fallback.]" == result
 
 @patch("app.services.face.os.getenv")
-def test_face_recognizer_skips_build_on_cloud(mock_getenv):
+def test_face_recognizer_builds_sface_even_on_cloud(mock_getenv):
     mock_getenv.side_effect = lambda k, default=None: {
         "SPACE_ID": "test_space"
     }.get(k, default)
     
     with patch("deepface.DeepFace.build_model") as mock_build:
         recognizer = FaceRecognizer()
-        mock_build.assert_not_called()
+        mock_build.assert_called_once_with("SFace")
 
 @patch("app.services.interview.os.getenv")
 @patch("app.services.interview.InferenceClient")

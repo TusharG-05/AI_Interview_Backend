@@ -150,9 +150,9 @@ class TestTotalScoreInResultDetail:
         response = client.get(f"/api/admin/results/{interview.id}", headers=headers)
         assert response.status_code == 200, response.text
         data = response.json()["data"]
-        # Default is None per db model
-        assert data["total_score"] is None, (
-            f"Expected total_score=None (default), got {data['total_score']}"
+        # Default is 0.0 per db model
+        assert data["total_score"] == 0.0, (
+            f"Expected total_score=0.0 (default), got {data['total_score']}"
         )
 
     def test_total_score_in_nested_interview_object(self, session, client):

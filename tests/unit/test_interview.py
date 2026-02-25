@@ -149,6 +149,6 @@ def test_evaluate_answer_modal_fallback(session, client):
             "question": "What is AI?",
             "answer": "Artificial Intelligence"
         }
-        response = client.post(f"/api/interview/evaluate-answer/{interview.id}", json=payload)
+        response = client.post("/api/interview/evaluate-answer", json=payload)
         assert response.status_code == 200
         assert response.json()["data"]["score"] == 8.5
