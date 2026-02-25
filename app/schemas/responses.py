@@ -19,9 +19,10 @@ class HistoryItem(BaseModel):
 
 class InterviewAccessResponse(BaseModel):
     interview_id: int
-    candidate_id: Optional[int] = None
-    admin_id: Optional[int] = None
-    paper_id: Optional[int] = None
+    candidate: Optional[dict] = None
+    admin: Optional[dict] = None
+    paper: Optional[dict] = None
+    invite_link: str
     message: str # "START" or "WAIT"
     schedule_time: Optional[str] = None
     duration_minutes: Optional[int] = None

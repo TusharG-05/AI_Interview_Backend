@@ -32,7 +32,6 @@ class InterviewSessionNested(BaseModel):
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
     question_paper: Optional[QuestionPaperNested] = None
-    
     schedule_time: datetime
     duration_minutes: int
     max_questions: Optional[int] = None
@@ -70,11 +69,19 @@ class InterviewResultDetail(BaseModel):
     interview_response: List[AnswersNested] = []
     total_score: Optional[float] = None
     created_at: datetime
+<<<<<<< HEAD
     proctoring_logs: List = []  
+=======
+    proctoring_logs: List = [] 
+>>>>>>> 99d223a (fix: Resolve interview access 500 error by correcting user attribute access and enhance development environment setup with live reload.)
 
 class InterviewResultBrief(BaseModel):
     id: int
     interview: InterviewSessionNested
     total_score: Optional[float] = None
     created_at: datetime
+<<<<<<< HEAD
     proctoring_logs: List = []   
+=======
+    proctoring_logs: List = [] 
+>>>>>>> 99d223a (fix: Resolve interview access 500 error by correcting user attribute access and enhance development environment setup with live reload.)

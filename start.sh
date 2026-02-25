@@ -17,5 +17,10 @@ echo "Starting Celery worker..."
 celery -A app.core.celery_app worker --loglevel=info &
 
 # Start the FastAPI application
-echo "Starting FastAPI application..."
-exec uvicorn main:app --host 0.0.0.0 --port 7860
+echo "Starting FastAPI application (ENV: ${ENV:-production})..."
+if [ "$ENV" = "development" ]; then
+    echo "Running in development mode with live reload!"
+    exec uvicorn main:app --host 0.0.0.0 --port 7860 --reload
+else
+    exec uvicorn main:app --host 0.0.0.0 --port 7860
+fi

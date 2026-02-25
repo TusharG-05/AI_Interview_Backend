@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus
+from ..models.db_models import User,Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus
 from ..schemas.requests import AnswerRequest
 from ..services import interview as interview_service
 from ..services.audio import AudioService
@@ -35,9 +35,38 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     """
     Validates the interview link and checks time constraints.
     """
-    session = session_db.exec(select(InterviewSession).where(InterviewSession.access_token == token)).first()
+    from ..core.config import FRONTEND_URL
+    from sqlalchemy.orm import selectinload
+
+    session = session_db.exec(
+        select(InterviewSession)
+        .where(InterviewSession.access_token == token)
+        .options(
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.paper)
+        )
+    ).first()
+    
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
+        
+    # candidate_data = {
+    #     "id": session.candidate.id,
+    #     "email": session.candidate.email,
+    #     "full_name": session.candidate.full_name
+    # } if session.candidate else None
+
+    candidate_obj = session_db.exec(select(User.id, User.email, User.full_name, User.role).where(User.id == session.candidate.id)).first() if session.candidate else None
+    candidate_data = candidate_obj._mapping if candidate_obj else None
+    
+    admin_obj = session_db.exec(select(User).where(User.id == session.admin.id)).first() if session.admin else None
+    admin_data = admin_obj.model_dump() if admin_obj else None
+
+    paper_obj = session_db.exec(select(QuestionPaper).where(QuestionPaper.id == session.paper.id)).first() if session.paper else None
+    paper_data = paper_obj.model_dump() if paper_obj else None
+
+    invite_link = f"{FRONTEND_URL}/interview/{session.access_token}"
         
     now = datetime.now(timezone.utc)
     
@@ -54,9 +83,10 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
         # Too early
         access_data = InterviewAccessResponse(
             interview_id=session.id,
-            candidate_id=session.candidate_id,
-            admin_id=session.admin_id,
-            paper_id=session.paper_id,
+            candidate=candidate_data,
+            admin=admin_data,
+            paper=paper_data,
+            invite_link=invite_link,
             message="WAIT",
             schedule_time=format_iso_datetime(session.schedule_time),
             duration_minutes=session.duration_minutes,
@@ -92,9 +122,10 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     # 5. Success - Allow Entry
     access_data = InterviewAccessResponse(
         interview_id=session.id,
-        candidate_id=session.candidate_id,
-        admin_id=session.admin_id,
-        paper_id=session.paper_id,
+        candidate=candidate_data,
+        admin=admin_data,
+        paper=paper_data,
+        invite_link=invite_link,
         message="START",
         schedule_time=format_iso_datetime(session.schedule_time),
         duration_minutes=session.duration_minutes,
