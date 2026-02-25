@@ -83,8 +83,9 @@ class InterviewSession(SQLModel, table=True):
     
     # Scheduler Info 
     access_token: str = Field(unique=True, index=True, default_factory=lambda: uuid.uuid4().hex)
-    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when admin deleted
-    candidate_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when candidate deleted
+    invite_link: Optional[str] = None
+    admin_id: Optional[int] = Field(foreign_key="user.id", nullable=True)  # Nullable to preserve history when admin deleted
+    candidate_id: Optional[int] = Field(foreign_key="user.id", nullable=True) # Nullable to preserve history when candidate deleted
     paper_id: int = Field(foreign_key="questionpaper.id")
     
     # Timing

@@ -88,3 +88,9 @@ Thumbs.db
 # === Docker ===
 .docker-compose.un~
 app/assets/face_landmarker.task
+
+*.json
+# === API Testing ===
+api_tests/.admin_token
+api_tests/.candidate_token
+api_tests/.interview_token
