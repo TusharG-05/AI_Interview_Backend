@@ -89,7 +89,7 @@ def test_full_interview_lifecycle(client, session, auth_headers):
         assert session.query(Answers).count() == 1
     
     # --- 6. FINISH SESSION ---
-    with patch("app.routers.interview.process_session_results_unified") as mock_process:
+    with patch("app.tasks.interview_tasks.process_session_results") as mock_process:
         response = client.post(f"/api/interview/finish/{interview.id}")
         assert response.status_code == 200
         

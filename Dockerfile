@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements-app.txt
 # Install Redis server for Celery
 USER root
 RUN apt-get update && apt-get install -y redis-server && rm -rf /var/lib/apt/lists/*
-USER user
+# USER user
 
 # Copy clean application code (filtered by .dockerignore)
 COPY . .
