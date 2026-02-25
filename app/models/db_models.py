@@ -35,6 +35,7 @@ class User(SQLModel, table=True):
     full_name: str
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
+    access_token: Optional[str] = Field(default="")
     resume_text: Optional[str] = Field(default=None)  # Stored extracted text
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
     profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
@@ -46,8 +47,10 @@ class User(SQLModel, table=True):
 class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
-    description: Optional[str] = None
-    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
+    description: str = Field(default="")
+    adminUser: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
+    question_count: int = Field(default=0)
+    total_marks: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     admin: Optional[User] = Relationship(back_populates="question_papers")
@@ -61,9 +64,9 @@ class Questions(SQLModel, table=True):
     """Formerly named 'QuestionGroup'"""
     id: Optional[int] = Field(default=None, primary_key=True)
     paper_id: Optional[int] = Field(default=None, foreign_key="questionpaper.id")
-    content: Optional[str] = None
-    question_text: Optional[str] = None # Legacy support
-    topic: Optional[str] = None
+    content: str = Field(default="")
+    question_text: str = Field(default="") # Legacy support
+    topic: str = Field(default="")
     difficulty: str = Field(default="Medium")
     marks: int = Field(default=1)
     response_type: str = Field(default="audio") # Options: audio, text, both
@@ -91,7 +94,7 @@ class InterviewSession(SQLModel, table=True):
     # Timing
     schedule_time: datetime
     duration_minutes: int = Field(default=1440) # 1 Day default
-    max_questions: Optional[int] = None  # Limit questions per interview, None = use all
+    max_questions: int = Field(default=0)  # Limit questions per interview, 0 = use all
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     
@@ -100,8 +103,8 @@ class InterviewSession(SQLModel, table=True):
     total_score: Optional[float] = None
     
     # Candidate Status Tracking (NEW)
-    current_status: Optional[CandidateStatus] = Field(default=None)  # Detailed lifecycle status
-    last_activity: Optional[datetime] = None  # Last activity timestamp
+    current_status: str = Field(default="")  # Detailed lifecycle status
+    last_activity: datetime = Field(default_factory=datetime.utcnow)  # Last activity timestamp
     
     # Warning System (NEW)
     warning_count: int = Field(default=0)  # Current warning count
@@ -145,7 +148,7 @@ class ProctoringEvent(SQLModel, table=True):
         sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
     )
     event_type: str 
-    details: Optional[str] = None
+    details: str = Field(default="")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
     # Severity and Warning Tracking (NEW)
@@ -162,7 +165,7 @@ class StatusTimeline(SQLModel, table=True):
     )
     status: CandidateStatus
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    context_data: Optional[str] = None  # JSON string for additional context (renamed from metadata)
+    context_data: str = Field(default="")  # JSON string for additional context (renamed from metadata)
     
     session: InterviewSession = Relationship(back_populates="status_timeline")
 
@@ -171,7 +174,7 @@ class InterviewResult(SQLModel, table=True):
     interview_id: int = Field(
         sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"), unique=True)
     )
-    total_score: Optional[float] = Field(default=None)
+    total_score: float = Field(default=0.0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     session: "InterviewSession" = Relationship(back_populates="result")
@@ -192,13 +195,13 @@ class Answers(SQLModel, table=True):
     question_id: int = Field(foreign_key="questions.id")
     
     # Legacy fields mapping
-    candidate_answer: Optional[str] = None # Renamed from answer_text
-    feedback: Optional[str] = None # Renamed from evaluation_text
-    score: Optional[float] = None
+    candidate_answer: str = Field(default="") # Renamed from answer_text
+    feedback: str = Field(default="") # Renamed from evaluation_text
+    score: float = Field(default=0.0)
     
     # Audio fields (Persisted)
-    audio_path: Optional[str] = None
-    transcribed_text: Optional[str] = None
+    audio_path: str = Field(default="")
+    transcribed_text: str = Field(default="")
     
     # Keeping timestamps
     timestamp: datetime = Field(default_factory=datetime.utcnow)
