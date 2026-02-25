@@ -35,21 +35,24 @@ class User(SQLModel, table=True):
     full_name: str
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
-    resume_text: Optional[str] = Field(default=None)  # Stored extracted text
-    profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
-    profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
-    face_embedding: Optional[str] = Field(default=None) # JSON/CSV string of the ArcFace/Sface vector
-    
+    resume_text: Optional[str] = Field(default=None)   # Stored extracted text
+    access_token: Optional[str] = Field(default=None)  # Optional user-level access token
+    profile_image: Optional[str] = Field(default=None)  # Path to uploaded selfie (Legacy)
+    profile_image_bytes: Optional[bytes] = Field(default=None)  # Binary store for selfie
+    face_embedding: Optional[str] = Field(default=None)  # JSON/CSV string of the ArcFace/SFace vector
+
     # Relationships
     question_papers: List["QuestionPaper"] = Relationship(back_populates="admin")
 
 class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
-    description: Optional[str] = None
-    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
+    description: str = Field(default="")  # Not null; default empty string
+    adminUser: Optional[int] = Field(default=None, foreign_key="user.id", alias="admin_id")  # Renamed from admin_id
+    question_count: int = Field(default=0)   # Cached count (updated on add/remove)
+    total_marks: int = Field(default=0)      # Cached total marks (updated on add/remove)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    
+
     admin: Optional[User] = Relationship(back_populates="question_papers")
     questions: List["Questions"] = Relationship(
         back_populates="paper",
@@ -57,70 +60,71 @@ class QuestionPaper(SQLModel, table=True):
     )
     sessions: List["InterviewSession"] = Relationship(back_populates="paper")
 
+    class Config:
+        populate_by_name = True
+
 class Questions(SQLModel, table=True):
     """Formerly named 'QuestionGroup'"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    paper_id: Optional[int] = Field(default=None, foreign_key="questionpaper.id")
-    content: Optional[str] = None
-    question_text: Optional[str] = None # Legacy support
-    topic: Optional[str] = None
+    paper_id: int = Field(foreign_key="questionpaper.id")  # Not null; required
+    content: str = Field(default="string")          # Not null; default 'string'
+    question_text: str = Field(default="string")    # Not null; legacy sync of content
+    topic: str = Field(default="General")           # Not null; default 'General'
     difficulty: str = Field(default="Medium")
     marks: int = Field(default=1)
-    response_type: str = Field(default="audio") # Options: audio, text, both
+    response_type: str = Field(default="audio")  # Options: audio, text, both
 
     paper: Optional[QuestionPaper] = Relationship(back_populates="questions")
     answers: List["Answers"] = Relationship(
-        back_populates="question", 
+        back_populates="question",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
     )
     session_questions: List["SessionQuestion"] = Relationship(
-        back_populates="question", 
+        back_populates="question",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
     )
 
 class InterviewSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    
-    # Scheduler Info 
+
+    # Scheduler Info
     access_token: str = Field(unique=True, index=True, default_factory=lambda: uuid.uuid4().hex)
-    admin_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when admin deleted
-    candidate_id: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve history when candidate deleted
+    admin_id: int = Field(foreign_key="user.id")      # Points to sentinel if admin deleted
+    candidate_id: int = Field(foreign_key="user.id")  # Points to sentinel if candidate deleted
     paper_id: int = Field(foreign_key="questionpaper.id")
-    
+
     # Timing
     schedule_time: datetime
-    duration_minutes: int = Field(default=1440) # 1 Day default
-    max_questions: Optional[int] = None  # Limit questions per interview, None = use all
+    duration_minutes: int = Field(default=1440)  # 1 Day default
+    max_questions: Optional[int] = None   # None = use all questions
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    
+
     # State
     status: InterviewStatus = Field(default=InterviewStatus.SCHEDULED)
     total_score: Optional[float] = None
-    
-    # Candidate Status Tracking (NEW)
-    current_status: Optional[CandidateStatus] = Field(default=None)  # Detailed lifecycle status
-    last_activity: Optional[datetime] = None  # Last activity timestamp
-    
-    # Warning System (NEW)
-    warning_count: int = Field(default=0)  # Current warning count
-    max_warnings: int = Field(default=3)  # Maximum warnings before suspension
-    is_suspended: bool = Field(default=False)  # Suspension flag
-    suspension_reason: Optional[str] = None  # Reason for suspension
-    suspended_at: Optional[datetime] = None  # Suspension timestamp
-    
-    # Legacy/Enrollment
+
+    # Candidate Status Tracking
+    current_status: Optional[CandidateStatus] = Field(default=None)
+    last_activity: Optional[datetime] = None
+
+    # Warning System
+    warning_count: int = Field(default=0)
+    max_warnings: int = Field(default=3)
+    is_suspended: bool = Field(default=False)
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[datetime] = None
+
+    # Enrollment
     enrollment_audio_path: Optional[str] = None
-    candidate_name: Optional[str] = None # Optional fallback for deleted candidate
-    admin_name: Optional[str] = None  # Preserve admin name when admin is deleted
-    is_completed: bool = Field(default=False) 
-    
+    is_completed: bool = Field(default=False)
+
     # Relationships
-    admin: Optional[User] = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
-    candidate: Optional[User] = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
+    admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
+    candidate: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
     paper: QuestionPaper = Relationship(back_populates="sessions")
-    
-    # Cascade delete when interview is deleted (not when user is deleted)
+
+    # Cascade delete when interview is deleted
     result: Optional["InterviewResult"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     selected_questions: List["SessionQuestion"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
@@ -134,7 +138,7 @@ class SessionQuestion(SQLModel, table=True):
     )
     question_id: int = Field(foreign_key="questions.id")
     sort_order: int = Field(default=0)
-    
+
     session: InterviewSession = Relationship(back_populates="selected_questions")
     question: Questions = Relationship(back_populates="session_questions")
 
@@ -143,14 +147,14 @@ class ProctoringEvent(SQLModel, table=True):
     interview_id: int = Field(
         sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
     )
-    event_type: str 
-    details: Optional[str] = None
+    event_type: str
+    details: str = Field(default="")  # Not null; default empty string
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
-    # Severity and Warning Tracking (NEW)
+
+    # Severity and Warning Tracking
     severity: str = Field(default="info")  # Options: "info", "warning", "critical"
-    triggered_warning: bool = Field(default=False)  # Whether this event added a warning
-    
+    triggered_warning: bool = Field(default=False)
+
     session: InterviewSession = Relationship(back_populates="proctoring_events")
 
 class StatusTimeline(SQLModel, table=True):
@@ -161,8 +165,8 @@ class StatusTimeline(SQLModel, table=True):
     )
     status: CandidateStatus
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    context_data: Optional[str] = None  # JSON string for additional context (renamed from metadata)
-    
+    context_data: str = Field(default="{}")  # Not null; default empty JSON
+
     session: InterviewSession = Relationship(back_populates="status_timeline")
 
 class InterviewResult(SQLModel, table=True):
@@ -170,9 +174,9 @@ class InterviewResult(SQLModel, table=True):
     interview_id: int = Field(
         sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"), unique=True)
     )
-    total_score: Optional[float] = Field(default=None)
+    total_score: float = Field(default=0.0)  # Not null; default 0.0
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    
+
     session: "InterviewSession" = Relationship(back_populates="result")
     answers: List["Answers"] = Relationship(
         back_populates="interview_result",
@@ -181,7 +185,6 @@ class InterviewResult(SQLModel, table=True):
 
 class Answers(SQLModel, table=True):
     """Formerly named 'InterviewResponse'"""
-    # Renamed table explicitly to handle migration if needed, but for clarity using table name default (answers)
     __tablename__ = "answers"
 
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -189,19 +192,16 @@ class Answers(SQLModel, table=True):
         sa_column=Column(Integer, ForeignKey("interviewresult.id", ondelete="CASCADE"))
     )
     question_id: int = Field(foreign_key="questions.id")
-    
-    # Legacy fields mapping
-    candidate_answer: Optional[str] = None # Renamed from answer_text
-    feedback: Optional[str] = None # Renamed from evaluation_text
-    score: Optional[float] = None
-    
-    # Audio fields (Persisted)
-    audio_path: Optional[str] = None
-    transcribed_text: Optional[str] = None
-    
-    # Keeping timestamps
+
+    # Kept nullable: audio answers have no text initially; text answers have no audio
+    candidate_answer: Optional[str] = None
+    feedback: Optional[str] = None       # Filled after AI evaluation
+    score: Optional[float] = None        # Filled after AI evaluation
+    audio_path: Optional[str] = None     # Only for audio-type answers
+    transcribed_text: Optional[str] = None  # Filled after STT
+
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    
+
     # Relationships
     interview_result: InterviewResult = Relationship(back_populates="answers")
     question: Questions = Relationship(back_populates="answers")

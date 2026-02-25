@@ -22,14 +22,13 @@ def candidate_setup(session):
     candidate = User(
         email="candidate@test.com",
         role=UserRole.CANDIDATE,
-        is_active=True,
         full_name="Candidate User",
         password_hash=get_password_hash("candpass")
     )
     session.add(candidate)
     session.commit()
     session.refresh(candidate)
-    
+
     return {"admin": admin, "candidate": candidate}
 
 def test_upload_selfie_success(client, session, candidate_setup):
@@ -60,7 +59,7 @@ def test_get_history(client, session, candidate_setup):
     app.dependency_overrides[get_current_user] = lambda: candidate
     
     # Create paper
-    paper = QuestionPaper(name="History Paper", admin_id=admin.id) 
+    paper = QuestionPaper(name="History Paper", adminUser=admin.id)
     session.add(paper)
     session.commit()
     session.refresh(paper)

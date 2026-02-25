@@ -2,22 +2,27 @@ import pytest
 from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta, timezone
 
+
+def _get_sentinel_ids(session):
+    """Get sentinel user IDs for admin and candidate placeholders."""
+    from app.services.sentinel_users import get_or_create_sentinel_users
+    admin_s, candidate_s = get_or_create_sentinel_users(session)
+    return admin_s.id, candidate_s.id
+
+
 def test_create_interview_session(session, client, auth_headers):
     # 1. Create Question Paper
     from app.models.db_models import QuestionPaper, User
-    
-    # We need an admin user first? Or just mock auth?
-    # The endpoint might require admin privileges.
-    # Let's check admin router... but for now, let's test the models/services directly or via admin endpoints if easy.
-    # Actually, let's stick to the INTERVIEW router which is public-facing mostly (except creation).
-    
-    # Prerequisite: Create a dummy paper and session in DB
-    paper = QuestionPaper(name="Test Paper", admin_id=1)
+    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
+
+    paper = QuestionPaper(name="Test Paper", adminUser=admin_sentinel_id)
     session.add(paper)
     session.commit()
-    
+
     from app.models.db_models import InterviewSession, InterviewStatus
     interview = InterviewSession(
+        admin_id=admin_sentinel_id,
+        candidate_id=candidate_sentinel_id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc) + timedelta(hours=1),
         duration_minutes=60,
@@ -25,33 +30,34 @@ def test_create_interview_session(session, client, auth_headers):
     )
     session.add(interview)
     session.commit()
-    
+
     assert interview.id is not None
     assert interview.access_token is not None
 
 def test_access_interview_invalid_token(client):
     response = client.get("/api/interview/access/invalid-token")
     assert response.status_code == 404
-    # Global exception handler wraps detail into 'message'
     assert "Invalid Interview Link" in response.json()["message"]
 
 def test_access_interview_valid(session, client):
-    # Setup
     from app.models.db_models import InterviewSession, QuestionPaper, InterviewStatus
+    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
+
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
     session.commit()
-    
+
     interview = InterviewSession(
+        admin_id=admin_sentinel_id,
+        candidate_id=candidate_sentinel_id,
         paper_id=paper.id,
-        schedule_time=datetime.now(timezone.utc) - timedelta(minutes=10), # Started 10 mins ago
+        schedule_time=datetime.now(timezone.utc) - timedelta(minutes=10),
         duration_minutes=60,
         status=InterviewStatus.SCHEDULED
     )
     session.add(interview)
     session.commit()
-    
-    # Test
+
     response = client.get(f"/api/interview/access/{interview.access_token}")
     assert response.status_code == 200
     data = response.json()["data"]
@@ -59,13 +65,16 @@ def test_access_interview_valid(session, client):
     assert data["interview_id"] == interview.id
 
 def test_start_session(session, client):
-    # Setup
     from app.models.db_models import InterviewSession, QuestionPaper, InterviewStatus
+    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
+
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
     session.commit()
-    
+
     interview = InterviewSession(
+        admin_id=admin_sentinel_id,
+        candidate_id=candidate_sentinel_id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc),
         duration_minutes=60,
@@ -73,78 +82,76 @@ def test_start_session(session, client):
     )
     session.add(interview)
     session.commit()
-    
-    # Mock Audio Service for enrollment
+
     with patch("app.services.audio.AudioService.save_audio_blob") as mock_save:
         with patch("app.services.audio.AudioService.calculate_energy", return_value=100) as mock_energy:
              with patch("app.services.audio.AudioService.cleanup_audio") as mock_cleanup:
-                # Test
-                # We need to send a file
                 files = {"enrollment_audio": ("enroll.wav", b"fake-audio-content", "audio/wav")}
                 response = client.post(f"/api/interview/start-session/{interview.id}", files=files)
-                
+
                 assert response.status_code == 200
                 assert response.json()["data"]["status"] == "LIVE"
-                
-                # Check DB update
+
                 session.refresh(interview)
                 assert interview.status == InterviewStatus.LIVE
                 assert interview.start_time is not None
 
 def test_submit_answer_text(session, client):
-    # Setup
     from app.models.db_models import InterviewSession, QuestionPaper, Questions, InterviewStatus
+    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
+
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
     session.commit()
-    
+
     question = Questions(paper_id=paper.id, content="What is AI?")
     session.add(question)
     session.commit()
-    
+
     interview = InterviewSession(
+        admin_id=admin_sentinel_id,
+        candidate_id=candidate_sentinel_id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc),
         status=InterviewStatus.LIVE
     )
     session.add(interview)
     session.commit()
-    
-    # Test
+
     payload = {
         "interview_id": interview.id,
         "question_id": question.id,
         "answer_text": "AI is Artificial Intelligence."
     }
-    # Use data=payload for Form data
     response = client.post("/api/interview/submit-answer-text", data=payload)
     assert response.status_code == 200
-    
-    # Check DB
+
     from app.models.db_models import Answers
     assert session.query(Answers).count() == 1
     saved_answer = session.query(Answers).first()
     assert saved_answer.candidate_answer == "AI is Artificial Intelligence."
 
 def test_evaluate_answer_modal_fallback(session, client):
-    # Setup
     from app.models.db_models import InterviewSession, QuestionPaper, Questions, InterviewStatus
+    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
+
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
     session.commit()
-    
+
     interview = InterviewSession(
+        admin_id=admin_sentinel_id,
+        candidate_id=candidate_sentinel_id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc),
         status=InterviewStatus.LIVE
     )
     session.add(interview)
     session.commit()
-    
-    # Mock evaluate_answer_content to simulate Modal/HF logic
+
     with patch("app.services.interview.evaluate_answer_content") as mock_eval:
         mock_eval.return_value = {"feedback": "Good job", "score": 8.5}
-        
+
         payload = {
             "question": "What is AI?",
             "answer": "Artificial Intelligence"

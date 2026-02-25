@@ -125,13 +125,17 @@ class TestTotalScoreInResultDetail:
         token = create_access_token(data={"sub": admin.email})
         headers = {"Authorization": f"Bearer {token}"}
 
-        paper = QuestionPaper(name="No Score Paper", admin_id=admin.id)
+        from app.services.sentinel_users import get_candidate_sentinel_id
+        candidate_sentinel_id = get_candidate_sentinel_id(session)
+
+        paper = QuestionPaper(name="No Score Paper", adminUser=admin.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)
 
         interview = InterviewSession(
             admin_id=admin.id,
+            candidate_id=candidate_sentinel_id,
             paper_id=paper.id,
             schedule_time=datetime.now(timezone.utc) - timedelta(hours=1),
             duration_minutes=60,
@@ -175,13 +179,17 @@ class TestTotalScoreInResultDetail:
         token2 = create_access_token(data={"sub": admin2.email})
         headers2 = {"Authorization": f"Bearer {token2}"}
 
-        paper = QuestionPaper(name="Nested Score Paper", admin_id=admin2.id)
+        paper = QuestionPaper(name="Nested Score Paper", adminUser=admin2.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)
 
+        from app.services.sentinel_users import get_candidate_sentinel_id
+        candidate_sentinel_id2 = get_candidate_sentinel_id(session)
+
         interview = InterviewSession(
             admin_id=admin2.id,
+            candidate_id=candidate_sentinel_id2,
             paper_id=paper.id,
             schedule_time=datetime.now(timezone.utc) - timedelta(hours=1),
             duration_minutes=60,
