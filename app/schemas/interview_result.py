@@ -12,8 +12,10 @@ class UserNested(BaseModel):
 class QuestionPaperNested(BaseModel):
     id: int
     name: str
-    description: Optional[str] = None
-    admin_id: Optional[int] = None
+    description: str = ""
+    adminUser: Optional[int] = None
+    question_count: int = 0
+    total_marks: int = 0
     created_at: datetime
 
 class QuestionNested(BaseModel):
@@ -70,19 +72,11 @@ class InterviewResultDetail(BaseModel):
     interview_response: List[AnswersNested] = []
     total_score: Optional[float] = None
     created_at: datetime
-<<<<<<< HEAD
-    proctoring_logs: List = []  
-=======
-    proctoring_logs: List = [] 
->>>>>>> 99d223a (fix: Resolve interview access 500 error by correcting user attribute access and enhance development environment setup with live reload.)
+    proctoring_logs: List = []
 
 class InterviewResultBrief(BaseModel):
     id: int
     interview: InterviewSessionNested
     total_score: Optional[float] = None
     created_at: datetime
-<<<<<<< HEAD
-    proctoring_logs: List = []   
-=======
-    proctoring_logs: List = [] 
->>>>>>> 99d223a (fix: Resolve interview access 500 error by correcting user attribute access and enhance development environment setup with live reload.)
+    proctoring_logs: List = []

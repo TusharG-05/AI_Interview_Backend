@@ -43,7 +43,7 @@ async def my_history(
             end_time=format_iso_datetime(s.end_time) if s.end_time else None,
             warning_count=s.warning_count,
             is_completed=s.is_completed,
-            current_status=s.current_status.value if s.current_status else None
+            current_status=s.current_status,
         ))
     return ApiResponse(
         status_code=200,
@@ -79,7 +79,7 @@ async def my_interviews(
             end_time=format_iso_datetime(s.end_time) if s.end_time else None,
             warning_count=s.warning_count,
             is_completed=s.is_completed,
-            current_status=s.current_status.value if s.current_status else None
+            current_status=s.current_status,
         ))
     return ApiResponse(
         status_code=200,

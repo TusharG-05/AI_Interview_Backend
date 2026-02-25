@@ -64,7 +64,7 @@ def record_status_change(
         interview_id=interview_session.id,
         status=new_status,
         timestamp=datetime.now(timezone.utc),
-        context_data=json.dumps(metadata) if metadata else None
+        context_data=json.dumps(metadata) if metadata else ""
     )
     
     # Update session current status
@@ -133,7 +133,7 @@ def add_violation(
     event = ProctoringEvent(
         interview_id=interview_session.id,
         event_type=event_type,
-        details=details,
+        details=details or "",
         severity=severity,
         triggered_warning=False,
         timestamp=datetime.now(timezone.utc)
@@ -339,7 +339,7 @@ def get_status_summary(
             "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
             "status": interview_session.status.value if hasattr(interview_session.status, 'value') else str(interview_session.status),
             "total_score": interview_session.total_score,
-            "current_status": interview_session.current_status.value if interview_session.current_status else None,
+            "current_status": interview_session.current_status,
             "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
             "warning_count": interview_session.warning_count or 0,
             "max_warnings": interview_session.max_warnings or 3,
@@ -352,7 +352,7 @@ def get_status_summary(
             "is_completed": interview_session.is_completed or False
         },
         "candidate": candidate_dict,
-        "current_status": interview_session.current_status.value if interview_session.current_status else None,
+        "current_status": interview_session.current_status,
         "timeline": [
             {
                 "status": entry.status.value,
