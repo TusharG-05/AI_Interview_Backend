@@ -50,18 +50,52 @@ from sqlmodel.pool import StaticPool
 def mock_db_session():
     """
     Creates an in-memory SQLite database for the session.
-    It creates tables, yields the session, and drops tables after.
+    Creates sentinel users so InterviewSession can satisfy NOT NULL on admin_id/candidate_id.
     """
+    from app.models.db_models import User, UserRole
+    from app.auth.security import get_password_hash
+
     engine = create_engine(
-        "sqlite://", 
-        connect_args={"check_same_thread": False}, 
+        "sqlite://",
+        connect_args={"check_same_thread": False},
         poolclass=StaticPool
     )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
+        # Create sentinel placeholder users required by NOT NULL constraints
+        from app.services.sentinel_users import get_or_create_sentinel_users
+        get_or_create_sentinel_users(session)
         yield session
-    # Cleanup: SQLModel metadata drop or just let it die with the function scope
     SQLModel.metadata.drop_all(engine)
+
+
+@pytest.fixture(name="test_users", scope="function")
+def test_users_fixture(session):
+    """
+    Creates a test admin and candidate user and returns (admin, candidate).
+    Use their .id values when creating InterviewSession objects in tests.
+    """
+    from app.models.db_models import User, UserRole
+    from app.auth.security import get_password_hash
+
+    admin = User(
+        email="test_admin@example.com",
+        full_name="Test Admin",
+        password_hash=get_password_hash("TestPass123!"),
+        role=UserRole.ADMIN,
+    )
+    candidate = User(
+        email="test_candidate@example.com",
+        full_name="Test Candidate",
+        password_hash=get_password_hash("TestPass123!"),
+        role=UserRole.CANDIDATE,
+    )
+    session.add(admin)
+    session.add(candidate)
+    session.commit()
+    session.refresh(admin)
+    session.refresh(candidate)
+    return admin, candidate
 
 @pytest.fixture(autouse=True)
 def override_dependencies(session):

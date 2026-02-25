@@ -24,7 +24,7 @@ def interview_session(session):
     session.add(candidate)
     session.flush() # Ensure IDs are generated
     
-    paper = QuestionPaper(name="Test Paper", admin_id=admin.id)
+    paper = QuestionPaper(name="Test Paper", adminUser=admin.id)
     session.add(paper)
     
     session.commit()

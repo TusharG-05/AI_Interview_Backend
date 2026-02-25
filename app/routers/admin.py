@@ -70,7 +70,7 @@ async def list_papers(
     session: Session = Depends(get_session)
 ):
     """List all question papers created by the admin."""
-    papers = session.exec(select(QuestionPaper).where(QuestionPaper.admin_id == current_user.id)).all()
+    papers = session.exec(select(QuestionPaper).where(QuestionPaper.adminUser == current_user.id)).all()
     papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
         question_count=len(p.questions), 
@@ -106,7 +106,7 @@ async def create_paper(
     new_paper = QuestionPaper(
         name=paper_data.name,
         description=paper_data.description,
-        admin_id=current_user.id
+        adminUser=current_user.id
     )
     session.add(new_paper)
     try:
@@ -134,7 +134,7 @@ async def get_paper(
 ):
     """Get details of a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_id != current_user.id:
+    if not paper or paper.adminUser != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
@@ -162,7 +162,7 @@ async def update_paper(
 ):
     """Update a question paper's name or description."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_id != current_user.id:
+    if not paper or paper.adminUser != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     
     update_data = paper_update.model_dump(exclude_unset=True)
@@ -201,7 +201,7 @@ async def delete_paper(
 ):
     """Delete a question paper and all its associated questions."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_id != current_user.id:
+    if not paper or paper.adminUser != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     
     # Check for existing sessions using this paper
@@ -234,7 +234,7 @@ async def add_question_to_paper(
 ):
     """API for manually adding a new interview question to a paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_id != current_user.id:
+    if not paper or paper.adminUser != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
         
     new_q = Questions(
@@ -267,7 +267,7 @@ async def list_paper_questions(
 ):
     """List all questions belonging to a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_id != current_user.id:
+    if not paper or paper.adminUser != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     questions = session.exec(select(Questions).where(Questions.paper_id == paper_id)).all()
     return ApiResponse(
@@ -287,7 +287,7 @@ async def upload_document(
     # Verify paper belongs to admin if provided
     if paper_id:
         paper = session.get(QuestionPaper, paper_id)
-        if not paper or paper.admin_id != current_user.id:
+        if not paper or paper.adminUser != current_user.id:
             raise HTTPException(status_code=404, detail="Paper not found")
 
     # 1. Validation (DoS Prevention)
@@ -363,7 +363,7 @@ async def list_all_questions(
     stmt = (
         select(Questions)
         .join(QuestionPaper, isouter=True)
-        .where((QuestionPaper.admin_id == current_user.id) | (Questions.paper_id == None))
+        .where((QuestionPaper.adminUser == current_user.id) | (Questions.paper_id == None))
     )
     questions = session.exec(stmt).all()
     return ApiResponse(
@@ -383,7 +383,7 @@ async def get_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.admin_id != current_user.id:
+    if q.paper and q.paper.adminUser != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
     return ApiResponse(
         status_code=200,
@@ -403,7 +403,7 @@ async def update_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.admin_id != current_user.id:
+    if q.paper and q.paper.adminUser != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this question")
     
     update_data = q_update.model_dump(exclude_unset=True)
@@ -440,7 +440,7 @@ async def schedule_interview(
     """
     # Validate Paper
     paper = session.get(QuestionPaper, schedule_data.paper_id)
-    if not paper or paper.admin_id != current_user.id:
+    if not paper or paper.adminUser != current_user.id:
         raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
 
     candidate = session.get(User, schedule_data.candidate_id)
@@ -462,7 +462,7 @@ async def schedule_interview(
         raise HTTPException(status_code=400, detail="Invalid schedule_time format. ISO 8601 expected.")
 
     new_session = InterviewSession(
-        admin_id=current_user.id,
+        adminUser=current_user.id,
         candidate_id=schedule_data.candidate_id,
         paper_id=schedule_data.paper_id,
         schedule_time=schedule_dt,
@@ -588,8 +588,6 @@ async def schedule_interview(
         suspension_reason=new_session.suspension_reason,
         suspended_at=format_iso_datetime(new_session.suspended_at),
         enrollment_audio_path=new_session.enrollment_audio_path,
-        candidate_name=candidate.full_name,
-        admin_name=current_user.full_name,
         is_completed=new_session.is_completed
     )
 
@@ -627,8 +625,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
     results = []
     for s in sessions:
         # Serialize users with role-based keys, handling NULL users
-        admin_dict = serialize_user(s.admin, fallback_name=s.admin_name, fallback_role="admin")
-        candidate_dict = serialize_user(s.candidate, fallback_name=s.candidate_name, fallback_role="candidate")
+        admin_dict = serialize_user(s.admin, fallback_name=None, fallback_role="admin")
+        candidate_dict = serialize_user(s.candidate, fallback_name=None, fallback_role="candidate")
         
         results.append(SessionRead(
             id=s.id,
@@ -710,7 +708,7 @@ async def get_live_status_dashboard(
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": format_iso_datetime(interview_session.suspended_at),
             "enrollment_audio_path": interview_session.enrollment_audio_path,
-            "candidate_name": interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name,
+            "candidate_name": interview_session.candidate.full_name if interview_session.candidate else None,
             "admin_name": current_user.full_name, # Since we filtered by current_user.id
             "is_completed": interview_session.is_completed
         }
@@ -763,8 +761,8 @@ async def get_interview(
         )
     
     # Serialize users with role-based keys, handling NULL users
-    admin_dict = serialize_user(interview_session.admin, fallback_name=interview_session.admin_name, fallback_role="admin")
-    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
+    admin_dict = serialize_user(interview_session.admin, fallback_name=None, fallback_role="admin")
+    candidate_dict = serialize_user(interview_session.candidate, fallback_name=None, fallback_role="candidate")
     
     # Build detailed response
     detail_read = InterviewDetailRead(
@@ -824,7 +822,7 @@ async def update_interview(
     # Validate paper_id if provided
     if "paper_id" in update_dict:
         paper = session.get(QuestionPaper, update_dict["paper_id"])
-        if not paper or paper.admin_id != current_user.id:
+        if not paper or paper.adminUser != current_user.id:
             raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
     
     # Validate and convert schedule_time if provided
@@ -903,8 +901,8 @@ async def update_interview(
         raise HTTPException(status_code=500, detail=f"Failed to update interview: {str(e)}")
     
     # Return updated interview details
-    admin_dict = serialize_user(interview_session.admin, fallback_name=interview_session.admin_name, fallback_role="admin")
-    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
+    admin_dict = serialize_user(interview_session.admin, fallback_name=None, fallback_role="admin")
+    candidate_dict = serialize_user(interview_session.candidate, fallback_name=None, fallback_role="candidate")
     
     detail_read = InterviewDetailRead(
         id=interview_session.id,
@@ -960,7 +958,7 @@ async def delete_interview(
         )
     
     # Store info for response before deletion
-    candidate_name = interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name or "Unknown"
+    candidate_name = interview_session.candidate.full_name if interview_session.candidate else None or "Unknown"
     scheduled_time = format_iso_datetime(interview_session.schedule_time)
     
     # Hard delete: this will cascade to responses, proctoring_events, selected_questions, status_timeline
@@ -1077,7 +1075,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         if s.paper:
             paper_obj = QuestionPaperNested(
                 id=s.paper.id, name=s.paper.name, description=s.paper.description, 
-                admin_id=s.paper.admin_id, created_at=s.paper.created_at
+                admin_id=s.paper.adminUser, created_at=s.paper.created_at
             )
             
         # 4. Session Nested
@@ -1092,7 +1090,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             max_warnings=s.max_warnings, is_suspended=s.is_suspended,
             suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
             enrollment_audio_path=s.enrollment_audio_path,
-            candidate_name=s.candidate_name, admin_name=s.admin_name,
+            candidate_name=s.candidate.full_name if s.candidate else None, admin_name=s.admin.full_name if s.admin else None,
             is_completed=s.is_completed
         )
             
@@ -1166,7 +1164,7 @@ async def get_result(
     if s.paper:
         paper_obj = QuestionPaperNested(
             id=s.paper.id, name=s.paper.name, description=s.paper.description, 
-            admin_id=s.paper.admin_id, created_at=s.paper.created_at
+            admin_id=s.paper.adminUser, created_at=s.paper.created_at
         )
         
     # 4. Session Nested
@@ -1181,7 +1179,7 @@ async def get_result(
         max_warnings=s.max_warnings, is_suspended=s.is_suspended,
         suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
         enrollment_audio_path=s.enrollment_audio_path,
-        candidate_name=s.candidate_name, admin_name=s.admin_name,
+        candidate_name=s.candidate.full_name if s.candidate else None, admin_name=s.admin.full_name if s.admin else None,
         is_completed=s.is_completed
     )
     
@@ -1503,7 +1501,13 @@ async def create_user(
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    users = [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
+    from ..services.sentinel_users import is_sentinel_user
+    
+    users = [
+        UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) 
+        for u in session.exec(select(User)).all()
+        if not is_sentinel_user(u)
+    ]
     return ApiResponse(
         status_code=200,
         data=users,
@@ -1684,30 +1688,32 @@ async def delete_user(
             )
     
     # Preserve user info in related records before deletion
-    # 1. Update interviews where user is admin
+    # Use sentinel placeholder users instead of NULL (admin_id/candidate_id are NOT NULL)
+    from ..services.sentinel_users import get_or_create_sentinel_users
+    admin_sentinel, candidate_sentinel = get_or_create_sentinel_users(session)
+
+    # 1. Update interviews where user is admin -> point to sentinel admin
     admin_sessions = session.exec(
         select(InterviewSession).where(InterviewSession.admin_id == user_id)
     ).all()
     for interview in admin_sessions:
-        interview.admin_name = user.full_name
-        interview.admin_id = None
+        interview.admin_id = admin_sentinel.id
         session.add(interview)
-    
-    # 2. Update interviews where user is candidate
+
+    # 2. Update interviews where user is candidate -> point to sentinel candidate
     candidate_sessions = session.exec(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
     ).all()
     for interview in candidate_sessions:
-        interview.candidate_name = user.full_name
-        interview.candidate_id = None
+        interview.candidate_id = candidate_sentinel.id
         session.add(interview)
     
     # 3. Update question papers where user is admin
     papers = session.exec(
-        select(QuestionPaper).where(QuestionPaper.admin_id == user_id)
+        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
     ).all()
     for paper in papers:
-        paper.admin_id = None
+        paper.adminUser = None
         session.add(paper)
     
     # Store info for response
