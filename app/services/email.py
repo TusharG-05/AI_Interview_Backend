@@ -50,7 +50,13 @@ class EmailService:
                             "type": "text/plain",
                             "value": body_text
                         }
-                    ]
+                    ],
+                    "tracking_settings": {
+                        "click_tracking": {
+                            "enable": False,
+                            "enable_text": False
+                        }
+                    }
                 }
                 response = requests.post(url, json=payload, headers=headers)
                 if response.status_code in [202, 201, 200]:

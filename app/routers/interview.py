@@ -362,29 +362,26 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     
     if has_assignments:
         # Campaign mode: Strictly follow assigned questions
-        session_q = session_db.exec(
-            select(SessionQuestion)
-            .where(SessionQuestion.interview_id == interview_id)
-            .where(~SessionQuestion.question_id.in_(answered_ids))
-            .order_by(SessionQuestion.sort_order)
-        ).first()
+        stmt = select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)
+        if answered_ids:
+            stmt = stmt.where(~SessionQuestion.question_id.in_(answered_ids))
+        stmt = stmt.order_by(SessionQuestion.sort_order)
+        session_q = session_db.exec(stmt).first()
         question = session_q.question if session_q else None
     else:
         # Fallback: Pull from the assigned Paper (if any) or General pool
         if session_obj and session_obj.paper_id:
              # Security Fix: Strictly scope to the assigned paper
-             question = session_db.exec(
-                 select(Questions)
-                 .where(Questions.paper_id == session_obj.paper_id)
-                 .where(~Questions.id.in_(answered_ids))
-             ).first()
+             stmt = select(Questions).where(Questions.paper_id == session_obj.paper_id)
+             if answered_ids:
+                 stmt = stmt.where(~Questions.id.in_(answered_ids))
+             question = session_db.exec(stmt).first()
         else:
              # Pull only from global/orphaned pool, never from other papers
-             question = session_db.exec(
-                 select(Questions)
-                 .where(Questions.paper_id == None)
-                 .where(~Questions.id.in_(answered_ids))
-             ).first()
+             stmt = select(Questions).where(Questions.paper_id == None)
+             if answered_ids:
+                 stmt = stmt.where(~Questions.id.in_(answered_ids))
+             question = session_db.exec(stmt).first()
     
     if not question:
         return ApiResponse(
