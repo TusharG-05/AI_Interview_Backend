@@ -543,8 +543,8 @@ async def schedule_interview(
         raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
     
     # Generate Link - Must match frontend route: /interview/:token
-    from ..core.config import APP_BASE_URL
-    link = f"{APP_BASE_URL}/interview/{new_session.access_token}"
+    from ..core.config import FRONTEND_URL
+    link = f"{FRONTEND_URL}/interview/{new_session.access_token}"
     # Send Email Invitation Asynchronously (prevent UI hang without Redis)
     try:
         background_tasks.add_task(
