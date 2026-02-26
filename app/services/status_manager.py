@@ -64,7 +64,7 @@ def record_status_change(
         interview_id=interview_session.id,
         status=new_status,
         timestamp=datetime.now(timezone.utc),
-        context_data=json.dumps(metadata) if metadata else ""
+        context_data=json.dumps(metadata) if metadata else "{}"
     )
     
     # Update session current status
@@ -347,6 +347,8 @@ def get_status_summary(
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
             "enrollment_audio_path": interview_session.enrollment_audio_path,
+            "candidate_name": interview_session.candidate.full_name if interview_session.candidate else None,
+            "admin_name": interview_session.admin.full_name if interview_session.admin else None,
             "is_completed": interview_session.is_completed or False
         },
         "candidate": candidate_dict,

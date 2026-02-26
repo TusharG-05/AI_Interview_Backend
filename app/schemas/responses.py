@@ -19,16 +19,14 @@ class HistoryItem(BaseModel):
 
 class InterviewAccessResponse(BaseModel):
     interview_id: int
-    candidate: Optional[dict] = None
-    admin: Optional[dict] = None
-    paper: Optional[dict] = None
-    invite_link: Optional[str] = None
+    candidate_id: Optional[int] = None
+    admin_id: Optional[int] = None
+    paper_id: Optional[int] = None
     message: str # "START" or "WAIT"
     schedule_time: Optional[str] = None
-    duration_minutes: int = 1440
-    status: str
+    duration_minutes: Optional[int] = None
+    status: Optional[str] = None
     max_questions: Optional[int] = None
-    warning: Optional[str] = None
 
 class QuestionRead(BaseModel):
     id: int
@@ -50,11 +48,9 @@ class PaperRead(BaseModel):
 
 class SessionRead(BaseModel):
     id: int
-    admin: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     status: str
-    scheduled_at: Optional[str] = None
-    invite_link: Optional[str] = None
+    scheduled_at: str
     score: Optional[float] = None
 
 class UserRead(BaseModel):
@@ -86,12 +82,11 @@ class Token(BaseModel):
 class InterviewSessionDetail(BaseModel):
     id: int
     access_token: str
-    invite_link: Optional[str] = None
     admin_id: Optional[int] = None
     candidate_id: Optional[int] = None
     paper_id: int
-    schedule_time: Optional[str] = None
-    duration_minutes: int = 1440
+    schedule_time: str
+    duration_minutes: int
     max_questions: Optional[int] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
@@ -99,9 +94,9 @@ class InterviewSessionDetail(BaseModel):
     total_score: Optional[float] = None
     current_status: Optional[str] = None
     last_activity: Optional[str] = None
-    warning_count: int = 0
-    max_warnings: int = 3
-    is_suspended: bool = False
+    warning_count: int
+    max_warnings: int
+    is_suspended: bool
     suspension_reason: Optional[str] = None
     suspended_at: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
@@ -112,6 +107,7 @@ class InterviewLinkResponse(BaseModel):
     admin: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     access_token: str
+    link: str
     scheduled_at: str
     warning: Optional[str] = None
 
@@ -121,16 +117,15 @@ class InterviewDetailRead(BaseModel):
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     paper_id: int
     paper_name: str
-    schedule_time: Optional[str] = None
-    duration_minutes: int = 1440
+    schedule_time: str
+    duration_minutes: int
     status: str
     total_score: Optional[float] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     access_token: str
-    invite_link: Optional[str] = None
-    response_count: int = 0
-    proctoring_event_count: int = 0
+    response_count: int
+    proctoring_event_count: int
     enrollment_audio_url: Optional[str] = None
 
 class UserDetailRead(BaseModel):
@@ -198,10 +193,10 @@ class ViolationSummary(BaseModel):
 
 class WarningInfo(BaseModel):
     """Warning system information"""
-    total_warnings: int = 0
-    warnings_remaining: int = 3
-    max_warnings: int = 3
-    violations: List[ViolationSummary] = []
+    total_warnings: int
+    warnings_remaining: int
+    max_warnings: int
+    violations: List[ViolationSummary]
 
 class ProgressInfo(BaseModel):
     """Interview progress information"""
@@ -227,9 +222,9 @@ class LiveStatusItem(BaseModel):
     interview: InterviewSessionDetail # InterviewSession data
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     current_status: Optional[str] = None
-    warning_count: int = 0
-    warnings_remaining: int = 3
-    is_suspended: bool = False
+    warning_count: int
+    warnings_remaining: int
+    is_suspended: bool
     last_activity: Optional[str] = None
-    progress_percent: float = 0.0  # Calculated as (answered/total) * 100
+    progress_percent: float  # Calculated as (answered/total) * 100
 

@@ -125,13 +125,24 @@ class TestTotalScoreInResultDetail:
         token = create_access_token(data={"sub": admin.email})
         headers = {"Authorization": f"Bearer {token}"}
 
-        paper = QuestionPaper(name="No Score Paper", admin_id=admin.id)
+        candidate = User(
+            email="candidate_none@test.com",
+            full_name="Candidate None",
+            password_hash=get_password_hash("password"),
+            role=UserRole.CANDIDATE,
+        )
+        session.add(candidate)
+        session.commit()
+        session.refresh(candidate)
+
+        paper = QuestionPaper(name="No Score Paper", adminUser=admin.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)
 
         interview = InterviewSession(
             admin_id=admin.id,
+            candidate_id=candidate.id,
             paper_id=paper.id,
             schedule_time=datetime.now(timezone.utc) - timedelta(hours=1),
             duration_minutes=60,
@@ -150,9 +161,9 @@ class TestTotalScoreInResultDetail:
         response = client.get(f"/api/admin/results/{interview.id}", headers=headers)
         assert response.status_code == 200, response.text
         data = response.json()["data"]
-        # Default is None per db model
-        assert data["total_score"] is None, (
-            f"Expected total_score=None (default), got {data['total_score']}"
+        # Default is 0.0 per db model
+        assert data["total_score"] == 0.0, (
+            f"Expected total_score=0.0 (default), got {data['total_score']}"
         )
 
     def test_total_score_in_nested_interview_object(self, session, client):
@@ -175,13 +186,24 @@ class TestTotalScoreInResultDetail:
         token2 = create_access_token(data={"sub": admin2.email})
         headers2 = {"Authorization": f"Bearer {token2}"}
 
-        paper = QuestionPaper(name="Nested Score Paper", admin_id=admin2.id)
+        paper = QuestionPaper(name="Nested Score Paper", adminUser=admin2.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)
 
+        candidate2 = User(
+            email="candidate_nested@test.com",
+            full_name="Candidate Nested",
+            password_hash=get_password_hash("password"),
+            role=UserRole.CANDIDATE,
+        )
+        session.add(candidate2)
+        session.commit()
+        session.refresh(candidate2)
+
         interview = InterviewSession(
             admin_id=admin2.id,
+            candidate_id=candidate2.id,
             paper_id=paper.id,
             schedule_time=datetime.now(timezone.utc) - timedelta(hours=1),
             duration_minutes=60,
