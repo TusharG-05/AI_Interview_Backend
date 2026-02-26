@@ -428,6 +428,8 @@ async def submit_answer_audio(
     interview_id: int = Form(...),
     question_id: int = Form(...),
     audio: UploadFile = File(...),
+    feedback: Optional[str] = Form(None),
+    score: Optional[float] = Form(None),
     session_db: Session = Depends(get_session)
 ):
     from ..services.status_manager import update_last_activity
@@ -467,7 +469,9 @@ async def submit_answer_audio(
     answer = Answers(
         interview_result_id=result.id, 
         question_id=question_id, 
-        audio_path=audio_path
+        audio_path=audio_path,
+        feedback=feedback or "",
+        score=score if score is not None else 0.0
     )
     session_db.add(answer)
     
@@ -477,7 +481,11 @@ async def submit_answer_audio(
     session_db.commit()
     return ApiResponse(
         status_code=200,
-        data={"status": "saved"},
+        data={
+            "status": "saved",
+            "feedback": answer.feedback,
+            "score": answer.score
+        },
         message="Audio answer submitted successfully"
     )
 
@@ -486,11 +494,14 @@ async def submit_answer_text(
     interview_id: int = Form(...),
     question_id: int = Form(...),
     answer_text: str = Form(...),
+    feedback: Optional[str] = Form(None),
+    score: Optional[float] = Form(None),
     session_db: Session = Depends(get_session)
 ):
     """
     Submits a text answer for a question.
-    Saves the response but delays evaluation until the interview finishes.
+    Saves the response. If feedback and score are provided (pre-evaluated),
+    background processing will skip redundant evaluation.
     """
     # Verify session exists
     session = session_db.get(InterviewSession, interview_id)
@@ -514,13 +525,21 @@ async def submit_answer_text(
     answer = Answers(
         interview_result_id=result.id,
         question_id=question_id,
-        candidate_answer=answer_text
+        candidate_answer=answer_text,
+        feedback=feedback or "",
+        score=score if score is not None else 0.0
     )
     session_db.add(answer)
     session_db.commit()
+    
+    # Return the saved feedback and score in the response
     return ApiResponse(
         status_code=200,
-        data={"status": "saved"},
+        data={
+            "status": "saved",
+            "feedback": answer.feedback,
+            "score": answer.score
+        },
         message="Text answer submitted successfully"
     )
 
