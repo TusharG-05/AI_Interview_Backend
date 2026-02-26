@@ -1072,7 +1072,8 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         admin_obj = None
         if s.admin:
             admin_obj = UserNested(
-                id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, role=s.admin.role.value,
+                id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
+                role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
                 profile_image=s.admin.profile_image
             )
         # admin was deleted, no fallback needed
@@ -1081,7 +1082,8 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         candidate_obj = None
         if s.candidate:
             candidate_obj = UserNested(
-                id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, role=s.candidate.role.value,
+                id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
+                role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
                  profile_image=s.candidate.profile_image
             )
             
@@ -1173,16 +1175,24 @@ async def get_result(
     admin_obj = None
     if s.admin:
         admin_obj = UserNested(
-            id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, role=s.admin.role.value,
-            profile_image=s.admin.profile_image 
+            id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
+            role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
+            profile_image=s.admin.profile_image,
+            access_token=s.admin.access_token,
+            resume_text=s.admin.resume_text,
+            face_embedding=s.admin.face_embedding
         )
          
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
         candidate_obj = UserNested(
-            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, role=s.candidate.role.value,
-             profile_image=s.candidate.profile_image
+            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
+            role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
+            profile_image=s.candidate.profile_image,
+            access_token=s.candidate.access_token,
+            resume_text=s.candidate.resume_text,
+            face_embedding=s.candidate.face_embedding
         )
         
     # 3. Paper
