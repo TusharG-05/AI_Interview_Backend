@@ -45,7 +45,7 @@ def upgrade() -> None:
                 "email": ADMIN_DELETED_EMAIL,
                 "full_name": "Deleted Admin",
                 "password_hash": "__sentinel__",
-                "role": "admin"
+                "role": "ADMIN"
             }
         )
         admin_row = conn.execute(
@@ -68,7 +68,7 @@ def upgrade() -> None:
                 "email": CANDIDATE_DELETED_EMAIL,
                 "full_name": "Deleted Candidate",
                 "password_hash": "__sentinel__",
-                "role": "candidate"
+                "role": "CANDIDATE"
             }
         )
         candidate_row = conn.execute(

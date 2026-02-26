@@ -5,29 +5,29 @@ from enum import Enum
 import uuid
 
 class UserRole(str, Enum):
-    ADMIN = "admin"
-    SUPER_ADMIN = "super_admin"
-    CANDIDATE = "candidate"
+    ADMIN = "ADMIN"
+    SUPER_ADMIN = "SUPER_ADMIN"
+    CANDIDATE = "CANDIDATE"
 
 class InterviewStatus(str, Enum):
-    SCHEDULED = "scheduled"
-    LIVE = "live"
-    COMPLETED = "completed"
-    EXPIRED = "expired"
-    CANCELLED = "cancelled"
+    SCHEDULED = "SCHEDULED"
+    LIVE = "LIVE"
+    COMPLETED = "COMPLETED"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
 
 class CandidateStatus(str, Enum):
     """Tracks detailed lifecycle status of a candidate through the interview process"""
-    INVITED = "invited"  # Email sent
-    LINK_ACCESSED = "link_accessed"  # Candidate opened interview link
-    AUTHENTICATED = "authenticated"  # Candidate logged in (future use)
-    SELFIE_UPLOADED = "selfie_uploaded" # Selfie verification uploaded
-    ENROLLMENT_STARTED = "enrollment_started"  # Selfie/enrollment in progress
-    ENROLLMENT_COMPLETED = "enrollment_completed"  # Ready to start interview
-    INTERVIEW_ACTIVE = "interview_active"  # Currently answering questions
-    INTERVIEW_PAUSED = "interview_paused"  # Disconnected/paused
-    INTERVIEW_COMPLETED = "interview_completed"  # Successfully finished
-    SUSPENDED = "suspended"  # Suspended due to violations
+    INVITED = "INVITED"  # Email sent
+    LINK_ACCESSED = "LINK_ACCESSED"  # Candidate opened interview link
+    AUTHENTICATED = "AUTHENTICATED"  # Candidate logged in (future use)
+    SELFIE_UPLOADED = "SELFIE_UPLOADED" # Selfie verification uploaded
+    ENROLLMENT_STARTED = "ENROLLMENT_STARTED"  # Selfie/enrollment in progress
+    ENROLLMENT_COMPLETED = "ENROLLMENT_COMPLETED"  # Ready to start interview
+    INTERVIEW_ACTIVE = "INTERVIEW_ACTIVE"  # Currently answering questions
+    INTERVIEW_PAUSED = "INTERVIEW_PAUSED"  # Disconnected/paused
+    INTERVIEW_COMPLETED = "INTERVIEW_COMPLETED"  # Successfully finished
+    SUSPENDED = "SUSPENDED"  # Suspended due to violations
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

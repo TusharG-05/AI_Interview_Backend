@@ -479,7 +479,13 @@ async def schedule_interview(
         schedule_time=schedule_dt,
         duration_minutes=schedule_data.duration_minutes or 1440,
         max_questions=schedule_data.max_questions or 0,
-        status=InterviewStatus.SCHEDULED
+        status=InterviewStatus.SCHEDULED,
+        current_status=CandidateStatus.INVITED if "CandidateStatus" in globals() else "INVITED",
+        last_activity=datetime.utcnow(),
+        warning_count=0,
+        max_warnings=3,
+        is_suspended=False,
+        is_completed=False
     )
     
     session.add(new_session)
