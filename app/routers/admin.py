@@ -10,7 +10,7 @@ from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 from fastapi_limiter.depends import RateLimiter
@@ -1106,7 +1106,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             max_questions=s.max_questions,
             start_time=s.start_time,
             end_time=s.end_time,
-            status=status,
+            status=s.status.value if hasattr(s.status, 'value') else str(s.status),
             total_score=s.total_score,
             current_status=s.current_status,
             last_activity=s.last_activity,
