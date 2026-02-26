@@ -7,7 +7,11 @@ class UserNested(BaseModel):
     email: str
     full_name: str
     role: str
+    access_token: Optional[str] = None
+    resume_text: Optional[str] = None
     profile_image: Optional[str] = None
+    profile_image_bytes: Optional[bytes] = None
+    face_embedding: Optional[str] = None
 
 class QuestionPaperNested(BaseModel):
     id: int
