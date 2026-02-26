@@ -10,7 +10,7 @@ from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 from fastapi_limiter.depends import RateLimiter
@@ -114,7 +114,7 @@ async def create_paper(
         session.refresh(new_paper)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to create paper")
+        raise HTTPException(status_code=500, detail=f"Failed to create paper: {str(e)}")
     paper_read = PaperRead(
         id=new_paper.id, name=new_paper.name, description=new_paper.description, 
         question_count=0, questions=[], created_at=new_paper.created_at.isoformat(),
@@ -177,7 +177,7 @@ async def update_paper(
         session.refresh(paper)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update paper")
+        raise HTTPException(status_code=500, detail=f"Failed to update paper: {str(e)}")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions),
@@ -219,7 +219,7 @@ async def delete_paper(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete paper")
+        raise HTTPException(status_code=500, detail=f"Failed to delete paper: {str(e)}")
     return ApiResponse(
         status_code=200,
         data={},
@@ -254,7 +254,7 @@ async def add_question_to_paper(
         session.refresh(new_q)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to create question")
+        raise HTTPException(status_code=500, detail=f"Failed to create question: {str(e)}")
     return ApiResponse(
         status_code=201,
         data=new_q,
@@ -326,7 +326,7 @@ async def upload_document(
             session.commit()
         except Exception as e:
             session.rollback()
-            raise HTTPException(status_code=500, detail="Failed to upload questions")
+            raise HTTPException(status_code=500, detail=f"Failed to upload questions: {str(e)}")
         return ApiResponse(
             status_code=200,
             data={"questions_count": len(extracted_data)},
@@ -348,7 +348,7 @@ async def delete_question(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete question")
+        raise HTTPException(status_code=500, detail=f"Failed to delete question: {str(e)}")
     return ApiResponse(
         status_code=200,
         data={},
@@ -430,7 +430,7 @@ async def update_question(
         session.refresh(q)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update question")
+        raise HTTPException(status_code=500, detail=f"Failed to update question: {str(e)}")
     return ApiResponse(
         status_code=200,
         data=q,
@@ -473,7 +473,7 @@ async def schedule_interview(
         raise HTTPException(status_code=400, detail="Invalid schedule_time format. ISO 8601 expected.")
 
     new_session = InterviewSession(
-        admin_id=current_user.id,
+        adminUser=current_user.id,
         candidate_id=schedule_data.candidate_id,
         paper_id=schedule_data.paper_id,
         schedule_time=schedule_dt,
@@ -488,7 +488,7 @@ async def schedule_interview(
         session.refresh(new_session)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to schedule interview")
+        raise HTTPException(status_code=500, detail=f"Failed to schedule interview: {str(e)}")
     
     # Track initial status - INVITED
     from ..services.status_manager import record_status_change
@@ -551,10 +551,11 @@ async def schedule_interview(
         session.refresh(new_session)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to assign questions")
+        raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
     
     # Generate Link - Must match frontend route: /interview/:token
-    link = f"{FRONTEND_URL}/interview/{new_session.access_token}"
+    from ..core.config import APP_BASE_URL
+    link = f"{APP_BASE_URL}/interview/{new_session.access_token}"
     # Send Email Invitation Asynchronously (prevent UI hang without Redis)
     try:
         background_tasks.add_task(
@@ -580,22 +581,21 @@ async def schedule_interview(
     interview_detail = InterviewSessionDetail(
         id=new_session.id,
         access_token=new_session.access_token,
-        invite_link=link,
         admin_id=new_session.admin_id,
         candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
         schedule_time=format_iso_datetime(new_session.schedule_time),
-        duration_minutes=new_session.duration_minutes or 1440,
+        duration_minutes=new_session.duration_minutes,
         max_questions=new_session.max_questions,
         start_time=format_iso_datetime(new_session.start_time),
         end_time=format_iso_datetime(new_session.end_time),
-        status=new_session.status.value if hasattr(new_session.status, 'value') else str(new_session.status),
+        status=new_session.status.value,
         total_score=new_session.total_score,
         current_status=new_session.current_status or None,
         last_activity=format_iso_datetime(new_session.last_activity),
-        warning_count=new_session.warning_count or 0,
-        max_warnings=new_session.max_warnings or 3,
-        is_suspended=new_session.is_suspended or False,
+        warning_count=new_session.warning_count,
+        max_warnings=new_session.max_warnings,
+        is_suspended=new_session.is_suspended,
         suspension_reason=new_session.suspension_reason,
         suspended_at=format_iso_datetime(new_session.suspended_at),
         enrollment_audio_path=new_session.enrollment_audio_path,
@@ -607,6 +607,7 @@ async def schedule_interview(
         admin=admin_dict,
         candidate=candidate_dict,
         access_token=new_session.access_token,
+        link=link,
         scheduled_at=format_iso_datetime(new_session.schedule_time),
         warning=warning
     )
@@ -642,9 +643,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             id=s.id,
             admin=admin_dict,
             candidate=candidate_dict,
-            status=s.status.value if hasattr(s.status, 'value') else str(s.status),
+            status=s.status.value,
             scheduled_at=format_iso_datetime(s.schedule_time),
-            invite_link=f"{FRONTEND_URL}/interview/{s.access_token}",
             score=s.total_score
         ))
     return ApiResponse(
@@ -696,26 +696,25 @@ async def get_live_status_dashboard(
         # Serialize candidate
         candidate_dict = serialize_user(interview_session.candidate)
         
-            # Serialize interview
+        # Serialize interview
         interview_dict = {
             "id": interview_session.id,
             "access_token": interview_session.access_token,
-            "invite_link": f"{FRONTEND_URL}/interview/{interview_session.access_token}",
             "admin_id": interview_session.admin_id,
             "candidate_id": interview_session.candidate_id,
             "paper_id": interview_session.paper_id,
             "schedule_time": format_iso_datetime(interview_session.schedule_time),
-            "duration_minutes": interview_session.duration_minutes or 1440,
+            "duration_minutes": interview_session.duration_minutes,
             "max_questions": interview_session.max_questions,
             "start_time": format_iso_datetime(interview_session.start_time),
             "end_time": format_iso_datetime(interview_session.end_time),
-            "status": interview_session.status.value if hasattr(interview_session.status, 'value') else str(interview_session.status),
+            "status": interview_session.status.value,
             "total_score": interview_session.total_score,
             "current_status": interview_session.current_status or None,
             "last_activity": format_iso_datetime(interview_session.last_activity),
-            "warning_count": interview_session.warning_count or 0,
-            "max_warnings": interview_session.max_warnings or 3,
-            "is_suspended": interview_session.is_suspended or False,
+            "warning_count": interview_session.warning_count,
+            "max_warnings": interview_session.max_warnings,
+            "is_suspended": interview_session.is_suspended,
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": format_iso_datetime(interview_session.suspended_at),
             "enrollment_audio_path": interview_session.enrollment_audio_path,
@@ -780,14 +779,13 @@ async def get_interview(
         candidate=candidate_dict,
         paper_id=interview_session.paper_id,
         paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
-        schedule_time=interview_session.schedule_time.isoformat() if interview_session.schedule_time else None,
-        duration_minutes=interview_session.duration_minutes or 1440,
-        status=interview_session.status.value if hasattr(interview_session.status, 'value') else str(interview_session.status),
+        schedule_time=interview_session.schedule_time.isoformat(),
+        duration_minutes=interview_session.duration_minutes,
+        status=interview_session.status.value,
         total_score=interview_session.total_score,
         start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
         end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
         access_token=interview_session.access_token,
-        invite_link=f"{FRONTEND_URL}/interview/{interview_session.access_token}",
         response_count=len(interview_session.result.answers) if interview_session.result else 0,
         proctoring_event_count=len(interview_session.proctoring_events),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
@@ -910,7 +908,7 @@ async def update_interview(
         session.refresh(interview_session)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update interview")
+        raise HTTPException(status_code=500, detail=f"Failed to update interview: {str(e)}")
     
     # Return updated interview details
     admin_dict = serialize_user(interview_session.admin, fallback_role="admin")
@@ -929,7 +927,6 @@ async def update_interview(
         start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
         end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
         access_token=interview_session.access_token,
-        invite_link=f"{FRONTEND_URL}/interview/{interview_session.access_token}",
         response_count=len(interview_session.result.answers) if interview_session.result else 0,
         proctoring_event_count=len(interview_session.proctoring_events),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
@@ -980,7 +977,7 @@ async def delete_interview(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete interview")
+        raise HTTPException(status_code=500, detail=f"Failed to delete interview: {str(e)}")
     
     return ApiResponse(
         status_code=200,
@@ -1091,13 +1088,6 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             )
             
         # 4. Session Nested
-        # Determine current status mapped to UI requirements
-        status = s.status.value
-        if s.status == InterviewStatus.LIVE:
-            status = "In Progress"
-        elif s.status == InterviewStatus.SCHEDULED:
-            status = "Invited"
-
         session_nested = InterviewSessionNested(
             id=s.id,
             access_token=s.access_token,
@@ -1201,7 +1191,7 @@ async def get_result(
     session_nested = InterviewSessionNested(
         id=s.id, access_token=s.access_token,
         admin_user=admin_obj, candidate_user=candidate_obj, question_paper=paper_obj,
-        schedule_time=s.schedule_time, duration_minutes=s.duration_minutes or 1440,
+        schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
         status=s.status.value if hasattr(s.status, 'value') else str(s.status),
         total_score=s.total_score,
@@ -1357,9 +1347,8 @@ async def update_result(
         session.refresh(interview_session)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update proctor settings")
+        raise HTTPException(status_code=500, detail=f"Failed to update proctor settings: {str(e)}")
     
-    # Return updated result using GET logic
     # Return updated result using GET logic
     updated_result = await get_result(interview_id, current_user, session)
     updated_result.message = "Result updated successfully"
@@ -1388,7 +1377,7 @@ async def delete_result(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to reset evaluation")
+        raise HTTPException(status_code=500, detail=f"Failed to reset evaluation: {str(e)}")
     
     return ApiResponse(
         status_code=200,
@@ -1516,7 +1505,7 @@ async def create_user(
         session.refresh(new_user)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to create user")
+        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
     
     return ApiResponse(
         status_code=201,
@@ -1531,7 +1520,10 @@ async def create_user(
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    users = [UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) for u in session.exec(select(User)).all()]
+    users = [
+        UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) 
+        for u in session.exec(select(User)).all()
+    ]
     return ApiResponse(
         status_code=200,
         data=users,
@@ -1653,7 +1645,7 @@ async def update_user(
         session.refresh(user)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update user")
+        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
     
     # Return updated user details
     created_interviews = session.exec(
@@ -1680,13 +1672,58 @@ async def update_user(
         message="User updated successfully"
     )
 
+@router.get("/users/{user_id}/check-delete", response_model=ApiResponse[dict])
+async def check_delete_user(
+    user_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Pre-deletion dry-run check. Returns whether cascade-deleting this user
+    will remove related data (interviews, question papers).
+    """
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    interviews_as_admin = len(session.exec(
+        select(InterviewSession).where(InterviewSession.admin_id == user_id)
+    ).all())
+    interviews_as_candidate = len(session.exec(
+        select(InterviewSession).where(InterviewSession.candidate_id == user_id)
+    ).all())
+    question_papers = len(session.exec(
+        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
+    ).all())
+
+    has_related_data = (interviews_as_admin + interviews_as_candidate + question_papers) > 0
+
+    return ApiResponse(
+        status_code=200,
+        data={
+            "user_id": user_id,
+            "email": user.email,
+            "role": user.role.value,
+            "has_related_data": has_related_data,
+            "related_data": {
+                "interviews_as_admin": interviews_as_admin,
+                "interviews_as_candidate": interviews_as_candidate,
+                "question_papers": question_papers
+            }
+        },
+        message="Pre-deletion check completed"
+    )
+
 @router.delete("/users/{user_id}", response_model=ApiResponse[dict])
 async def delete_user(
     user_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Hard delete a user while preserving interview history by setting foreign keys to NULL."""
+    """
+    Hard delete a user. All related interview sessions, results, answers,
+    proctoring events, and question papers are cascade-deleted by the database.
+    """
     user = session.get(User, user_id)
     
     if not user:
@@ -1711,42 +1748,38 @@ async def delete_user(
                 detail="Cannot delete the last Super Admin. Promote another user first."
             )
     
-    # Preserve user info in related records before deletion
-    # 1. Update interviews where user is admin
-    admin_sessions = session.exec(
+    # Collect counts for response before deletion
+    interviews_as_admin = len(session.exec(
         select(InterviewSession).where(InterviewSession.admin_id == user_id)
-    ).all()
-    for interview in admin_sessions:
-        interview.admin_id = None
-        session.add(interview)
+    ).all())
     
-    # 2. Update interviews where user is candidate
-    candidate_sessions = session.exec(
+    interviews_as_candidate = len(session.exec(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
-    ).all()
-    for interview in candidate_sessions:
-        interview.candidate_id = None
-        session.add(interview)
+    ).all())
     
-    # 3. Update question papers where user is admin
-    papers = session.exec(
+    papers_count = len(session.exec(
         select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
-    ).all()
-    for paper in papers:
-        paper.adminUser = None
-        session.add(paper)
+    ).all())
     
     # Store info for response
     user_email = user.email
     user_name = user.full_name
     
-    # Hard delete: user is permanently removed, but related data is preserved
+    # Delete question papers owned by this user (cascade deletes their questions)
+    papers = session.exec(
+        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
+    ).all()
+    for paper in papers:
+        session.delete(paper)
+
+    # Hard delete: user is permanently removed
+    # DB ON DELETE CASCADE handles InterviewSession → Result → Answers, etc.
     session.delete(user)
     try:
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete user")
+        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
     
     return ApiResponse(
         status_code=200,
@@ -1754,10 +1787,10 @@ async def delete_user(
             "user_id": user_id,
             "email": user_email,
             "full_name": user_name,
-            "interviews_preserved": len(admin_sessions) + len(candidate_sessions),
-            "papers_preserved": len(papers)
+            "interviews_deleted": interviews_as_admin + interviews_as_candidate,
+            "papers_deleted": papers_count
         },
-        message="User deleted successfully. Interview history and question papers preserved."
+        message="User and all associated data deleted successfully."
     )
 
 @router.post("/shutdown", response_model=ApiResponse[dict])

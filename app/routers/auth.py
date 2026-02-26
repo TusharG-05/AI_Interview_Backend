@@ -120,9 +120,10 @@ async def register(
     - First user can register freely (Bootstrap).
     - Subsequent users must be registered by an Admin.
     """
-    # Bootstrap Check
-    user_count = len(session.exec(select(User)).all())
-    if user_count > 0:
+    # Bootstrap Check - first user can register freely
+    all_user_count = len(session.exec(select(User)).all())
+    
+    if all_user_count > 0:
         # Require Admin Auth
         if not current_user or current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
             raise HTTPException(

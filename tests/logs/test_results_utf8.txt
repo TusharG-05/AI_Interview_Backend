@@ -1,0 +1,316 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\Sameer\OneDrive\Desktop\AI_Interview_Backend\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Sameer\OneDrive\Desktop\AI_Interview_Backend
+configfile: pytest.ini
+plugins: anyio-4.12.1, langsmith-0.6.6, asyncio-1.3.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 46 items
+
+tests/integration/test_admin_router.py::test_get_users_as_admin PASSED   [  2%]
+tests/integration/test_admin_router.py::test_get_users_unauthorized PASSED [  4%]
+tests/integration/test_auth_router.py::test_register_bootstrap_user PASSED [  6%]
+tests/integration/test_auth_router.py::test_login_success PASSED         [  8%]
+tests/integration/test_auth_router.py::test_login_failure PASSED         [ 10%]
+tests/integration/test_candidate_router.py::test_upload_selfie_success PASSED [ 13%]
+tests/integration/test_candidate_router.py::test_get_history PASSED      [ 15%]
+tests/integration/test_flow.py::test_full_interview_lifecycle FAILED     [ 17%]
+tests/integration/test_response_format.py::test_list_papers_response_format PASSED [ 19%]
+tests/integration/test_response_format.py::test_get_user_response_format PASSED [ 21%]
+tests/integration/test_response_format.py::test_candidate_history_response_format PASSED [ 23%]
+tests/integration/test_response_format.py::test_system_status_response_format PASSED [ 26%]
+tests/test_health_check.py::test_app_title PASSED                        [ 28%]
+tests/test_health_check.py::test_root_endpoint PASSED                    [ 30%]
+tests/test_health_check.py::test_database_fixture PASSED                 [ 32%]
+tests/unit/test_auth.py::test_register_user PASSED                       [ 34%]
+tests/unit/test_auth.py::test_login_success PASSED                       [ 36%]
+tests/unit/test_auth.py::test_login_failure PASSED                       [ 39%]
+tests/unit/test_auth.py::test_get_me PASSED                              [ 41%]
+tests/unit/test_cloud_robustness.py::test_audio_service_modal_fallback_to_hf PASSED [ 43%]
+tests/unit/test_cloud_robustness.py::test_audio_service_skips_local_on_cloud PASSED [ 45%]
+tests/unit/test_cloud_robustness.py::test_face_recognizer_skips_build_on_cloud FAILED [ 47%]
+tests/unit/test_cloud_robustness.py::test_llm_fallback_to_hf PASSED      [ 50%]
+tests/unit/test_interview.py::test_create_interview_session PASSED       [ 52%]
+tests/unit/test_interview.py::test_access_interview_invalid_token PASSED [ 54%]
+tests/unit/test_interview.py::test_access_interview_valid PASSED         [ 56%]
+tests/unit/test_interview.py::test_start_session PASSED                  [ 58%]
+tests/unit/test_interview.py::test_submit_answer_text PASSED             [ 60%]
+tests/unit/test_interview.py::test_evaluate_answer_modal_fallback FAILED [ 63%]
+tests/unit/test_services.py::test_modal_evaluator_success PASSED         [ 65%]
+tests/unit/test_services.py::test_modal_failure_hf_fallback PASSED       [ 67%]
+tests/unit/test_services.py::test_all_services_failure_ollama_fallback PASSED [ 69%]
+tests/unit/test_services_audio.py::test_convert_to_wav_success PASSED    [ 71%]
+tests/unit/test_services_audio.py::test_calculate_energy PASSED          [ 73%]
+tests/unit/test_services_audio.py::test_convert_to_wav_failure PASSED    [ 76%]
+tests/unit/test_services_interview.py::test_placeholder_service_logic PASSED [ 78%]
+tests/unit/test_services_status_manager.py::test_record_status_change PASSED [ 80%]
+tests/unit/test_services_status_manager.py::test_add_violation_warning PASSED [ 82%]
+tests/unit/test_services_status_manager.py::test_add_violation_critical PASSED [ 84%]
+tests/unit/test_services_status_manager.py::test_max_warnings_suspension PASSED [ 86%]
+tests/unit/test_services_status_manager.py::test_check_and_suspend_manual PASSED [ 89%]
+tests/unit/test_total_score.py::TestTotalScoreInResultDetail::test_total_score_returned_correctly PASSED [ 91%]
+tests/unit/test_total_score.py::TestTotalScoreInResultDetail::test_total_score_none_when_not_processed FAILED [ 93%]
+tests/unit/test_total_score.py::TestTotalScoreInResultDetail::test_total_score_in_nested_interview_object PASSED [ 95%]
+tests/unit/test_total_score.py::TestTotalScoreInResultBrief::test_total_score_in_brief_list PASSED [ 97%]
+tests/unit/test_total_score.py::TestTotalScoreInResultBrief::test_zero_score_not_filtered_out PASSED [100%]
+
+================================== FAILURES ===================================
+________________________ test_full_interview_lifecycle ________________________
+
+client = <starlette.testclient.TestClient object at 0x0000027AC73ED590>
+session = <sqlmodel.orm.session.Session object at 0x0000027AC739B7D0>
+auth_headers = {'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0QGV4YW1wbGUuY29tIiwiZXhwIjoxNzcyMDA2MTQ4fQ.FX6xXWtp-CZ09tGNs7tHikArHeVHdDXXyYCvUpfUZfA'}
+
+    def test_full_interview_lifecycle(client, session, auth_headers):
+        """
+        Test the complete flow:
+        1. Admin creates paper & session (simulated via DB)
+        2. Candidate accesses link
+        3. Candidate starts session (uploads enrollment)
+        4. Candidate fetches next question
+        5. Candidate submits answer (audio)
+        6. Candidate finishes session
+        """
+    
+        # --- 1. SETUP DATA ---
+        from app.models.db_models import QuestionPaper, InterviewSession, InterviewStatus, Questions, CandidateStatus
+        from app.auth.security import create_access_token
+    
+        # Create Paper
+        paper = QuestionPaper(name="Integration Paper")
+        session.add(paper)
+        session.commit()
+    
+        # Create Question
+        q1 = Questions(paper_id=paper.id, content="Intro Question", response_type="audio")
+        session.add(q1)
+        session.commit()
+    
+        # Create Session
+        interview = InterviewSession(
+            paper_id=paper.id,
+            schedule_time=datetime.now(timezone.utc) - timedelta(minutes=5),
+            duration_minutes=60,
+            status=InterviewStatus.SCHEDULED,
+            current_status=CandidateStatus.INVITED
+        )
+        session.add(interview)
+        session.commit()
+    
+        # --- 2. ACCESS LINK ---
+        response = client.get(f"/api/interview/access/{interview.access_token}")
+        assert response.status_code == 200
+        assert response.json()["data"]["message"] == "START"
+    
+        session.refresh(interview)
+        assert interview.current_status == CandidateStatus.LINK_ACCESSED
+    
+        # --- 3. START SESSION ---
+        # Mock Audio Service
+        with patch("app.services.audio.AudioService.save_audio_blob"), \
+             patch("app.services.audio.AudioService.calculate_energy", return_value=80), \
+             patch("app.services.audio.AudioService.cleanup_audio"):
+    
+            files = {"enrollment_audio": ("enroll.wav", b"riff-wave-header...", "audio/wav")}
+            response = client.post(f"/api/interview/start-session/{interview.id}", files=files)
+            assert response.status_code == 200
+            assert response.json()["data"]["status"] == "LIVE"
+    
+            session.refresh(interview)
+            assert interview.status == InterviewStatus.LIVE
+            assert interview.current_status == CandidateStatus.ENROLLMENT_COMPLETED
+    
+        # --- 4. GET NEXT QUESTION ---
+        # Mock TTS for question reading
+        with patch("app.services.audio.AudioService.text_to_speech"):
+            response = client.get(f"/api/interview/next-question/{interview.id}")
+            assert response.status_code == 200
+            data = response.json()["data"]
+            assert data["question_id"] == q1.id
+    
+            session.refresh(interview)
+            assert interview.current_status == CandidateStatus.INTERVIEW_ACTIVE
+    
+        # --- 5. SUBMIT ANSWER ---
+        with patch("app.services.audio.AudioService.save_audio_blob"):
+            files = {
+                "audio": ("answer.wav", b"answer-audio", "audio/wav")
+            }
+            data = {
+                "interview_id": interview.id,
+                "question_id": q1.id
+            }
+            response = client.post("/api/interview/submit-answer-audio", data=data, files=files)
+            assert response.status_code == 200
+    
+            # Verify Answer Saved
+            from app.models.db_models import Answers
+            assert session.query(Answers).count() == 1
+    
+        # --- 6. FINISH SESSION ---
+>       with patch("app.routers.interview.process_session_results_unified") as mock_process:
+
+tests\integration\test_flow.py:92: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\..\..\AppData\Local\Programs\Python\Python311\Lib\unittest\mock.py:1446: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <unittest.mock._patch object at 0x0000027AC7202690>
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+>           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: <module 'app.routers.interview' from 'C:\\Users\\Sameer\\OneDrive\\Desktop\\AI_Interview_Backend\\app\\routers\\interview.py'> does not have the attribute 'process_session_results_unified'
+
+..\..\..\AppData\Local\Programs\Python\Python311\Lib\unittest\mock.py:1419: AttributeError
+__________________ test_face_recognizer_skips_build_on_cloud __________________
+
+mock_getenv = <MagicMock name='getenv' id='2726373455760'>
+
+    @patch("app.services.face.os.getenv")
+    def test_face_recognizer_skips_build_on_cloud(mock_getenv):
+        mock_getenv.side_effect = lambda k, default=None: {
+            "SPACE_ID": "test_space"
+        }.get(k, default)
+    
+        with patch("deepface.DeepFace.build_model") as mock_build:
+            recognizer = FaceRecognizer()
+>           mock_build.assert_not_called()
+
+tests\unit\test_cloud_robustness.py:62: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <MagicMock name='build_model' id='2726373396240'>
+
+    def assert_not_called(self):
+        """assert that the mock was never called.
+        """
+        if self.call_count != 0:
+            msg = ("Expected '%s' to not have been called. Called %s times.%s"
+                   % (self._mock_name or 'mock',
+                      self.call_count,
+                      self._calls_repr()))
+>           raise AssertionError(msg)
+E           AssertionError: Expected 'build_model' to not have been called. Called 1 times.
+E           Calls: [call('SFace')].
+
+..\..\..\AppData\Local\Programs\Python\Python311\Lib\unittest\mock.py:900: AssertionError
+_____________________ test_evaluate_answer_modal_fallback _____________________
+
+session = <sqlmodel.orm.session.Session object at 0x0000027AC852BB90>
+client = <starlette.testclient.TestClient object at 0x0000027AC88749D0>
+
+    def test_evaluate_answer_modal_fallback(session, client):
+        # Setup
+        from app.models.db_models import InterviewSession, QuestionPaper, Questions, InterviewStatus
+        paper = QuestionPaper(name="Test Paper")
+        session.add(paper)
+        session.commit()
+    
+        interview = InterviewSession(
+            paper_id=paper.id,
+            schedule_time=datetime.now(timezone.utc),
+            status=InterviewStatus.LIVE
+        )
+        session.add(interview)
+        session.commit()
+    
+        # Mock evaluate_answer_content to simulate Modal/HF logic
+        with patch("app.services.interview.evaluate_answer_content") as mock_eval:
+            mock_eval.return_value = {"feedback": "Good job", "score": 8.5}
+    
+            payload = {
+                "question": "What is AI?",
+                "answer": "Artificial Intelligence"
+            }
+            response = client.post(f"/api/interview/evaluate-answer/{interview.id}", json=payload)
+>           assert response.status_code == 200
+E           assert 404 == 200
+E            +  where 404 = <Response [404 Not Found]>.status_code
+
+tests\unit\test_interview.py:153: AssertionError
+____ TestTotalScoreInResultDetail.test_total_score_none_when_not_processed ____
+
+self = <test_total_score.TestTotalScoreInResultDetail object at 0x0000027AC478FF50>
+session = <sqlmodel.orm.session.Session object at 0x0000027AC88EE650>
+client = <starlette.testclient.TestClient object at 0x0000027AC86ABF90>
+
+    def test_total_score_none_when_not_processed(self, session, client):
+        """total_score in InterviewResult defaults to None when unprocessed."""
+        from app.models.db_models import (
+            User, UserRole, QuestionPaper, InterviewSession,
+            InterviewResult, InterviewStatus
+        )
+        from app.auth.security import get_password_hash, create_access_token
+    
+        admin = User(
+            email="admin_none@test.com",
+            full_name="Admin None",
+            password_hash=get_password_hash("password"),
+            role=UserRole.ADMIN,
+        )
+        session.add(admin)
+        session.commit()
+        session.refresh(admin)
+        token = create_access_token(data={"sub": admin.email})
+        headers = {"Authorization": f"Bearer {token}"}
+    
+        paper = QuestionPaper(name="No Score Paper", admin_id=admin.id)
+        session.add(paper)
+        session.commit()
+        session.refresh(paper)
+    
+        interview = InterviewSession(
+            admin_id=admin.id,
+            paper_id=paper.id,
+            schedule_time=datetime.now(timezone.utc) - timedelta(hours=1),
+            duration_minutes=60,
+            status=InterviewStatus.COMPLETED,
+            is_completed=True,
+        )
+        session.add(interview)
+        session.commit()
+        session.refresh(interview)
+    
+        # InterviewResult with default total_score (0.0)
+        result = InterviewResult(interview_id=interview.id)
+        session.add(result)
+        session.commit()
+    
+        response = client.get(f"/api/admin/results/{interview.id}", headers=headers)
+        assert response.status_code == 200, response.text
+        data = response.json()["data"]
+        # Default is None per db model
+>       assert data["total_score"] is None, (
+            f"Expected total_score=None (default), got {data['total_score']}"
+        )
+E       AssertionError: Expected total_score=None (default), got 0.0
+E       assert 0.0 is None
+
+tests\unit\test_total_score.py:154: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/integration/test_flow.py::test_full_interview_lifecycle - Attrib...
+FAILED tests/unit/test_cloud_robustness.py::test_face_recognizer_skips_build_on_cloud
+FAILED tests/unit/test_interview.py::test_evaluate_answer_modal_fallback - as...
+FAILED tests/unit/test_total_score.py::TestTotalScoreInResultDetail::test_total_score_none_when_not_processed
+======================== 4 failed, 42 passed in 3.31s =========================
