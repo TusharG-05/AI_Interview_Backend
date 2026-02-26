@@ -12,10 +12,20 @@ done
 
 echo "Redis is up and running!"
 
+# Run database migrations (ensures Neon DB schema is always up to date)
+echo "Running database migrations..."
+alembic upgrade head
+echo "Migrations complete!"
+
 # Start Celery worker in the background
 echo "Starting Celery worker..."
 celery -A app.core.celery_app worker --loglevel=info &
 
 # Start the FastAPI application
-echo "Starting FastAPI application..."
-exec uvicorn main:app --host 0.0.0.0 --port 7860
+echo "Starting FastAPI application (ENV: ${ENV:-production})..."
+if [ "$ENV" = "development" ]; then
+    echo "Running in development mode with live reload!"
+    exec uvicorn main:app --host 0.0.0.0 --port 7860 --reload
+else
+    exec uvicorn main:app --host 0.0.0.0 --port 7860
+fi

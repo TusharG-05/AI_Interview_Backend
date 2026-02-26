@@ -151,7 +151,7 @@ async def register(
         session.refresh(new_user)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to register user")
     
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(

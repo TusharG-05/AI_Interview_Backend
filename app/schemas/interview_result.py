@@ -29,12 +29,12 @@ class QuestionNested(BaseModel):
 class InterviewSessionNested(BaseModel):
     id: int
     access_token: str
+    invite_link: Optional[str] = None
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
     question_paper: Optional[QuestionPaperNested] = None
-    
-    schedule_time: datetime
-    duration_minutes: int
+    schedule_time: Optional[datetime] = None
+    duration_minutes: int = 1440
     max_questions: Optional[int] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -42,15 +42,15 @@ class InterviewSessionNested(BaseModel):
     total_score: Optional[float] = None
     current_status: Optional[str] = None
     last_activity: Optional[datetime] = None
-    warning_count: int
-    max_warnings: int
-    is_suspended: bool
+    warning_count: int = 0
+    max_warnings: int = 3
+    is_suspended: bool = False
     suspension_reason: Optional[str] = None
     suspended_at: Optional[datetime] = None
     enrollment_audio_path: Optional[str] = None
     candidate_name: Optional[str] = None
     admin_name: Optional[str] = None
-    is_completed: bool
+    is_completed: bool = False
 
 class AnswersNested(BaseModel):
     id: int
@@ -70,11 +70,19 @@ class InterviewResultDetail(BaseModel):
     interview_response: List[AnswersNested] = []
     total_score: Optional[float] = None
     created_at: datetime
+<<<<<<< HEAD
     proctoring_logs: List = []  
+=======
+    proctoring_logs: List = [] 
+>>>>>>> 99d223a (fix: Resolve interview access 500 error by correcting user attribute access and enhance development environment setup with live reload.)
 
 class InterviewResultBrief(BaseModel):
     id: int
     interview: InterviewSessionNested
     total_score: Optional[float] = None
     created_at: datetime
+<<<<<<< HEAD
     proctoring_logs: List = []   
+=======
+    proctoring_logs: List = [] 
+>>>>>>> 99d223a (fix: Resolve interview access 500 error by correcting user attribute access and enhance development environment setup with live reload.)
