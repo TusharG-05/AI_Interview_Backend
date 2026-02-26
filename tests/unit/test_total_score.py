@@ -125,8 +125,15 @@ class TestTotalScoreInResultDetail:
         token = create_access_token(data={"sub": admin.email})
         headers = {"Authorization": f"Bearer {token}"}
 
-        from app.services.sentinel_users import get_candidate_sentinel_id
-        candidate_sentinel_id = get_candidate_sentinel_id(session)
+        candidate = User(
+            email="candidate_none@test.com",
+            full_name="Candidate None",
+            password_hash=get_password_hash("password"),
+            role=UserRole.CANDIDATE,
+        )
+        session.add(candidate)
+        session.commit()
+        session.refresh(candidate)
 
         paper = QuestionPaper(name="No Score Paper", adminUser=admin.id)
         session.add(paper)
@@ -135,7 +142,7 @@ class TestTotalScoreInResultDetail:
 
         interview = InterviewSession(
             admin_id=admin.id,
-            candidate_id=candidate_sentinel_id,
+            candidate_id=candidate.id,
             paper_id=paper.id,
             schedule_time=datetime.now(timezone.utc) - timedelta(hours=1),
             duration_minutes=60,
@@ -184,12 +191,19 @@ class TestTotalScoreInResultDetail:
         session.commit()
         session.refresh(paper)
 
-        from app.services.sentinel_users import get_candidate_sentinel_id
-        candidate_sentinel_id2 = get_candidate_sentinel_id(session)
+        candidate2 = User(
+            email="candidate_nested@test.com",
+            full_name="Candidate Nested",
+            password_hash=get_password_hash("password"),
+            role=UserRole.CANDIDATE,
+        )
+        session.add(candidate2)
+        session.commit()
+        session.refresh(candidate2)
 
         interview = InterviewSession(
             admin_id=admin2.id,
-            candidate_id=candidate_sentinel_id2,
+            candidate_id=candidate2.id,
             paper_id=paper.id,
             schedule_time=datetime.now(timezone.utc) - timedelta(hours=1),
             duration_minutes=60,

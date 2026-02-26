@@ -1501,12 +1501,9 @@ async def create_user(
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    from ..services.sentinel_users import is_sentinel_user
-    
     users = [
         UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) 
         for u in session.exec(select(User)).all()
-        if not is_sentinel_user(u)
     ]
     return ApiResponse(
         status_code=200,
@@ -1656,13 +1653,58 @@ async def update_user(
         message="User updated successfully"
     )
 
+@router.get("/users/{user_id}/check-delete", response_model=ApiResponse[dict])
+async def check_delete_user(
+    user_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Pre-deletion dry-run check. Returns whether cascade-deleting this user
+    will remove related data (interviews, question papers).
+    """
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    interviews_as_admin = len(session.exec(
+        select(InterviewSession).where(InterviewSession.admin_id == user_id)
+    ).all())
+    interviews_as_candidate = len(session.exec(
+        select(InterviewSession).where(InterviewSession.candidate_id == user_id)
+    ).all())
+    question_papers = len(session.exec(
+        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
+    ).all())
+
+    has_related_data = (interviews_as_admin + interviews_as_candidate + question_papers) > 0
+
+    return ApiResponse(
+        status_code=200,
+        data={
+            "user_id": user_id,
+            "email": user.email,
+            "role": user.role.value,
+            "has_related_data": has_related_data,
+            "related_data": {
+                "interviews_as_admin": interviews_as_admin,
+                "interviews_as_candidate": interviews_as_candidate,
+                "question_papers": question_papers
+            }
+        },
+        message="Pre-deletion check completed"
+    )
+
 @router.delete("/users/{user_id}", response_model=ApiResponse[dict])
 async def delete_user(
     user_id: int,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Hard delete a user while preserving interview history by setting foreign keys to NULL."""
+    """
+    Hard delete a user. All related interview sessions, results, answers,
+    proctoring events, and question papers are cascade-deleted by the database.
+    """
     user = session.get(User, user_id)
     
     if not user:
@@ -1687,40 +1729,30 @@ async def delete_user(
                 detail="Cannot delete the last Super Admin. Promote another user first."
             )
     
-    # Preserve user info in related records before deletion
-    # Use sentinel placeholder users instead of NULL (admin_id/candidate_id are NOT NULL)
-    from ..services.sentinel_users import get_or_create_sentinel_users
-    admin_sentinel, candidate_sentinel = get_or_create_sentinel_users(session)
-
-    # 1. Update interviews where user is admin -> point to sentinel admin
-    admin_sessions = session.exec(
+    # Collect counts for response before deletion
+    interviews_as_admin = len(session.exec(
         select(InterviewSession).where(InterviewSession.admin_id == user_id)
-    ).all()
-    for interview in admin_sessions:
-        interview.admin_id = admin_sentinel.id
-        session.add(interview)
-
-    # 2. Update interviews where user is candidate -> point to sentinel candidate
-    candidate_sessions = session.exec(
+    ).all())
+    interviews_as_candidate = len(session.exec(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
-    ).all()
-    for interview in candidate_sessions:
-        interview.candidate_id = candidate_sentinel.id
-        session.add(interview)
-    
-    # 3. Update question papers where user is admin
-    papers = session.exec(
+    ).all())
+    papers_count = len(session.exec(
         select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
-    ).all()
-    for paper in papers:
-        paper.adminUser = None
-        session.add(paper)
-    
+    ).all())
+
     # Store info for response
     user_email = user.email
     user_name = user.full_name
     
-    # Hard delete: user is permanently removed, but related data is preserved
+    # Delete question papers owned by this user (cascade deletes their questions)
+    papers = session.exec(
+        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
+    ).all()
+    for paper in papers:
+        session.delete(paper)
+
+    # Hard delete: user is permanently removed
+    # DB ON DELETE CASCADE handles InterviewSession → Result → Answers, etc.
     session.delete(user)
     try:
         session.commit()
@@ -1734,10 +1766,10 @@ async def delete_user(
             "user_id": user_id,
             "email": user_email,
             "full_name": user_name,
-            "interviews_preserved": len(admin_sessions) + len(candidate_sessions),
-            "papers_preserved": len(papers)
+            "interviews_deleted": interviews_as_admin + interviews_as_candidate,
+            "papers_deleted": papers_count
         },
-        message="User deleted successfully. Interview history and question papers preserved."
+        message="User and all associated data deleted successfully."
     )
 
 @router.post("/shutdown", response_model=ApiResponse[dict])

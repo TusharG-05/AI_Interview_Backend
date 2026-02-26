@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone, timedelta
 
-def test_full_interview_lifecycle(client, session, auth_headers):
+def test_full_interview_lifecycle(client, session, auth_headers, test_users):
     """
     Test the complete flow:
     1. Admin creates paper & session (simulated via DB)
@@ -15,10 +15,8 @@ def test_full_interview_lifecycle(client, session, auth_headers):
 
     # --- 1. SETUP DATA ---
     from app.models.db_models import QuestionPaper, InterviewSession, InterviewStatus, Questions, CandidateStatus
-    from app.auth.security import create_access_token
-    from app.services.sentinel_users import get_or_create_sentinel_users
 
-    admin_s, candidate_s = get_or_create_sentinel_users(session)
+    admin, candidate = test_users
 
     # Create Paper
     paper = QuestionPaper(name="Integration Paper")
@@ -32,8 +30,8 @@ def test_full_interview_lifecycle(client, session, auth_headers):
 
     # Create Session
     interview = InterviewSession(
-        admin_id=admin_s.id,
-        candidate_id=candidate_s.id,
+        admin_id=admin.id,
+        candidate_id=candidate.id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc) - timedelta(minutes=5),
         duration_minutes=60,

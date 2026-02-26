@@ -3,26 +3,18 @@ from unittest.mock import MagicMock, patch
 from datetime import datetime, timedelta, timezone
 
 
-def _get_sentinel_ids(session):
-    """Get sentinel user IDs for admin and candidate placeholders."""
-    from app.services.sentinel_users import get_or_create_sentinel_users
-    admin_s, candidate_s = get_or_create_sentinel_users(session)
-    return admin_s.id, candidate_s.id
+def test_create_interview_session(session, test_users):
+    admin, candidate = test_users
 
+    from app.models.db_models import QuestionPaper, InterviewSession, InterviewStatus
 
-def test_create_interview_session(session, client, auth_headers):
-    # 1. Create Question Paper
-    from app.models.db_models import QuestionPaper, User
-    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
-
-    paper = QuestionPaper(name="Test Paper", adminUser=admin_sentinel_id)
+    paper = QuestionPaper(name="Test Paper", adminUser=admin.id)
     session.add(paper)
     session.commit()
 
-    from app.models.db_models import InterviewSession, InterviewStatus
     interview = InterviewSession(
-        admin_id=admin_sentinel_id,
-        candidate_id=candidate_sentinel_id,
+        admin_id=admin.id,
+        candidate_id=candidate.id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc) + timedelta(hours=1),
         duration_minutes=60,
@@ -39,17 +31,18 @@ def test_access_interview_invalid_token(client):
     assert response.status_code == 404
     assert "Invalid Interview Link" in response.json()["message"]
 
-def test_access_interview_valid(session, client):
+def test_access_interview_valid(session, client, test_users):
+    admin, candidate = test_users
+
     from app.models.db_models import InterviewSession, QuestionPaper, InterviewStatus
-    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
 
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
     session.commit()
 
     interview = InterviewSession(
-        admin_id=admin_sentinel_id,
-        candidate_id=candidate_sentinel_id,
+        admin_id=admin.id,
+        candidate_id=candidate.id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc) - timedelta(minutes=10),
         duration_minutes=60,
@@ -64,17 +57,18 @@ def test_access_interview_valid(session, client):
     assert data["message"] == "START"
     assert data["interview_id"] == interview.id
 
-def test_start_session(session, client):
+def test_start_session(session, client, test_users):
+    admin, candidate = test_users
+
     from app.models.db_models import InterviewSession, QuestionPaper, InterviewStatus
-    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
 
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
     session.commit()
 
     interview = InterviewSession(
-        admin_id=admin_sentinel_id,
-        candidate_id=candidate_sentinel_id,
+        admin_id=admin.id,
+        candidate_id=candidate.id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc),
         duration_minutes=60,
@@ -96,9 +90,10 @@ def test_start_session(session, client):
                 assert interview.status == InterviewStatus.LIVE
                 assert interview.start_time is not None
 
-def test_submit_answer_text(session, client):
+def test_submit_answer_text(session, client, test_users):
+    admin, candidate = test_users
+
     from app.models.db_models import InterviewSession, QuestionPaper, Questions, InterviewStatus
-    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
 
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
@@ -109,8 +104,8 @@ def test_submit_answer_text(session, client):
     session.commit()
 
     interview = InterviewSession(
-        admin_id=admin_sentinel_id,
-        candidate_id=candidate_sentinel_id,
+        admin_id=admin.id,
+        candidate_id=candidate.id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc),
         status=InterviewStatus.LIVE
@@ -131,17 +126,18 @@ def test_submit_answer_text(session, client):
     saved_answer = session.query(Answers).first()
     assert saved_answer.candidate_answer == "AI is Artificial Intelligence."
 
-def test_evaluate_answer_modal_fallback(session, client):
+def test_evaluate_answer_modal_fallback(session, client, test_users):
+    admin, candidate = test_users
+
     from app.models.db_models import InterviewSession, QuestionPaper, Questions, InterviewStatus
-    admin_sentinel_id, candidate_sentinel_id = _get_sentinel_ids(session)
 
     paper = QuestionPaper(name="Test Paper")
     session.add(paper)
     session.commit()
 
     interview = InterviewSession(
-        admin_id=admin_sentinel_id,
-        candidate_id=candidate_sentinel_id,
+        admin_id=admin.id,
+        candidate_id=candidate.id,
         paper_id=paper.id,
         schedule_time=datetime.now(timezone.utc),
         status=InterviewStatus.LIVE

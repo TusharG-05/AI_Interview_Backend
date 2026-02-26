@@ -31,14 +31,14 @@ def upgrade() -> None:
 
     # ---- 1. Create sentinel users if they don't exist ----
     admin_row = conn.execute(
-        sa.text("SELECT id FROM user WHERE email = :email"),
+        sa.text('SELECT id FROM "user" WHERE email = :email'),
         {"email": ADMIN_DELETED_EMAIL}
     ).first()
 
     if not admin_row:
         conn.execute(
             sa.text(
-                "INSERT INTO user (email, full_name, password_hash, role) "
+                'INSERT INTO "user" (email, full_name, password_hash, role) '
                 "VALUES (:email, :full_name, :password_hash, :role)"
             ),
             {
@@ -49,19 +49,19 @@ def upgrade() -> None:
             }
         )
         admin_row = conn.execute(
-            sa.text("SELECT id FROM user WHERE email = :email"),
+            sa.text('SELECT id FROM "user" WHERE email = :email'),
             {"email": ADMIN_DELETED_EMAIL}
         ).first()
 
     candidate_row = conn.execute(
-        sa.text("SELECT id FROM user WHERE email = :email"),
+        sa.text('SELECT id FROM "user" WHERE email = :email'),
         {"email": CANDIDATE_DELETED_EMAIL}
     ).first()
 
     if not candidate_row:
         conn.execute(
             sa.text(
-                "INSERT INTO user (email, full_name, password_hash, role) "
+                'INSERT INTO "user" (email, full_name, password_hash, role) '
                 "VALUES (:email, :full_name, :password_hash, :role)"
             ),
             {
@@ -72,7 +72,7 @@ def upgrade() -> None:
             }
         )
         candidate_row = conn.execute(
-            sa.text("SELECT id FROM user WHERE email = :email"),
+            sa.text('SELECT id FROM "user" WHERE email = :email'),
             {"email": CANDIDATE_DELETED_EMAIL}
         ).first()
 
@@ -118,11 +118,11 @@ def downgrade() -> None:
 
     # Revert sentinels back to NULL (reverse of upgrade)
     admin_row = conn.execute(
-        sa.text("SELECT id FROM user WHERE email = :email"),
+        sa.text('SELECT id FROM "user" WHERE email = :email'),
         {"email": ADMIN_DELETED_EMAIL}
     ).first()
     candidate_row = conn.execute(
-        sa.text("SELECT id FROM user WHERE email = :email"),
+        sa.text('SELECT id FROM "user" WHERE email = :email'),
         {"email": CANDIDATE_DELETED_EMAIL}
     ).first()
 
