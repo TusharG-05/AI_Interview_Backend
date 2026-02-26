@@ -92,9 +92,12 @@ class FaceRecognizer:
         # SFace is light enough to build even on HF Spaces (Free Tier)
         # We only skip if DeepFace is missing
         try:
-            from deepface import DeepFace
-            logger.info(f"Building local Face Model: {self.model_name}...")
-            DeepFace.build_model(self.model_name)
+            if os.getenv("SPACE_ID"):
+                logger.info("Cloud Environment (HF Space) detected. Skipping local DeepFace build to save memory.")
+            else:
+                from deepface import DeepFace
+                logger.info(f"Building local Face Model: {self.model_name}...")
+                DeepFace.build_model(self.model_name)
         except ImportError:
             logger.warning("DeepFace not installed - face recognition disabled")
         except Exception as e:
