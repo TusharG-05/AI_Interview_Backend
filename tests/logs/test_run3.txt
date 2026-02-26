@@ -1,0 +1,22 @@
+﻿......F.F..F............                                                 [100%]
+================================== FAILURES ===================================
+_________ TestCascadeDelete.test_delete_candidate_cascades_interviews _________
+tests\unit\test_cascade_delete.py:136: in test_delete_candidate_cascades_interviews
+    assert remaining is None
+E   AssertionError: assert InterviewSession(id=1, start_time=None, is_suspended=False, suspension_reason=None, admin_id=1, end_time=None, candida...ation_minutes=60, warning_count=0, max_questions=None, max_warnings=3, access_token='b35958a7866546a08ddd89959d869caf') is None
+__________________ TestCascadeDelete.test_cannot_delete_self __________________
+tests\unit\test_cascade_delete.py:154: in test_cannot_delete_self
+    assert "Cannot delete your own account" in response.json()["detail"]
+                                               ^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'detail'
+_______________ test_face_recognizer_builds_sface_even_on_cloud _______________
+tests\unit\test_cloud_robustness.py:62: in test_face_recognizer_builds_sface_even_on_cloud
+    mock_build.assert_called_once_with("SFace")
+..\..\..\AppData\Local\Programs\Python\Python311\Lib\unittest\mock.py:950: in assert_called_once_with
+    raise AssertionError(msg)
+E   AssertionError: Expected 'build_model' to be called once. Called 0 times.
+=========================== short test summary info ===========================
+FAILED tests/unit/test_cascade_delete.py::TestCascadeDelete::test_delete_candidate_cascades_interviews
+FAILED tests/unit/test_cascade_delete.py::TestCascadeDelete::test_cannot_delete_self
+FAILED tests/unit/test_cloud_robustness.py::test_face_recognizer_builds_sface_even_on_cloud
+3 failed, 21 passed in 3.16s

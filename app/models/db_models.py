@@ -89,8 +89,12 @@ class InterviewSession(SQLModel, table=True):
 
     # Scheduler Info
     access_token: str = Field(unique=True, index=True, default_factory=lambda: uuid.uuid4().hex)
-    admin_id: int = Field(foreign_key="user.id")      # Points to sentinel if admin deleted
-    candidate_id: int = Field(foreign_key="user.id")  # Points to sentinel if candidate deleted
+    admin_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=True)
+    )
+    candidate_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=True)
+    )
     invite_link: Optional[str] = None
     paper_id: int = Field(foreign_key="questionpaper.id")
 

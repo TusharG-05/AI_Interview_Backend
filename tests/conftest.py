@@ -50,7 +50,6 @@ from sqlmodel.pool import StaticPool
 def mock_db_session():
     """
     Creates an in-memory SQLite database for the session.
-    Creates sentinel users so InterviewSession can satisfy NOT NULL on admin_id/candidate_id.
     """
     from app.models.db_models import User, UserRole
     from app.auth.security import get_password_hash
@@ -62,9 +61,6 @@ def mock_db_session():
     )
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
-        # Create sentinel placeholder users required by NOT NULL constraints
-        from app.services.sentinel_users import get_or_create_sentinel_users
-        get_or_create_sentinel_users(session)
         yield session
     SQLModel.metadata.drop_all(engine)
 
