@@ -473,7 +473,7 @@ async def schedule_interview(
         raise HTTPException(status_code=400, detail="Invalid schedule_time format. ISO 8601 expected.")
 
     new_session = InterviewSession(
-        adminUser=current_user.id,
+        admin_id=current_user.id,
         candidate_id=schedule_data.candidate_id,
         paper_id=schedule_data.paper_id,
         schedule_time=schedule_dt,
