@@ -60,19 +60,28 @@ def process_session_results(interview_id: int, db: Session = None):
                 audio_service.cleanup_audio(resp.audio_path)
 
             # ── LLM Evaluation ───────────────────────────────────────────
-            if resp.candidate_answer and resp.score is None:
-                q = db.get(Questions, resp.question_id)
-                q_text = q.question_text or q.content or "General Question"
+            if resp.candidate_answer:
+                # 1. If we already have feedback & score > 0 (e.g. from frontend pre-evaluation), skip LLM
+                pre_evaluated = bool(resp.feedback) or (resp.score is not None and resp.score > 0)
+                
+                # Default empty score is 0.0 in schema, so we need to evaluate if it's 0.0 and no feedback provided
+                needs_eval = not pre_evaluated
 
-                logger.info(f"  Answer {resp.id}: evaluating...")
-                evaluation = interview_service.evaluate_answer_content(q_text, resp.candidate_answer)
+                if needs_eval:
+                    q = db.get(Questions, resp.question_id)
+                    q_text = q.question_text or q.content or "General Question"
 
-                resp.feedback = evaluation.get("feedback", "")
-                resp.score = evaluation.get("score")
+                    logger.info(f"  Answer {resp.id}: evaluating...")
+                    evaluation = interview_service.evaluate_answer_content(q_text, resp.candidate_answer)
 
-                logger.info(f"  Answer {resp.id}: score={resp.score}")
-                db.add(resp)
-                db.commit()
+                    resp.feedback = evaluation.get("feedback", "")
+                    resp.score = evaluation.get("score")
+
+                    logger.info(f"  Answer {resp.id}: score={resp.score}")
+                    db.add(resp)
+                    db.commit()
+                else:
+                    logger.info(f"  Answer {resp.id}: skipping evaluation (pre-evaluated: score={resp.score})")
 
         # ── Final Score Aggregation ──────────────────────────────────────
         db.refresh(result_obj)
