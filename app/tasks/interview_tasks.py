@@ -50,7 +50,7 @@ def process_session_results(interview_id: int, db: Session = None):
                 text = loop.run_until_complete(audio_service.speech_to_text(resp.audio_path))
 
                 if session.enrollment_audio_path:
-                    match, _ = audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path)
+                    match, _ = loop.run_until_complete(audio_service.verify_speaker(session.enrollment_audio_path, resp.audio_path))
                     if not match:
                         text = f"[VOICE MISMATCH] {text}"
 

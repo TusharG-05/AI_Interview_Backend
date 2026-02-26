@@ -238,6 +238,43 @@ class AudioService:
             logger.error(f"WAV Conversion Error: {e}")
             return None
 
+    async def verify_speaker(self, enrollment_audio, test_audio):
+        """
+        Verifies if the speaker in test_audio matches the enrollment_audio.
+        Returns (is_match, score)
+        """
+        if not enrollment_audio or not test_audio or not os.path.exists(enrollment_audio) or not os.path.exists(test_audio):
+            logger.warning(f"Speaker Verification skipped: missing files ({enrollment_audio}, {test_audio})")
+            return True, 1.0 # Default to match if files missing to avoid blocking
+            
+        try:
+            import torch
+            
+            # Prevent loading heavy model on HF Spaces if possible, or use lightweight approach
+            if os.getenv("SPACE_ID"):
+                logger.warning("Speaker Verification skipped on HF Spaces to save memory")
+                return True, 1.0
+
+            # 1. Trigger lazy loading of model
+            model = self.speaker_model
+            if not model:
+                return True, 1.0
+
+            # 2. Perform verification
+            # SpeechBrain's EncoderClassifier has a verify_files method
+            # It returns (score, prediction) where prediction is a tensor of booleans
+            score, prediction = model.verify_files(enrollment_audio, test_audio)
+            
+            match = bool(prediction[0])
+            similarity = float(score[0])
+            
+            logger.info(f"Speaker Verification: Match={match}, Score={similarity:.4f}")
+            return match, similarity
+            
+        except Exception as e:
+            logger.error(f"Speaker Verification Error: {e}")
+            return True, 1.0 # Default to match on error
+
     def cleanup_audio(self, *paths):
         """Removes specified audio files from disk."""
         for path in paths:

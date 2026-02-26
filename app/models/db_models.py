@@ -115,8 +115,6 @@ class InterviewSession(SQLModel, table=True):
     
     # Legacy/Enrollment
     enrollment_audio_path: Optional[str] = None
-    candidate_name: Optional[str] = None # Optional fallback for deleted candidate
-    admin_name: Optional[str] = None  # Preserve admin name when admin is deleted
     is_completed: bool = Field(default=False) 
     
     # Relationships
