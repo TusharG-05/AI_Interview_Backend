@@ -1,5 +1,6 @@
 from typing import Optional, List
 from pydantic import BaseModel
+from .interview_result import UserNested, QuestionPaperNested
 
 # Candidate Responses
 class HistoryItem(BaseModel):
@@ -19,14 +20,15 @@ class HistoryItem(BaseModel):
 
 class InterviewAccessResponse(BaseModel):
     interview_id: int
-    candidate_id: Optional[int] = None
-    admin_id: Optional[int] = None
-    paper_id: Optional[int] = None
+    candidate: Optional[UserNested] = None
+    admin: Optional[UserNested] = None
+    paper: Optional[QuestionPaperNested] = None
     message: str # "START" or "WAIT"
     schedule_time: Optional[str] = None
     duration_minutes: Optional[int] = None
     status: Optional[str] = None
     max_questions: Optional[int] = None
+    invite_link: Optional[str] = None
 
 class QuestionRead(BaseModel):
     id: int

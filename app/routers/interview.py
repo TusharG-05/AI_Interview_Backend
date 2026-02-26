@@ -51,20 +51,45 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
         
-    # candidate_data = {
-    #     "id": session.candidate.id,
-    #     "email": session.candidate.email,
-    #     "full_name": session.candidate.full_name
-    # } if session.candidate else None
+    # Build nested objects from preloaded relationships
+    candidate_data = None
+    if session.candidate:
+        candidate_data = UserNested(
+            id=session.candidate.id,
+            email=session.candidate.email,
+            full_name=session.candidate.full_name,
+            role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
+            access_token=session.candidate.access_token,
+            resume_text=session.candidate.resume_text,
+            profile_image=session.candidate.profile_image,
+            profile_image_bytes=session.candidate.profile_image_bytes,
+            face_embedding=session.candidate.face_embedding
+        )
 
-    candidate_obj = session_db.exec(select(User.id, User.email, User.full_name, User.role).where(User.id == session.candidate.id)).first() if session.candidate else None
-    candidate_data = candidate_obj._mapping if candidate_obj else None
-    
-    admin_obj = session_db.exec(select(User).where(User.id == session.admin.id)).first() if session.admin else None
-    admin_data = admin_obj.model_dump() if admin_obj else None
+    admin_data = None
+    if session.admin:
+        admin_data = UserNested(
+            id=session.admin.id,
+            email=session.admin.email,
+            full_name=session.admin.full_name,
+            role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
+            access_token=session.admin.access_token,
+            resume_text=session.admin.resume_text,
+            profile_image=session.admin.profile_image,
+            profile_image_bytes=session.admin.profile_image_bytes,
+            face_embedding=session.admin.face_embedding
+        )
 
-    paper_obj = session_db.exec(select(QuestionPaper).where(QuestionPaper.id == session.paper.id)).first() if session.paper else None
-    paper_data = paper_obj.model_dump() if paper_obj else None
+    paper_data = None
+    if session.paper:
+        paper_data = QuestionPaperNested(
+            id=session.paper.id,
+            name=session.paper.name,
+            description=session.paper.description or "",
+            adminUser=session.paper.adminUser,
+            question_count=len(session.paper.questions) if hasattr(session.paper, 'questions') else 0,
+            created_at=session.paper.created_at
+        )
 
     invite_link = f"{FRONTEND_URL}/interview/{session.access_token}"
         
