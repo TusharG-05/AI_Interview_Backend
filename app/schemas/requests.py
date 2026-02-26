@@ -62,6 +62,7 @@ class QuestionUpdate(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    access_token: Optional[str] = None    
 class QuestionCreate(BaseModel):
     content: str
     topic: Optional[str] = "General"

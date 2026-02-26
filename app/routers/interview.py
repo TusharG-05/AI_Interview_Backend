@@ -9,7 +9,9 @@ from ..services import interview as interview_service
 from ..services.audio import AudioService
 from ..services.nlp import NLPService
 from ..schemas.responses import InterviewAccessResponse
+from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..schemas.api_response import ApiResponse
+from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
 import os
 import uuid
@@ -31,7 +33,7 @@ class TTSRange(BaseModel):
 
 
 @router.get("/access/{token}", response_model=ApiResponse[InterviewAccessResponse])
-async def access_interview(token: str, session_db: Session = Depends(get_session)):
+async def access_interview(token: str, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     """
     Validates the interview link and checks time constraints.
     """
@@ -166,7 +168,8 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
 async def start_session_logic(
     interview_id: int,
     enrollment_audio: UploadFile = File(None),
-    session_db: Session = Depends(get_session)
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Called when candidate actually enters the interview session (uploads selfie/audio).
@@ -236,11 +239,11 @@ async def start_session_logic(
 async def upload_selfie_session(
     interview_id: int = Form(...),
     file: UploadFile = File(...),
-    session_db: Session = Depends(get_session)
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Allows candidate to upload their reference selfie via interview session context.
-    Does NOT require JWT authentication.
     """
     from ..models.db_models import CandidateStatus, User
     import os, json, tempfile
@@ -340,7 +343,7 @@ async def upload_selfie_session(
     )
 
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
-async def get_next_question(interview_id: int, session_db: Session = Depends(get_session)):
+async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     from ..services.status_manager import record_status_change, update_last_activity
     from ..models.db_models import CandidateStatus
     
@@ -441,7 +444,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     )
 
 @router.get("/audio/question/{q_id}")
-async def stream_question_audio(q_id: int):
+async def stream_question_audio(q_id: int, current_user: User = Depends(get_current_user)):
     audio_path = f"app/assets/audio/questions/q_{q_id}.mp3"
     if not os.path.exists(audio_path): raise HTTPException(status_code=404)
     return FileResponse(audio_path, media_type="audio/mpeg")
@@ -453,7 +456,8 @@ async def submit_answer_audio(
     audio: UploadFile = File(...),
     feedback: Optional[str] = Form(None),
     score: Optional[float] = Form(None),
-    session_db: Session = Depends(get_session)
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
 ):
     from ..services.status_manager import update_last_activity
     
@@ -519,7 +523,8 @@ async def submit_answer_text(
     answer_text: str = Form(...),
     feedback: Optional[str] = Form(None),
     score: Optional[float] = Form(None),
-    session_db: Session = Depends(get_session)
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
 ):
     """
     Submits a text answer for a question.
@@ -568,7 +573,7 @@ async def submit_answer_text(
 
 
 @router.post("/finish/{interview_id}", response_model=ApiResponse[dict])
-async def finish_interview(interview_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session)):
+async def finish_interview(interview_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     from ..services.status_manager import record_status_change
     from ..models.db_models import CandidateStatus
     
@@ -600,7 +605,7 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
     )
 
 @router.post("/evaluate-answer", response_model=ApiResponse[dict])
-async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(get_session)):
+async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     """
     Stateless endpoint to evaluate a candidate's answer against a question.
     Does not save the result to any specific interview session.
@@ -631,7 +636,7 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
 # --- Standalone Tools ---
 
 @router.post("/tools/speech-to-text", response_model=ApiResponse[dict])
-async def speech_to_text_tool(audio: UploadFile = File(...)):
+async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """
     Public standalone tool to convert speech to text.
     No authentication required.

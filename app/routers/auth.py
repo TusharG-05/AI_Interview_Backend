@@ -15,7 +15,7 @@ from ..schemas.responses import Token, UserRead
 from ..schemas.api_response import ApiResponse
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
-from ..models.db_models import User, UserRole
+from ..models.db_models import User, UserRole, InterviewSession
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -42,6 +42,29 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
             detail="Incorrect email or password",
         )
     
+    # Enforce access_token requirement for candidates
+    if user.role == UserRole.CANDIDATE:
+        if not login_data.access_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Interview token is required for candidates.",
+            )
+        
+        # Verify the interview session token matches the candidate
+        
+        interview = session.exec(
+            select(InterviewSession).where(
+                InterviewSession.access_token == login_data.access_token,
+                InterviewSession.candidate_id == user.id
+            )
+        ).first()
+        
+        if not interview:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid interview link or candidate mismatch.",
+            )
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
