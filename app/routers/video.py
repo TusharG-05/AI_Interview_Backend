@@ -9,7 +9,7 @@ import json
 from ..core.logger import get_logger
 
 
-router = APIRouter(prefix="/analyze", tags=["Gaze & Face Analysis"])
+router = APIRouter(tags=["Gaze & Face Analysis"])
 logger = get_logger(__name__)
 camera_service = CameraService()
 

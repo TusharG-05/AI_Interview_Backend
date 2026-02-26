@@ -347,8 +347,6 @@ def get_status_summary(
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
             "enrollment_audio_path": interview_session.enrollment_audio_path,
-            "candidate_name": interview_session.candidate.full_name if (interview_session.candidate and hasattr(interview_session.candidate, 'full_name')) else interview_session.candidate_name,
-            "admin_name": interview_session.admin.full_name if (interview_session.admin and hasattr(interview_session.admin, 'full_name')) else interview_session.admin_name,
             "is_completed": interview_session.is_completed or False
         },
         "candidate": candidate_dict,

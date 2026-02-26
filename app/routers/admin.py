@@ -591,7 +591,7 @@ async def schedule_interview(
         end_time=format_iso_datetime(new_session.end_time),
         status=new_session.status.value if hasattr(new_session.status, 'value') else str(new_session.status),
         total_score=new_session.total_score,
-        current_status=new_session.current_status.value if new_session.current_status else None,
+        current_status=new_session.current_status or None,
         last_activity=format_iso_datetime(new_session.last_activity),
         warning_count=new_session.warning_count or 0,
         max_warnings=new_session.max_warnings or 3,
@@ -599,8 +599,6 @@ async def schedule_interview(
         suspension_reason=new_session.suspension_reason,
         suspended_at=format_iso_datetime(new_session.suspended_at),
         enrollment_audio_path=new_session.enrollment_audio_path,
-        candidate_name=candidate.full_name,
-        admin_name=current_user.full_name,
         is_completed=new_session.is_completed or False
     )
 
@@ -637,8 +635,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
     results = []
     for s in sessions:
         # Serialize users with role-based keys, handling NULL users
-        admin_dict = serialize_user(s.admin, fallback_name=s.admin_name, fallback_role="admin")
-        candidate_dict = serialize_user(s.candidate, fallback_name=s.candidate_name, fallback_role="candidate")
+        admin_dict = serialize_user(s.admin, fallback_role="admin")
+        candidate_dict = serialize_user(s.candidate, fallback_role="candidate")
         
         results.append(SessionRead(
             id=s.id,
@@ -713,7 +711,7 @@ async def get_live_status_dashboard(
             "end_time": format_iso_datetime(interview_session.end_time),
             "status": interview_session.status.value if hasattr(interview_session.status, 'value') else str(interview_session.status),
             "total_score": interview_session.total_score,
-            "current_status": interview_session.current_status.value if interview_session.current_status else None,
+            "current_status": interview_session.current_status or None,
             "last_activity": format_iso_datetime(interview_session.last_activity),
             "warning_count": interview_session.warning_count or 0,
             "max_warnings": interview_session.max_warnings or 3,
@@ -721,15 +719,13 @@ async def get_live_status_dashboard(
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": format_iso_datetime(interview_session.suspended_at),
             "enrollment_audio_path": interview_session.enrollment_audio_path,
-            "candidate_name": interview_session.candidate.full_name if (interview_session.candidate and hasattr(interview_session.candidate, 'full_name')) else interview_session.candidate_name,
-            "admin_name": current_user.full_name, # Since we filtered by current_user.id
             "is_completed": interview_session.is_completed or False
         }
         
         results.append(LiveStatusItem(
             interview=interview_dict,
             candidate=candidate_dict,
-            current_status=interview_session.current_status.value if interview_session.current_status else None,
+            current_status=interview_session.current_status or None,
             warning_count=interview_session.warning_count or 0,
             warnings_remaining=max(0, (interview_session.max_warnings or 3) - (interview_session.warning_count or 0)),
             is_suspended=interview_session.is_suspended or False,
@@ -774,8 +770,8 @@ async def get_interview(
         )
     
     # Serialize users with role-based keys, handling NULL users
-    admin_dict = serialize_user(interview_session.admin, fallback_name=interview_session.admin_name, fallback_role="admin")
-    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
+    admin_dict = serialize_user(interview_session.admin, fallback_role="admin")
+    candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate")
     
     # Build detailed response
     detail_read = InterviewDetailRead(
@@ -917,8 +913,8 @@ async def update_interview(
         raise HTTPException(status_code=500, detail="Failed to update interview")
     
     # Return updated interview details
-    admin_dict = serialize_user(interview_session.admin, fallback_name=interview_session.admin_name, fallback_role="admin")
-    candidate_dict = serialize_user(interview_session.candidate, fallback_name=interview_session.candidate_name, fallback_role="candidate")
+    admin_dict = serialize_user(interview_session.admin, fallback_role="admin")
+    candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate")
     
     detail_read = InterviewDetailRead(
         id=interview_session.id,
@@ -975,7 +971,7 @@ async def delete_interview(
         )
     
     # Store info for response before deletion
-    candidate_name = interview_session.candidate.full_name if interview_session.candidate else interview_session.candidate_name or "Unknown"
+    candidate_name = interview_session.candidate.full_name if interview_session.candidate else "Unknown"
     scheduled_time = format_iso_datetime(interview_session.schedule_time)
     
     # Hard delete: this will cascade to responses, proctoring_events, selected_questions, status_timeline
@@ -1076,8 +1072,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
                 id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, role=s.admin.role.value,
                 profile_image=s.admin.profile_image
             )
-        elif s.admin_name:
-             pass
+        # admin was deleted, no fallback needed
              
         # 2. Candidate
         candidate_obj = None
@@ -1125,8 +1120,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             suspension_reason=s.suspension_reason,
             suspended_at=s.suspended_at,
             enrollment_audio_path=f"/api/admin/interviews/enrollment-audio/{s.id}" if s.enrollment_audio_path else None,
-            candidate_name=s.candidate.full_name if s.candidate else s.candidate_name,
-            admin_name=s.admin.full_name if s.admin else s.admin_name,
+
             is_completed=s.is_completed or False
         )
             
@@ -1211,12 +1205,11 @@ async def get_result(
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
         status=s.status.value if hasattr(s.status, 'value') else str(s.status),
         total_score=s.total_score,
-        current_status=s.current_status.value if s.current_status else None,
+        current_status=s.current_status or None,
         last_activity=s.last_activity, warning_count=s.warning_count or 0,
         max_warnings=s.max_warnings or 3, is_suspended=s.is_suspended or False,
         suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
         enrollment_audio_path=s.enrollment_audio_path,
-        candidate_name=s.candidate_name, admin_name=s.admin_name,
         is_completed=s.is_completed or False
     )
     
@@ -1278,7 +1271,7 @@ async def get_result(
         message="Result details retrieved successfully"
     )
 
-@router.patch("/results/{interview_id}", response_model=ApiResponse[DetailedResult])
+@router.patch("/results/{interview_id}", response_model=ApiResponse[InterviewResultDetail])
 async def update_result(
     interview_id: int,
     update_data: ResultUpdate,
@@ -1724,7 +1717,6 @@ async def delete_user(
         select(InterviewSession).where(InterviewSession.admin_id == user_id)
     ).all()
     for interview in admin_sessions:
-        interview.admin_name = user.full_name
         interview.admin_id = None
         session.add(interview)
     
@@ -1733,7 +1725,6 @@ async def delete_user(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
     ).all()
     for interview in candidate_sessions:
-        interview.candidate_name = user.full_name
         interview.candidate_id = None
         session.add(interview)
     
