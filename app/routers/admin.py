@@ -1136,7 +1136,9 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All results retrieved successfully"
     )
 
-@router.get("/results/{interview_id}", response_model=ApiResponse[InterviewResultDetail])
+from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, QuestionPaperData
+
+@router.get("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
 async def get_result(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1170,48 +1172,45 @@ async def get_result(
     if not s.result:
          raise HTTPException(status_code=404, detail="Result not found for this interview")
 
-    # Build nested objects
+    # Build nested objects according to new AdminResultData schema
     # 1. Admin
     admin_obj = None
     if s.admin:
-        admin_obj = UserNested(
-            id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
+        admin_obj = LoginUserNested(
+            id=str(s.admin.id), email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-            profile_image=s.admin.profile_image,
-            access_token=s.admin.access_token,
-            resume_text=s.admin.resume_text,
-            face_embedding=s.admin.face_embedding
+            access_token=s.admin.access_token
         )
          
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
-        candidate_obj = UserNested(
-            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
+        candidate_obj = LoginUserNested(
+            id=str(s.candidate.id), email=s.candidate.email, full_name=s.candidate.full_name, 
             role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
-            profile_image=s.candidate.profile_image,
-            access_token=s.candidate.access_token,
-            resume_text=s.candidate.resume_text,
-            face_embedding=s.candidate.face_embedding
+            access_token=s.candidate.access_token
         )
         
     # 3. Paper
     paper_obj = None
     if s.paper:
-        paper_obj = QuestionPaperNested(
-            id=s.paper.id, name=s.paper.name, description=s.paper.description, 
-            admin_id=s.paper.adminUser, created_at=s.paper.created_at
+        # For this endpoint, adminUser is expected to be an int (FK) per user specs
+        paper_obj = QuestionPaperData(
+            id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
+            adminUser=s.paper.adminUser if s.paper.adminUser is not None else 0, created_at=s.paper.created_at,
+            question_count=len(s.paper.questions) if hasattr(s.paper, 'questions') else 0,
+            total_marks=s.paper.total_marks
         )
         
-    # 4. Session Nested
-    session_nested = InterviewSessionNested(
+    # 4. Session Nested (mapped to interviewData)
+    session_nested = InterviewSessionData(
         id=s.id, access_token=s.access_token,
-        admin_user=admin_obj, candidate_user=candidate_obj, question_paper=paper_obj,
+        admin_id=admin_obj, candidate_id=candidate_obj, paper_id=paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
         status=s.status.value if hasattr(s.status, 'value') else str(s.status),
         total_score=s.total_score,
-        current_status=s.current_status or None,
+        current_status=s.current_status.value if hasattr(s.current_status, 'value') else str(s.current_status),
         last_activity=s.last_activity, warning_count=s.warning_count or 0,
         max_warnings=s.max_warnings or 3, is_suspended=s.is_suspended or False,
         suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
@@ -1219,56 +1218,38 @@ async def get_result(
         is_completed=s.is_completed or False
     )
     
-    # 5. Answers
+    # 5. Answers (mapped to Interview_response)
     answers_nested = []
     for ans in s.result.answers:
         q_nested = None
         if ans.question:
-            q_nested = QuestionNested(
+            q_nested = QuestionData(
                 id=ans.question.id, paper_id=ans.question.paper_id,
-                content=ans.question.content,
-                question_text=ans.question.question_text, topic=ans.question.topic,
-                difficulty=ans.question.difficulty, marks=ans.question.marks,
-                response_type=ans.question.response_type
+                content=ans.question.content or "",
+                question_text=ans.question.question_text or "", topic=ans.question.topic or "",
+                difficulty=ans.question.difficulty.value if hasattr(ans.question.difficulty, 'value') else str(ans.question.difficulty), 
+                marks=ans.question.marks,
+                response_type=ans.question.response_type.value if hasattr(ans.question.response_type, 'value') else str(ans.question.response_type)
             )
+        else:
+             # Fallback if question misses
+             q_nested = QuestionData(id=ans.question_id, paper_id=0, content="", question_text="", topic="", difficulty="", marks=0, response_type="")
         
-        answers_nested.append(AnswersNested(
+        answers_nested.append(AnswersDataAdmin(
             id=ans.id, interview_result_id=ans.interview_result_id,
-            question=q_nested,
-            candidate_answer=ans.candidate_answer, feedback=ans.feedback,
-            score=ans.score, audio_path=ans.audio_path,
-            transcribed_text=ans.transcribed_text, timestamp=ans.timestamp
+            question_id=q_nested, # lowercase q per request
+            candidate_answer=ans.candidate_answer or "", feedback=ans.feedback or "",
+            score=ans.score or 0.0, audio_path=ans.audio_path,
+            transcribed_text=ans.transcribed_text, timestamp=ans.timestamp or datetime.now(timezone.utc)
         ))
-    
-    # 6. Fetch Proctoring Events
-    proctoring_logs = []
-    try:
-        from ..models.db_models import ProctoringEvent
-        events = session.exec(
-            select(ProctoringEvent)
-            .where(ProctoringEvent.interview_id == interview_id)
-            .order_by(ProctoringEvent.timestamp)
-        ).all()
-        
-        for event in events:
-            proctoring_logs.append({
-                "type": event.event_type,
-                "time": event.timestamp.isoformat() if event.timestamp else None,
-                "details": event.details,
-                "severity": event.severity,
-                "triggered_warning": event.triggered_warning
-            })
-    except Exception as e:
-        logger.warning(f"Failed to fetch proctoring logs for interview {interview_id}: {e}")
         
     # 7. Top Level Result
-    result_detail = InterviewResultDetail(
+    result_detail = AdminResultData(
         id=s.result.id,
-        interview=session_nested,
-        interview_response=answers_nested,
-        total_score=s.result.total_score,
-        created_at=s.result.created_at,
-        proctoring_logs=proctoring_logs
+        interviewData=session_nested,
+        Interview_response=answers_nested,
+        total_score=s.result.total_score or 0.0,
+        created_at=s.result.created_at or datetime.now(timezone.utc)
     )
 
     return ApiResponse(

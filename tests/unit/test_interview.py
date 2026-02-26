@@ -54,8 +54,8 @@ def test_access_interview_valid(session, client, test_users):
     response = client.get(f"/api/interview/access/{interview.access_token}")
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["message"] == "START"
-    assert data["interview_id"] == interview.id
+    # Check that it returns the exact schema IDs (the message field was removed from schema)
+    assert data["id"] == interview.id
 
 def test_start_session(session, client, test_users):
     admin, candidate = test_users
@@ -120,6 +120,7 @@ def test_submit_answer_text(session, client, test_users):
     }
     response = client.post("/api/interview/submit-answer-text", data=payload)
     assert response.status_code == 200
+    assert response.json()["data"]["Question_id"]["id"] == question.id
 
     from app.models.db_models import Answers
     assert session.query(Answers).count() == 1

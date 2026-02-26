@@ -44,7 +44,7 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
     # --- 2. ACCESS LINK ---
     response = client.get(f"/api/interview/access/{interview.access_token}")
     assert response.status_code == 200
-    assert response.json()["data"]["message"] == "START"
+    assert response.json()["data"]["current_status"] == "LINK_ACCESSED"
     
     session.refresh(interview)
     assert interview.current_status == CandidateStatus.LINK_ACCESSED

@@ -5,11 +5,12 @@ from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User,Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus
 from ..schemas.requests import AnswerRequest
+from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..services import interview as interview_service
 from ..services.audio import AudioService
-from ..services.nlp import NLPService
 from ..schemas.responses import InterviewAccessResponse
 from ..schemas.interview_result import UserNested, QuestionPaperNested
+from ..schemas.interview_responses import InterviewSessionData, LoginUserNested, QuestionPaperData, QuestionData
 from ..schemas.api_response import ApiResponse
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
@@ -32,8 +33,12 @@ class TTSRange(BaseModel):
 
 
 
-@router.get("/access/{token}", response_model=ApiResponse[InterviewAccessResponse])
-async def access_interview(token: str, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+@router.get("/access/{token}", response_model=ApiResponse[InterviewSessionData])
+async def access_interview(
+    token: str, 
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
     """
     Validates the interview link and checks time constraints.
     """
@@ -56,39 +61,48 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
     # Build nested objects from preloaded relationships
     candidate_data = None
     if session.candidate:
-        candidate_data = UserNested(
-            id=session.candidate.id,
+        candidate_data = LoginUserNested(
+            id=str(session.candidate.id),
             email=session.candidate.email,
             full_name=session.candidate.full_name,
             role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token,
-            resume_text=session.candidate.resume_text,
-            profile_image=session.candidate.profile_image,
-            face_embedding=session.candidate.face_embedding
+            access_token=session.candidate.access_token
         )
 
     admin_data = None
     if session.admin:
-        admin_data = UserNested(
-            id=session.admin.id,
+        admin_data = LoginUserNested(
+            id=str(session.admin.id),
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token,
-            resume_text=session.admin.resume_text,
-            profile_image=session.admin.profile_image,
-            face_embedding=session.admin.face_embedding
+            access_token=session.admin.access_token
         )
 
     paper_data = None
     if session.paper:
-        paper_data = QuestionPaperNested(
+        # For the access endpoint, questions list is expected and adminUser is a string per user request layout, 
+        # but to keep it safe as LoginUserNested like the schema expects. If its None, we handle it.
+        # Note: The query doesn't selectinload questions initially in this endpoint (lines 43-48). We must ensure it's loaded if accessed.
+        # But `session.paper.questions` might still lazy load. 
+        paper_questions = []
+        if hasattr(session.paper, 'questions') and session.paper.questions:
+            for q in session.paper.questions:
+                paper_questions.append(QuestionData(
+                    id=q.id, paper_id=q.paper_id, content=q.content or "", question_text=q.question_text or "",
+                    topic=q.topic or "", difficulty=q.difficulty.value if hasattr(q.difficulty, 'value') else str(q.difficulty),
+                    marks=q.marks, response_type=q.response_type.value if hasattr(q.response_type, 'value') else str(q.response_type)
+                ))
+                
+        paper_data = QuestionPaperData(
             id=session.paper.id,
             name=session.paper.name,
             description=session.paper.description or "",
-            adminUser=session.paper.adminUser,
-            question_count=len(session.paper.questions) if hasattr(session.paper, 'questions') else 0,
-            created_at=session.paper.created_at
+            adminUser=admin_data if admin_data else 0, # Map to admin_data if exists per request schema
+            question_count=len(paper_questions),
+            questions=paper_questions,
+            total_marks=session.paper.total_marks,
+            created_at=session.paper.created_at or datetime.now(timezone.utc)
         )
 
     invite_link = f"{FRONTEND_URL}/interview/{session.access_token}"
@@ -106,17 +120,28 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
         
     if now < schedule_time:
         # Too early
-        access_data = InterviewAccessResponse(
-            interview_id=session.id,
-            candidate=candidate_data,
-            admin=admin_data,
-            paper=paper_data,
-            invite_link=invite_link,
-            message="WAIT",
-            schedule_time=format_iso_datetime(session.schedule_time),
+        access_data = InterviewSessionData(
+            id=session.id,
+            access_token=session.access_token,
+            admin_id=admin_data,
+            candidate_id=candidate_data,
+            paper_id=paper_data,
+            schedule_time=session.schedule_time,
             duration_minutes=session.duration_minutes,
-            status=session.status.value,
-            max_questions=session.max_questions
+            max_questions=session.max_questions,
+            start_time=session.start_time,
+            end_time=session.end_time,
+            status=session.status.value if hasattr(session.status, 'value') else str(session.status),
+            total_score=session.total_score,
+            current_status="WAIT", # Special front-end flag preserved from old behavior, technically outside enum but supported dynamically
+            last_activity=session.last_activity or now,
+            warning_count=session.warning_count or 0,
+            max_warnings=session.max_warnings or 3,
+            is_suspended=session.is_suspended or False,
+            suspension_reason=session.suspension_reason,
+            suspended_at=session.suspended_at,
+            enrollment_audio_path=session.enrollment_audio_path,
+            is_completed=session.is_completed or False
         )
         return ApiResponse(
             status_code=200,
@@ -144,23 +169,35 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
             new_status=CandidateStatus.LINK_ACCESSED
         )
     
-    # 5. Success - Allow Entry
-    access_data = InterviewAccessResponse(
-        interview_id=session.id,
-        candidate=candidate_data,
-        admin=admin_data,
-        paper=paper_data,
-        invite_link=invite_link,
-        message="START",
-        schedule_time=format_iso_datetime(session.schedule_time),
+    # 6. Build the final standard response format
+    result_data = InterviewSessionData(
+        id=session.id,
+        access_token=session.access_token,
+        admin_id=admin_data,
+        candidate_id=candidate_data,
+        paper_id=paper_data,
+        schedule_time=session.schedule_time,
         duration_minutes=session.duration_minutes,
-        status=session.status.value,
-        max_questions=session.max_questions
+        max_questions=session.max_questions,
+        start_time=session.start_time,
+        end_time=session.end_time,
+        status=session.status.value if hasattr(session.status, 'value') else str(session.status),
+        total_score=session.total_score,
+        current_status=session.current_status.value if hasattr(session.current_status, 'value') else str(session.current_status),
+        last_activity=session.last_activity or now,
+        warning_count=session.warning_count or 0,
+        max_warnings=session.max_warnings or 3,
+        is_suspended=session.is_suspended or False,
+        suspension_reason=session.suspension_reason,
+        suspended_at=session.suspended_at,
+        enrollment_audio_path=session.enrollment_audio_path,
+        is_completed=session.is_completed or False
     )
+
     return ApiResponse(
         status_code=200,
-        data=access_data,
-        message="Interview access granted"
+        data=result_data,
+        message="Access Granted"
     )
 
 
@@ -516,7 +553,9 @@ async def submit_answer_audio(
         message="Audio answer submitted successfully"
     )
 
-@router.post("/submit-answer-text", response_model=ApiResponse[dict])
+from ..schemas.interview_responses import AnswersData, QuestionData
+
+@router.post("/submit-answer-text", response_model=ApiResponse[AnswersData])
 async def submit_answer_text(
     interview_id: int = Form(...),
     question_id: int = Form(...),
@@ -560,14 +599,38 @@ async def submit_answer_text(
     session_db.add(answer)
     session_db.commit()
     
-    # Return the saved feedback and score in the response
+    # Load the related question
+    question = session_db.get(Questions, question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+        
+    question_data = QuestionData(
+        id=question.id,
+        paper_id=question.paper_id,
+        content=question.content or "",
+        question_text=question.question_text or "",
+        topic=question.topic or "",
+        difficulty=question.difficulty.value if hasattr(question.difficulty, 'value') else str(question.difficulty),
+        marks=question.marks,
+        response_type=question.response_type.value if hasattr(question.response_type, 'value') else str(question.response_type)
+    )
+    
+    answer_data = AnswersData(
+        id=answer.id,
+        interview_result_id=answer.interview_result_id,
+        Question_id=question_data,
+        candidate_answer=answer.candidate_answer,
+        feedback=answer.feedback,
+        score=answer.score,
+        audio_path=answer.audio_path,
+        transcribed_text=answer.transcribed_text,
+        timestamp=answer.timestamp
+    )
+    
+    # Return the exact requested schema
     return ApiResponse(
         status_code=200,
-        data={
-            "status": "saved",
-            "feedback": answer.feedback,
-            "score": answer.score
-        },
+        data=answer_data,
         message="Text answer submitted successfully"
     )
 
