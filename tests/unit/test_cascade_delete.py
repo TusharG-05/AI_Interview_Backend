@@ -151,4 +151,4 @@ class TestCascadeDelete:
 
         response = client.delete(f"/api/admin/users/{admin.id}", headers=headers)
         assert response.status_code == 400
-        assert "Cannot delete your own account" in response.json()["detail"]
+        assert "Cannot delete your own account" in response.json()["message"]
