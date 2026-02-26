@@ -62,7 +62,6 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
             access_token=session.candidate.access_token,
             resume_text=session.candidate.resume_text,
             profile_image=session.candidate.profile_image,
-            profile_image_bytes=session.candidate.profile_image_bytes,
             face_embedding=session.candidate.face_embedding
         )
 
@@ -76,7 +75,6 @@ async def access_interview(token: str, session_db: Session = Depends(get_session
             access_token=session.admin.access_token,
             resume_text=session.admin.resume_text,
             profile_image=session.admin.profile_image,
-            profile_image_bytes=session.admin.profile_image_bytes,
             face_embedding=session.admin.face_embedding
         )
 
