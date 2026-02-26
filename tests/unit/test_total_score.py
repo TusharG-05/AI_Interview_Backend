@@ -225,8 +225,8 @@ class TestTotalScoreInResultDetail:
 
         # Verify both top-level and nested total_score
         assert data["total_score"] == 6.0
-        assert data["interview"]["total_score"] == 6.0, (
-            f"Nested interview.total_score should be 6.0, got {data['interview']['total_score']}"
+        assert data["interviewData"]["total_score"] == 6.0, (
+            f"Nested interviewData.total_score should be 6.0, got {data['interviewData']['total_score']}"
         )
 
 
