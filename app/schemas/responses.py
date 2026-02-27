@@ -148,10 +148,20 @@ class InterviewSessionExpanded(BaseModel):
     paper_id: QuestionPaperExpanded = Field(default_factory=lambda: QuestionPaperExpanded())
     schedule_time: str
     duration_minutes: int
+    max_questions: int = 0
     status: str
     total_score: Optional[float] = None
+    current_status: str = ""
+    last_activity: str = ""
     start_time: Optional[str] = None
     end_time: Optional[str] = None
+    warning_count: int = 0
+    max_warnings: int = 3
+    is_suspended: bool = False
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[str] = None
+    enrollment_audio_path: Optional[str] = None
+    is_completed: bool = False
     response_count: int
     proctoring_event_count: int
     enrollment_audio_url: Optional[str] = None

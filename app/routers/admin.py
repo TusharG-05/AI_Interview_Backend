@@ -815,15 +815,25 @@ async def get_interview(
         admin_id=admin_dict,
         candidate_id=candidate_dict,
         paper_id=paper_dict,
-        schedule_time=interview_session.schedule_time.isoformat(),
+        schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
         duration_minutes=interview_session.duration_minutes,
-        status=interview_session.status.value,
+        max_questions=getattr(interview_session, "max_questions", 0) or 0,
+        status=interview_session.status.value if getattr(interview_session, "status", None) else "SCHEDULED",
         total_score=interview_session.total_score,
-        start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
-        end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
+        current_status=getattr(interview_session, "current_status", ""),
+        last_activity=interview_session.last_activity.isoformat() if getattr(interview_session, "last_activity", None) else "",
+        start_time=interview_session.start_time.isoformat() if getattr(interview_session, "start_time", None) else None,
+        end_time=interview_session.end_time.isoformat() if getattr(interview_session, "end_time", None) else None,
+        warning_count=getattr(interview_session, "warning_count", 0) or 0,
+        max_warnings=getattr(interview_session, "max_warnings", 3) or 3,
+        is_suspended=getattr(interview_session, "is_suspended", False) or False,
+        suspension_reason=getattr(interview_session, "suspension_reason", None),
+        suspended_at=interview_session.suspended_at.isoformat() if getattr(interview_session, "suspended_at", None) else None,
+        enrollment_audio_path=getattr(interview_session, "enrollment_audio_path", None),
+        is_completed=getattr(interview_session, "is_completed", False) or False,
         response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
         proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
-        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
+        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None
     )
     
     return ApiResponse(
