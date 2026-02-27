@@ -67,8 +67,8 @@ def record_status_change(
         context_data=json.dumps(metadata) if metadata else "{}"
     )
     
-    # Update session current status
-    interview_session.current_status = new_status
+    # Update session current status — store as string since the column type is str
+    interview_session.current_status = new_status.value
     interview_session.last_activity = datetime.now(timezone.utc)
     
     session.add(timeline_entry)
