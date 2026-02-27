@@ -156,14 +156,11 @@ async def upload_selfie(
         logger.error(f"Embedding generation failed: {e}")
         # We still save the bytes even if embedding fails, but log it
         
-    # 4. Legacy: Save to disk
-    upload_dir = "app/assets/images/profiles"
-    os.makedirs(upload_dir, exist_ok=True)
-    file_path = f"{upload_dir}/user_{current_user.id}.jpg"
-    with open(file_path, "wb") as buffer:
-        buffer.write(image_bytes)
-        
-    current_user.profile_image = file_path
+    # 4. Store image as base64 in database profile_image instead of local disk
+    import base64
+    base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
+    current_user.profile_image = f"data:{file.content_type};base64,{base64_encoded}"
+    
     session.add(current_user)
     
     try:
