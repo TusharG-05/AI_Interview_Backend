@@ -1,9 +1,0 @@
-candidate1@test.com | UserRole.CANDIDATE
-scan_super@example.com | UserRole.SUPER_ADMIN
-scan_candidate_7a0215@example.com | UserRole.CANDIDATE
-scan_candidate_bea7c4@example.com | UserRole.CANDIDATE
-admin@example.com | UserRole.ADMIN
-candidate@example.com | UserRole.CANDIDATE
-admin@test.com | UserRole.ADMIN
-newcand@test.com | UserRole.CANDIDATE
-newcand_28b0bc@test.com | UserRole.CANDIDATE
