@@ -121,7 +121,7 @@ check "POST /auth/token (OAuth2)" "200" "$CODE" "$BODY"
 RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/auth/register" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"email":"e2e_test_candidate@test.com","password":"test123","full_name":"E2E Test Candidate","role":"candidate"}')
+  -d '{"email":"e2e_test_candidate@test.com","password":"test123","full_name":"E2E Test Candidate","role":"CANDIDATE"}')
 split_response "$RESP"
 check "POST /auth/register" "200 201" "$CODE" "$BODY"
 CAND_TOKEN=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['access_token'])" 2>/dev/null || echo "")
@@ -131,7 +131,7 @@ CAND_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)
 if [ -z "$CAND_TOKEN" ]; then
     RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/auth/login" \
       -H "Content-Type: application/json" \
-      -d '{"email":"e2e_test_candidate@test.com","password":"test123"}')
+      -d "{\"email\":\"e2e_test_candidate@test.com\",\"password\":\"test123\",\"access_token\":\"$ACCESS_TK\"}")
     split_response "$RESP"
     CAND_TOKEN=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['access_token'])" 2>/dev/null || echo "")
     CAND_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
@@ -153,7 +153,7 @@ if [ -n "$CAND_TOKEN" ]; then
 fi
 
 # Logout
-RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/auth/logout")
+RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/auth/logout" -H "Authorization: Bearer $ADMIN_TOKEN")
 split_response "$RESP"
 check "POST /auth/logout" "200" "$CODE" "$BODY"
 
@@ -236,7 +236,7 @@ echo "━━━ 4. USERS CRUD ━━━"
 
 RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/admin/users" \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
-  -d '{"email":"e2e_crud_user@test.com","password":"test123","full_name":"CRUD Test User","role":"candidate"}')
+  -d '{"email":"e2e_crud_user@test.com","password":"test123","full_name":"CRUD Test User","role":"CANDIDATE"}')
 split_response "$RESP"
 check "POST /admin/users (create)" "200 201" "$CODE" "$BODY"
 CRUD_USER_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
@@ -269,7 +269,7 @@ echo "━━━ 5. INTERVIEW FLOW (schedule → access → selfie → start → 
 
 if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
     # Schedule for NOW so we can access it
-    SCHED_TIME=$(date -u -d "+1 minute" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    SCHED_TIME=$(date -u -d "-5 minutes" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
     
     RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/admin/interviews/schedule" \
       -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
@@ -309,11 +309,10 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
 
         # Access interview (candidate side)
         if [ -n "$ACCESS_TK" ]; then
-            # Wait for schedule_time to pass
-            echo "  ⏳ Waiting for schedule time..."
-            sleep 65
+            echo "  ⏳ Checking access (back-dated schedule should pass)..."
+            # sleep 65
 
-            RESP=$(curl -s --max-time 10 -w "\n%{http_code}" "$BASE/interview/access/$ACCESS_TK")
+            RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -H "Authorization: Bearer $CAND_TOKEN" "$BASE/interview/access/$ACCESS_TK")
             split_response "$RESP"
             check "GET /interview/access/{token}" "200" "$CODE" "$BODY"
             MSG=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['message'])" 2>/dev/null || echo "")
@@ -322,6 +321,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
 
         # Upload selfie
         RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/interview/upload-selfie" \
+          -H "Authorization: Bearer $CAND_TOKEN" \
           -F "interview_id=$INT_ID" \
           -F "file=@/tmp/api_test/selfie.jpg;type=image/jpeg")
         split_response "$RESP"
@@ -329,6 +329,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
 
         # Start session with enrollment audio
         RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/interview/start-session/$INT_ID" \
+          -H "Authorization: Bearer $CAND_TOKEN" \
           -F "enrollment_audio=@/tmp/api_test/audio.wav;type=audio/wav")
         split_response "$RESP"
         check "POST /interview/start-session/$INT_ID" "200" "$CODE" "$BODY"
@@ -340,7 +341,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         check "GET /admin/interviews/enrollment-audio/$INT_ID" "200 404" "$CODE" ""
 
         # Get next question
-        RESP=$(curl -s --max-time 10 -w "\n%{http_code}" "$BASE/interview/next-question/$INT_ID")
+        RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -H "Authorization: Bearer $CAND_TOKEN" "$BASE/interview/next-question/$INT_ID")
         split_response "$RESP"
         check "GET /interview/next-question/$INT_ID" "200" "$CODE" "$BODY"
         NEXT_Q_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'].get('question_id',''))" 2>/dev/null || echo "")
@@ -348,6 +349,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         if [ -n "$NEXT_Q_ID" ]; then
             # Submit answer (text)
             RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/interview/submit-answer-text" \
+              -H "Authorization: Bearer $CAND_TOKEN" \
               -H "Content-Type: application/x-www-form-urlencoded" \
               -d "interview_id=$INT_ID&question_id=$NEXT_Q_ID&answer_text=Python+is+a+high-level+programming+language")
             split_response "$RESP"
@@ -355,6 +357,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
 
             # Submit audio answer (for another question if available, or same)
             RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/interview/submit-answer-audio" \
+              -H "Authorization: Bearer $CAND_TOKEN" \
               -F "interview_id=$INT_ID" \
               -F "question_id=$NEXT_Q_ID" \
               -F "audio=@/tmp/api_test/audio.wav;type=audio/wav")
@@ -363,7 +366,8 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         fi
 
         # Finish interview
-        RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/interview/finish/$INT_ID")
+        RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/interview/finish/$INT_ID" \
+          -H "Authorization: Bearer $CAND_TOKEN")
         split_response "$RESP"
         check "POST /interview/finish/$INT_ID" "200" "$CODE" "$BODY"
 
@@ -426,7 +430,6 @@ if [ -n "$CAND_TOKEN" ]; then
     split_response "$RESP"
     check "GET /candidate/interviews" "200" "$CODE" "$BODY"
 
-    # Upload selfie (candidate route)
     RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/candidate/upload-selfie" \
       -H "Authorization: Bearer $CAND_TOKEN" \
       -F "file=@/tmp/api_test/selfie.jpg;type=image/jpeg")
@@ -452,6 +455,7 @@ echo "━━━ 8. STANDALONE TOOLS ━━━"
 
 # Evaluate answer
 RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/interview/evaluate-answer" \
+  -H "Authorization: Bearer $CAND_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question":"What is Python?","answer":"Python is a high-level programming language."}')
 split_response "$RESP"
@@ -464,13 +468,15 @@ check "GET /interview/tts" "200" "$CODE" ""
 
 # Speech to text
 RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/interview/tools/speech-to-text" \
+  -H "Authorization: Bearer $CAND_TOKEN" \
   -F "audio=@/tmp/api_test/audio.wav;type=audio/wav")
 split_response "$RESP"
 check "POST /interview/tools/speech-to-text" "200" "$CODE" "$BODY"
 
 # Question audio (for existing question)
 if [ -n "$Q_ID" ]; then
-    RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -o /dev/null "$BASE/interview/audio/question/$Q_ID")
+    RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -o /dev/null "$BASE/interview/audio/question/$Q_ID" \
+      -H "Authorization: Bearer $CAND_TOKEN")
     CODE=$(echo "$RESP" | tail -1)
     check "GET /interview/audio/question/$Q_ID" "200 404" "$CODE" ""
 fi

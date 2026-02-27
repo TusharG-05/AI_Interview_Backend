@@ -1297,7 +1297,7 @@ async def get_result(
         message="Result details retrieved successfully"
     )
 
-@router.patch("/results/{interview_id}", response_model=ApiResponse[InterviewResultDetail])
+@router.patch("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
 async def update_result(
     interview_id: int,
     update_data: ResultUpdate,
