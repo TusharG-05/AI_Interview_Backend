@@ -24,7 +24,7 @@ from ..schemas.responses import (
     PaperRead, QuestionRead, SessionRead, UserRead, DetailedResult, 
     ResponseDetail, ProctoringLogItem, InterviewLinkResponse, 
     InterviewDetailRead, UserDetailRead, CandidateStatusResponse, 
-    LiveStatusItem, AnswerRead, InterviewSessionDetail
+    LiveStatusItem, AnswerRead, InterviewSessionDetail, InterviewSessionExpanded
 )
 from ..schemas.interview_result import (
     InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested
@@ -745,7 +745,7 @@ async def get_live_status_dashboard(
     )
 
 
-@router.get("/interviews/{interview_id}", response_model=ApiResponse[InterviewDetailRead])
+@router.get("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionExpanded])
 async def get_interview(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -760,7 +760,9 @@ async def get_interview(
             selectinload(InterviewSession.admin),
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
-            selectinload(InterviewSession.proctoring_events)
+            selectinload(InterviewSession.proctoring_events),
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.admin),
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions)
         )
     ).first()
     
@@ -775,27 +777,55 @@ async def get_interview(
         )
     
     # Serialize users with role-based keys, handling NULL users
-    admin_dict = serialize_user(interview_session.admin, fallback_role="admin")
-    candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate")
+    admin_dict = serialize_user(interview_session.admin, fallback_role="admin") if interview_session.admin else None
+    candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate") if interview_session.candidate else None
+    
+    # Serialize paper with related data
+    paper_dict = None
+    if interview_session.paper:
+        paper_admin_dict = serialize_user(interview_session.paper.admin, fallback_role="admin") if interview_session.paper.admin else None
+        paper_questions = [
+            {
+                "id": q.id,
+                "content": q.content,
+                "question_text": q.question_text,
+                "topic": q.topic,
+                "difficulty": q.difficulty,
+                "marks": q.marks,
+                "response_type": q.response_type
+            }
+            for q in getattr(interview_session.paper, "questions", [])
+        ]
+        
+        paper_dict = {
+            "id": interview_session.paper.id,
+            "name": interview_session.paper.name,
+            "description": interview_session.paper.description,
+            "adminUser": paper_admin_dict,
+            "question_count": interview_session.paper.question_count,
+            "questions": paper_questions,
+            "total_marks": interview_session.paper.total_marks,
+            "created_at": interview_session.paper.created_at.isoformat() if interview_session.paper.created_at else ""
+        }
     
     # Build detailed response
-    detail_read = InterviewDetailRead(
+    detail_read = InterviewSessionExpanded(
         id=interview_session.id,
-        admin=admin_dict,
-        candidate=candidate_dict,
-        paper_id=interview_session.paper_id,
-        paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
+        access_token=interview_session.access_token,
+        admin_id=admin_dict,
+        candidate_id=candidate_dict,
+        paper_id=paper_dict,
         schedule_time=interview_session.schedule_time.isoformat(),
         duration_minutes=interview_session.duration_minutes,
         status=interview_session.status.value,
         total_score=interview_session.total_score,
         start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
         end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
-        access_token=interview_session.access_token,
-        response_count=len(interview_session.result.answers) if interview_session.result else 0,
-        proctoring_event_count=len(interview_session.proctoring_events),
+        response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
+        proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
     )
+    
     return ApiResponse(
         status_code=200,
         data=detail_read,
