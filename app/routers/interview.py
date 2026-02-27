@@ -260,7 +260,6 @@ async def start_session_logic(
                  warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
             
             session.enrollment_audio_path = enrollment_path
-            session_db.add(session)
             
             # Track enrollment completion
             record_status_change(
@@ -269,6 +268,7 @@ async def start_session_logic(
                 new_status=CandidateStatus.ENROLLMENT_COMPLETED
             )
             
+        session_db.add(session)
         session_db.commit()
     except Exception as e:
         session_db.rollback()
@@ -347,14 +347,11 @@ async def upload_selfie_session(
     except Exception as e:
         _logger.error(f"Embedding generation failed (non-fatal): {e}")
 
-    # 5. Save to disk
-    upload_dir = "app/assets/images/profiles"
-    os.makedirs(upload_dir, exist_ok=True)
-    file_path = f"{upload_dir}/user_{candidate.id}.jpg"
-    with open(file_path, "wb") as buffer:
-        buffer.write(image_bytes)
+    # 5. Store image as base64 in database profile_image instead of local disk
+    import base64
+    base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
+    candidate.profile_image = f"data:{file.content_type};base64,{base64_encoded}"
     
-    candidate.profile_image = file_path
     session_db.add(candidate)
     
     # 6. Track Status (best effort — don't let enum issues block the upload)
