@@ -237,6 +237,14 @@ async def start_session_logic(
     if session.status == InterviewStatus.SCHEDULED:
         session.status = InterviewStatus.LIVE
         session.start_time = datetime.now(timezone.utc)
+        
+    # Always mark as active once the session is started
+    if session.current_status not in [CandidateStatus.INTERVIEW_ACTIVE, CandidateStatus.INTERVIEW_COMPLETED]:
+        record_status_change(
+            session=session_db,
+            interview_session=session,
+            new_status=CandidateStatus.INTERVIEW_ACTIVE
+        )
     
     warning = None
     try:
