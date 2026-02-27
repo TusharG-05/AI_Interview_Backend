@@ -1,5 +1,5 @@
 from typing import Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from .interview_result import UserNested, QuestionPaperNested
 
 # Candidate Responses
@@ -126,6 +126,32 @@ class InterviewDetailRead(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     access_token: str
+    response_count: int
+    proctoring_event_count: int
+    enrollment_audio_url: Optional[str] = None
+
+class QuestionPaperExpanded(BaseModel):
+    id: int = 0
+    name: str = ""
+    description: str = ""
+    adminUser: Optional[UserNested] = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
+    question_count: int = 0
+    questions: List[QuestionRead] = Field(default_factory=list)
+    total_marks: int = 0
+    created_at: str = ""
+
+class InterviewSessionExpanded(BaseModel):
+    id: int
+    access_token: str
+    admin_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
+    candidate_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
+    paper_id: QuestionPaperExpanded = Field(default_factory=lambda: QuestionPaperExpanded())
+    schedule_time: str
+    duration_minutes: int
+    status: str
+    total_score: Optional[float] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
     response_count: int
     proctoring_event_count: int
     enrollment_audio_url: Optional[str] = None
