@@ -93,3 +93,9 @@ app/assets/face_landmarker.task
 api_tests/.admin_token
 api_tests/.candidate_token
 api_tests/.interview_token
+tests/api/.*_token
+
+# === Redundant Assets ===
+dump.rdb
+users_list.txt
+tests/logs/
