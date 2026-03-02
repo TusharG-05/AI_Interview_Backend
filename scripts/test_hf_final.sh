@@ -76,6 +76,11 @@ if [ -n "$ACCESS_TK" ]; then
         split_response "$RESP"; check "Submit Answer" "200" "$CODE" "$BODY"
     fi
 
+    RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/interview/$INT_ID/tab-switch" \
+      -H "Authorization: Bearer $CAND_TOKEN" -H "Content-Type: application/json" \
+      -d '{"event_type": "tab_switch"}')
+    split_response "$RESP"; check "Tab Switch Log" "200" "$CODE" "$BODY"
+
     RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/interview/finish/$INT_ID" -H "Authorization: Bearer $CAND_TOKEN")
     split_response "$RESP"; check "Finish Interview" "200" "$CODE" "$BODY"
 

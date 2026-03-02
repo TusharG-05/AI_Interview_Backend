@@ -1,11 +1,10 @@
-#!/bin/bash
 # =============================================================================
-# FULL E2E API TEST — EVERY ENDPOINT, NO SKIPS
-# Tests against Docker DB at localhost:8000
+# FULL E2E API TEST — REMOTE HUGGING FACE
+# Tests against https://ichigo253-ai-interview-backend.hf.space/api
 # =============================================================================
 set -o pipefail
 
-BASE="http://localhost:8000/api"
+BASE="https://ichigo253-ai-interview-backend.hf.space/api"
 PASS=0
 FAIL=0
 FAILED_LIST=""
@@ -526,7 +525,7 @@ async def test_ws():
     try:
         token = sys.argv[1]
         async with websockets.connect(
-            f'ws://localhost:8000/api/admin/dashboard/ws?token={token}',
+            f'wss://ichigo253-ai-interview-backend.hf.space/api/admin/dashboard/ws?token={token}',
             close_timeout=3
         ) as ws:
             msg = await asyncio.wait_for(ws.recv(), timeout=3)
@@ -542,7 +541,7 @@ elif echo "$WS_RESULT" | grep -q "no module\|ModuleNotFoundError"; then
     echo "  ⚠️  WS /admin/dashboard/ws (websockets module not installed, testing via curl)"
     RESP=$(curl -s --max-time 5 -w "\n%{http_code}" -o /dev/null \
       -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-      "http://localhost:8000/api/admin/dashboard/ws?token=$ADMIN_TOKEN")
+      "wss://ichigo253-ai-interview-backend.hf.space/api/admin/dashboard/ws?token=$ADMIN_TOKEN")
     CODE=$(echo "$RESP" | tail -1)
     check "WS /admin/dashboard/ws (upgrade)" "101 200" "$CODE" ""
 else
@@ -555,7 +554,7 @@ WS_RESULT2=$(python3 -c "
 import asyncio, websockets
 async def test_ws():
     try:
-        async with websockets.connect('ws://localhost:8000/api/status/ws?interview_id=1', close_timeout=3) as ws:
+        async with websockets.connect('wss://ichigo253-ai-interview-backend.hf.space/api/status/ws?interview_id=1', close_timeout=3) as ws:
             msg = await asyncio.wait_for(ws.recv(), timeout=3)
             print('OK:' + str(msg)[:50])
     except Exception as e:
@@ -568,7 +567,7 @@ if echo "$WS_RESULT2" | grep -q "^OK:"; then
 elif echo "$WS_RESULT2" | grep -q "no module\|ModuleNotFoundError"; then
     RESP=$(curl -s --max-time 5 -w "\n%{http_code}" -o /dev/null \
       -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-      "http://localhost:8000/api/status/ws?interview_id=1")
+      "wss://ichigo253-ai-interview-backend.hf.space/api/status/ws?interview_id=1")
     CODE=$(echo "$RESP" | tail -1)
     check "WS /status/ws (upgrade)" "101 200" "$CODE" ""
 else

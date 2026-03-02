@@ -33,10 +33,11 @@ VIOLATION_SEVERITY = {
     "low_audio": "info",
     "connection_unstable": "info",
     
-    # Hard violations - immediate suspension
-    "multiple_faces": "critical",
-    "tab_switch": "critical",
-    "face_not_detected_extended": "critical",
+    # Hard violations - accumulate warnings
+    "MULTIPLE FACES DETECTED": "warning",
+    "NO FACE DETECTED": "warning",
+    "tab_switch": "warning",
+    "SECURITY ALERT: UNAUTHORIZED PERSON": "critical",
     "unauthorized_device": "critical",
 }
 
