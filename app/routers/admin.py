@@ -485,7 +485,8 @@ async def schedule_interview(
         warning_count=0,
         max_warnings=3,
         is_suspended=False,
-        is_completed=False
+        is_completed=False,
+        allow_copy_paste=schedule_data.allow_copy_paste
     )
     
     session.add(new_session)
@@ -604,7 +605,8 @@ async def schedule_interview(
         suspension_reason=new_session.suspension_reason,
         suspended_at=format_iso_datetime(new_session.suspended_at),
         enrollment_audio_path=new_session.enrollment_audio_path,
-        is_completed=new_session.is_completed or False
+        is_completed=new_session.is_completed or False,
+        allow_copy_paste=new_session.allow_copy_paste
     )
 
     link_response = InterviewLinkResponse(
@@ -650,7 +652,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             candidate=candidate_dict,
             status=s.status.value,
             scheduled_at=format_iso_datetime(s.schedule_time),
-            score=s.total_score
+            score=s.total_score,
+            allow_copy_paste=s.allow_copy_paste or False
         ))
     return ApiResponse(
         status_code=200,
@@ -723,7 +726,8 @@ async def get_live_status_dashboard(
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": format_iso_datetime(interview_session.suspended_at),
             "enrollment_audio_path": interview_session.enrollment_audio_path,
-            "is_completed": interview_session.is_completed or False
+            "is_completed": interview_session.is_completed or False,
+            "allow_copy_paste": interview_session.allow_copy_paste
         }
         
         results.append(LiveStatusItem(
@@ -830,6 +834,7 @@ async def get_interview(
         suspended_at=interview_session.suspended_at.isoformat() if getattr(interview_session, "suspended_at", None) else None,
         enrollment_audio_path=getattr(interview_session, "enrollment_audio_path", None),
         is_completed=getattr(interview_session, "is_completed", False) or False,
+        allow_copy_paste=getattr(interview_session, "allow_copy_paste", False),
         response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
         proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None
@@ -974,7 +979,8 @@ async def update_interview(
         access_token=interview_session.access_token,
         response_count=len(interview_session.result.answers) if interview_session.result else 0,
         proctoring_event_count=len(interview_session.proctoring_events),
-        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None
+        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None,
+        allow_copy_paste=interview_session.allow_copy_paste
     )
     return ApiResponse(
         status_code=200,
@@ -1157,7 +1163,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             suspension_reason=s.suspension_reason,
             suspended_at=s.suspended_at,
             enrollment_audio_path=f"/api/admin/interviews/enrollment-audio/{s.id}" if s.enrollment_audio_path else None,
-
+            allow_copy_paste=s.allow_copy_paste or False,
             is_completed=s.is_completed or False
         )
             
@@ -1254,7 +1260,8 @@ async def get_result(
         max_warnings=s.max_warnings or 3, is_suspended=s.is_suspended or False,
         suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
         enrollment_audio_path=s.enrollment_audio_path,
-        is_completed=s.is_completed or False
+        is_completed=s.is_completed or False,
+        allow_copy_paste=s.allow_copy_paste or False
     )
     
     # 5. Answers (mapped to Interview_response)

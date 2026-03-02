@@ -141,7 +141,8 @@ async def access_interview(
             suspension_reason=session.suspension_reason,
             suspended_at=session.suspended_at,
             enrollment_audio_path=session.enrollment_audio_path,
-            is_completed=session.is_completed or False
+            is_completed=session.is_completed or False,
+            allow_copy_paste=session.allow_copy_paste
         )
         return ApiResponse(
             status_code=200,
@@ -191,7 +192,8 @@ async def access_interview(
         suspension_reason=session.suspension_reason,
         suspended_at=session.suspended_at,
         enrollment_audio_path=session.enrollment_audio_path,
-        is_completed=session.is_completed or False
+        is_completed=session.is_completed or False,
+        allow_copy_paste=session.allow_copy_paste
     )
 
     return ApiResponse(

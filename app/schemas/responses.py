@@ -17,6 +17,7 @@ class HistoryItem(BaseModel):
     warning_count: int = 0
     is_completed: bool = False
     current_status: Optional[str] = None
+    allow_copy_paste: bool = False
 
 class InterviewAccessResponse(BaseModel):
     interview_id: int
@@ -29,6 +30,7 @@ class InterviewAccessResponse(BaseModel):
     status: Optional[str] = None
     max_questions: Optional[int] = None
     invite_link: Optional[str] = None
+    allow_copy_paste: bool = False
 
 class QuestionRead(BaseModel):
     id: int
@@ -50,10 +52,12 @@ class PaperRead(BaseModel):
 
 class SessionRead(BaseModel):
     id: int
+    admin: Optional[dict] = None
     candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     status: str
     scheduled_at: str
     score: Optional[float] = None
+    allow_copy_paste: bool = False
 
 class UserRead(BaseModel):
     id: int
@@ -97,12 +101,14 @@ class InterviewSessionDetail(BaseModel):
     current_status: Optional[str] = None
     last_activity: Optional[str] = None
     warning_count: int
+    allow_copy_paste: bool = False
     max_warnings: int
     is_suspended: bool
     suspension_reason: Optional[str] = None
     suspended_at: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
+    allow_copy_paste: bool = False
 
 class InterviewLinkResponse(BaseModel):
     interview: InterviewSessionDetail
@@ -129,6 +135,7 @@ class InterviewDetailRead(BaseModel):
     response_count: int
     proctoring_event_count: int
     enrollment_audio_url: Optional[str] = None
+    allow_copy_paste: bool = False
 
 class QuestionPaperExpanded(BaseModel):
     id: int = 0
@@ -162,6 +169,7 @@ class InterviewSessionExpanded(BaseModel):
     suspended_at: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
+    allow_copy_paste: bool = False
     response_count: int
     proctoring_event_count: int
     enrollment_audio_url: Optional[str] = None

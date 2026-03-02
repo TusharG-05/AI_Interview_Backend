@@ -73,6 +73,7 @@ class InterviewSessionData(BaseModel):
     suspended_at: Optional[datetime] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool
+    allow_copy_paste: bool = False
 
 class AdminResultData(BaseModel):
     id: int
