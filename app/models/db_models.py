@@ -122,7 +122,10 @@ class InterviewSession(SQLModel, table=True):
 
     # Enrollment
     enrollment_audio_path: Optional[str] = None
-    is_completed: bool = Field(default=False) 
+    is_completed: bool = Field(default=False)
+
+    # Copy-Paste Control
+    allow_copy_paste: bool = Field(default=False)
     
     # Relationships
     admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})

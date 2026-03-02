@@ -23,6 +23,7 @@ class InterviewScheduleCreate(BaseModel):
     schedule_time: str # ISO format expected from frontend
     duration_minutes: int = 1440
     max_questions: Optional[int] = None  # Limit questions, None = use all
+    allow_copy_paste: bool = False  # Whether candidate can copy/paste during interview
 
 class InterviewUpdate(BaseModel):
     schedule_time: Optional[str] = None  # ISO format
@@ -30,6 +31,7 @@ class InterviewUpdate(BaseModel):
     status: Optional[str] = None  # 'scheduled', 'cancelled', etc.
     paper_id: Optional[int] = None  # Allow changing question paper
     max_questions: Optional[int] = None  # Update question limit
+    allow_copy_paste: Optional[bool] = None  # Update copy/paste permission
 
 class ResponseUpdate(BaseModel):
     """Update individual response within a result"""

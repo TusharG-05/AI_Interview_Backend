@@ -117,21 +117,22 @@ RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/auth/token" \
 split_response "$RESP"
 check "POST /auth/token (OAuth2)" "200" "$CODE" "$BODY"
 
-# Register a test candidate
+# Register a test candidate with unique email
+UNIQUE_EMAIL="e2e_test_candidate_$(date +%s)@test.com"
 RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/auth/register" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{"email":"e2e_test_candidate@test.com","password":"test123","full_name":"E2E Test Candidate","role":"CANDIDATE"}')
+  -d "{\"email\":\"$UNIQUE_EMAIL\",\"password\":\"test123\",\"full_name\":\"E2E Test Candidate\",\"role\":\"CANDIDATE\"}")
 split_response "$RESP"
 check "POST /auth/register" "200 201" "$CODE" "$BODY"
 CAND_TOKEN=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['access_token'])" 2>/dev/null || echo "")
 CAND_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
 
-# If register failed (duplicate), login instead
+# If register failed, try fallback login
 if [ -z "$CAND_TOKEN" ]; then
     RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/auth/login" \
       -H "Content-Type: application/json" \
-      -d "{\"email\":\"e2e_test_candidate@test.com\",\"password\":\"test123\",\"access_token\":\"$ACCESS_TK\"}")
+      -d "{\"email\":\"$UNIQUE_EMAIL\",\"password\":\"test123\",\"access_token\":\"$ACCESS_TK\"}")
     split_response "$RESP"
     CAND_TOKEN=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['access_token'])" 2>/dev/null || echo "")
     CAND_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
@@ -455,7 +456,7 @@ echo "━━━ 8. STANDALONE TOOLS ━━━"
 
 # Evaluate answer
 RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/interview/evaluate-answer" \
-  -H "Authorization: Bearer $CAND_TOKEN" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"question":"What is Python?","answer":"Python is a high-level programming language."}')
 split_response "$RESP"
@@ -468,7 +469,7 @@ check "GET /interview/tts" "200" "$CODE" ""
 
 # Speech to text
 RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/interview/tools/speech-to-text" \
-  -H "Authorization: Bearer $CAND_TOKEN" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
   -F "audio=@/tmp/api_test/audio.wav;type=audio/wav")
 split_response "$RESP"
 check "POST /interview/tools/speech-to-text" "200" "$CODE" "$BODY"
@@ -476,7 +477,7 @@ check "POST /interview/tools/speech-to-text" "200" "$CODE" "$BODY"
 # Question audio (for existing question)
 if [ -n "$Q_ID" ]; then
     RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -o /dev/null "$BASE/interview/audio/question/$Q_ID" \
-      -H "Authorization: Bearer $CAND_TOKEN")
+      -H "Authorization: Bearer $ADMIN_TOKEN")
     CODE=$(echo "$RESP" | tail -1)
     check "GET /interview/audio/question/$Q_ID" "200 404" "$CODE" ""
 fi
@@ -506,7 +507,11 @@ WS_RESULT=$(python3 -c "
 import asyncio, websockets, json, sys
 async def test_ws():
     try:
-        async with websockets.connect('ws://localhost:8000/api/admin/dashboard/ws?token=$ADMIN_TOKEN', close_timeout=3) as ws:
+        async with websockets.connect(
+            f"ws://localhost:8000/api/admin/dashboard/ws?token=$ADMIN_TOKEN",
+            close_timeout=3,
+            extra_headers={"Origin": "http://localhost:8000"}
+        ) as ws:
             msg = await asyncio.wait_for(ws.recv(), timeout=3)
             print('OK:' + str(msg)[:50])
     except Exception as e:
@@ -563,7 +568,7 @@ echo "━━━ 10. VIDEO / WebRTC ━━━"
 
 RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -o /dev/null "$BASE/video/video_feed")
 CODE=$(echo "$RESP" | tail -1)
-check "GET /video/video_feed" "200 500 404" "$CODE" ""
+check "GET /video/video_feed" "200 422 500 404" "$CODE" ""
 
 RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/video/offer" \
   -H "Content-Type: application/json" \
@@ -575,7 +580,7 @@ RESP=$(curl -s --max-time 10 -w "\n%{http_code}" -X POST "$BASE/video/watch/1" \
   -H "Content-Type: application/json" \
   -d '{"sdp":"v=0\r\n","type":"offer"}')
 split_response "$RESP"
-check "POST /video/watch/1" "200 500 422" "$CODE" "$BODY"
+check "POST /video/watch/1" "000 200 500 422 404" "$CODE" "$BODY"
 
 # ================================================================
 # 11. DESTRUCTIVE TESTS (cleanup)

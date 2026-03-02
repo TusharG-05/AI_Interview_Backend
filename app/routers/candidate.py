@@ -44,6 +44,7 @@ async def my_history(
             warning_count=s.warning_count,
             is_completed=s.is_completed,
             current_status=s.current_status,
+            allow_copy_paste=s.allow_copy_paste or False,
         ))
     return ApiResponse(
         status_code=200,
@@ -80,6 +81,7 @@ async def my_interviews(
             warning_count=s.warning_count,
             is_completed=s.is_completed,
             current_status=s.current_status,
+            allow_copy_paste=s.allow_copy_paste or False,
         ))
     return ApiResponse(
         status_code=200,
