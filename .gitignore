@@ -99,3 +99,8 @@ tests/api/.*_token
 dump.rdb
 users_list.txt
 tests/logs/
+*.bak
+*.log
+server.log
+test_results_final*.log
+/temp_uploads/
