@@ -529,14 +529,33 @@ async def submit_answer_audio(
             if not result:
                 raise HTTPException(status_code=500, detail="Failed to initialize interview results")
     
-    # Save Answer
-    answer = Answers(
-        interview_result_id=result.id, 
-        question_id=question_id, 
-        audio_path=audio_path,
-        feedback=feedback or "",
-        score=score if score is not None else 0.0
-    )
+    # Check if answer already exists
+    answer = session_db.exec(
+        select(Answers).where(
+            Answers.interview_result_id == result.id,
+            Answers.question_id == question_id
+        )
+    ).first()
+
+    if answer:
+        # Override fields, delete old audio if changing the path?
+        # Typically the audio path will just overwrite or we just leave the old file on disk for now
+        answer.audio_path = audio_path
+        if feedback is not None:
+            answer.feedback = feedback
+        if score is not None:
+            answer.score = score
+        answer.timestamp = datetime.now(timezone.utc)
+    else:
+        # Save Answer
+        answer = Answers(
+            interview_result_id=result.id, 
+            question_id=question_id, 
+            audio_path=audio_path,
+            feedback=feedback or "",
+            score=score if score is not None else 0.0
+        )
+    
     session_db.add(answer)
     
     # Update last activity
@@ -589,15 +608,33 @@ async def submit_answer_text(
             if not result:
                 raise HTTPException(status_code=500, detail="Failed to initialize interview results")
 
-    answer = Answers(
-        interview_result_id=result.id,
-        question_id=question_id,
-        candidate_answer=answer_text,
-        feedback=feedback or "",
-        score=score if score is not None else 0.0
-    )
+    # Check if answer already exists
+    answer = session_db.exec(
+        select(Answers).where(
+            Answers.interview_result_id == result.id,
+            Answers.question_id == question_id
+        )
+    ).first()
+
+    if answer:
+        answer.candidate_answer = answer_text
+        if feedback is not None:
+            answer.feedback = feedback
+        if score is not None:
+            answer.score = score
+        answer.timestamp = datetime.now(timezone.utc)
+    else:
+        answer = Answers(
+            interview_result_id=result.id,
+            question_id=question_id,
+            candidate_answer=answer_text,
+            feedback=feedback or "",
+            score=score if score is not None else 0.0
+        )
+    
     session_db.add(answer)
     session_db.commit()
+    session_db.refresh(answer)
     
     # Load the related question
     question = session_db.get(Questions, question_id)
