@@ -14,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     git \
     wget \
+    tesseract-ocr \
+    libtesseract-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user (Hugging Face requirement)
@@ -41,4 +43,4 @@ EXPOSE 7860
 
 # Command to run the application
 # Note: HF Spaces expect port 7860
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "2"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]

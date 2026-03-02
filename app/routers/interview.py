@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User,Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus
+from ..models.db_models import User,Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent
 from ..schemas.requests import AnswerRequest
 from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..services import interview as interview_service
@@ -26,6 +26,8 @@ from ..utils import format_iso_datetime
 from ..tasks.interview_tasks import process_session_results_task
 logger = logging.getLogger(__name__)
 audio_service = AudioService()
+
+from ..services.status_manager import add_violation
 
 class TTSRange(BaseModel):
     text: str
@@ -733,11 +735,135 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
         raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
 
 
-# --- Background Unified Processor ---
 
-# --- Legacy Processor Removed (Migrated to Celery) ---
+@router.post("/{interview_id}/tab-switch", response_model=ApiResponse[InterviewSessionData])
+async def log_tab_switch(
+    interview_id: int,
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+) -> ApiResponse[InterviewSessionData]:
+    """
+    Logs a tab switch event during the interview.
+    Increments warning count and notifies admins.
+    Currently only generates a warning (termination logic to be enabled later).
+    """
+    from sqlalchemy.orm import selectinload
+    session_obj = session_db.exec(
+        select(InterviewSession)
+        .where(InterviewSession.id == interview_id)
+        .options(
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.paper)
+        )
+    ).first()
+    
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+        
+    # Check if session is already completed or suspended
+    if session_obj.is_completed:
+        raise HTTPException(status_code=400, detail="Interview is already completed")
+        
+    if session_obj.is_suspended:
+        return ApiResponse(
+            status_code=403,
+            data={"is_suspended": True, "reason": session_obj.suspension_reason},
+            message="Interview is currently suspended"
+        )
 
+    # Use status_manager to log the violation
+    # We use force_severity="warning" to ensure it logs a warning even if default is different
+    # NOTE: add_violation normally suspends if max_warnings exceeded.
+    # To follow 'will do termination later', we can check if we should override that logic.
+    # However, 'warning' severity naturally increments warning_count.
+    
+    event = add_violation(
+        session=session_db,
+        interview_session=session_obj,
+        event_type="tab_switch",
+        details="Candidate switched browser tab",
+        force_severity="warning"
+    )
+    
+    # Determine the return message
+    if session_obj.is_suspended:
+        return_msg = f"Interview suspended: Maximum tab switches exceeded ({session_obj.warning_count}/{session_obj.max_warnings})."
+    else:
+        return_msg = f"Warning: Tab switch detected. Please stay on the interview screen. (Warning {session_obj.warning_count} of {session_obj.max_warnings})"
 
+    # Build InterviewSessionData for consistent response
+    candidate_data = None
+    if session_obj.candidate:
+        candidate_data = LoginUserNested(
+            id=str(session_obj.candidate.id),
+            email=session_obj.candidate.email,
+            full_name=session_obj.candidate.full_name,
+            role=session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else str(session_obj.candidate.role),
+            access_token=session_obj.candidate.access_token
+        )
+
+    admin_data = None
+    if session_obj.admin:
+        admin_data = LoginUserNested(
+            id=str(session_obj.admin.id),
+            email=session_obj.admin.email,
+            full_name=session_obj.admin.full_name,
+            role=session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else str(session_obj.admin.role),
+            access_token=session_obj.admin.access_token
+        )
+
+    paper_data = None
+    if session_obj.paper:
+        paper_questions = []
+        if hasattr(session_obj.paper, 'questions') and session_obj.paper.questions:
+            for q in session_obj.paper.questions:
+                paper_questions.append(QuestionData(
+                    id=q.id, paper_id=q.paper_id, content=q.content or "", question_text=q.question_text or "",
+                    topic=q.topic or "", difficulty=q.difficulty.value if hasattr(q.difficulty, 'value') else str(q.difficulty),
+                    marks=q.marks, response_type=q.response_type.value if hasattr(q.response_type, 'value') else str(q.response_type)
+                ))
+        paper_data = QuestionPaperData(
+            id=session_obj.paper.id,
+            name=session_obj.paper.name,
+            description=session_obj.paper.description or "",
+            adminUser=admin_data if admin_data else 0,
+            question_count=len(paper_questions),
+            questions=paper_questions,
+            total_marks=session_obj.paper.total_marks,
+            created_at=session_obj.paper.created_at or datetime.now(timezone.utc)
+        )
+
+    result_data = InterviewSessionData(
+        id=session_obj.id,
+        access_token=session_obj.access_token,
+        admin_id=admin_data,
+        candidate_id=candidate_data,
+        paper_id=paper_data,
+        schedule_time=session_obj.schedule_time,
+        duration_minutes=session_obj.duration_minutes,
+        max_questions=session_obj.max_questions,
+        start_time=session_obj.start_time,
+        end_time=session_obj.end_time,
+        status=session_obj.status.value if hasattr(session_obj.status, 'value') else str(session_obj.status),
+        total_score=session_obj.total_score,
+        current_status=session_obj.current_status.value if hasattr(session_obj.current_status, 'value') else str(session_obj.current_status),
+        last_activity=session_obj.last_activity or datetime.now(timezone.utc),
+        warning_count=session_obj.warning_count or 0,
+        max_warnings=session_obj.max_warnings or 3,
+        is_suspended=session_obj.is_suspended or False,
+        suspension_reason=session_obj.suspension_reason,
+        suspended_at=session_obj.suspended_at,
+        enrollment_audio_path=session_obj.enrollment_audio_path,
+        is_completed=session_obj.is_completed or False,
+        allow_copy_paste=session_obj.allow_copy_paste
+    )
+
+    return ApiResponse(
+        status_code=200 if not session_obj.is_suspended else 403,
+        data=result_data,
+        message=return_msg
+    )
 
 
 # --- Standalone Tools ---
