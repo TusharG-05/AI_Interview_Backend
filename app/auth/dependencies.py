@@ -51,6 +51,15 @@ def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
         )
     return current_user
 
+def get_super_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    """Only SUPER_ADMIN can pass. Admin and below are rejected."""
+    if current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only super admins are allowed to perform this action"
+        )
+    return current_user
+
 def get_current_user_optional(
     request: Request,
     token: Optional[str] = Depends(oauth2_scheme), 

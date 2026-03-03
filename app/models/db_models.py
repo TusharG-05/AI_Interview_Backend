@@ -16,6 +16,13 @@ class InterviewStatus(str, Enum):
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"
 
+class InterviewRound(str, Enum):
+    ROUND_1 = "ROUND_1"
+    ROUND_2 = "ROUND_2"
+    ROUND_3 = "ROUND_3"
+    ROUND_4 = "ROUND_4"
+    ROUND_5 = "ROUND_5"
+
 class CandidateStatus(str, Enum):
     """Tracks detailed lifecycle status of a candidate through the interview process"""
     INVITED = "INVITED"  # Email sent
@@ -43,6 +50,23 @@ class User(SQLModel, table=True):
     
     # Relationships
     question_papers: List["QuestionPaper"] = Relationship(back_populates="admin")
+    created_teams: List["Team"] = Relationship(back_populates="creator")
+
+
+class Team(SQLModel, table=True):
+    """A globally unique team created by a super admin (e.g. Python Team, React Team)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(unique=True, index=True)  # Globally unique
+    description: Optional[str] = Field(default=None)
+    created_by: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    )
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Relationships
+    creator: Optional[User] = Relationship(back_populates="created_teams")
+    question_papers: List["QuestionPaper"] = Relationship(back_populates="team")
+    interview_sessions: List["InterviewSession"] = Relationship(back_populates="team")
 
 class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -52,8 +76,13 @@ class QuestionPaper(SQLModel, table=True):
     question_count: int = Field(default=0)
     total_marks: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # Team association (nullable for backwards compatibility)
+    team_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("team.id", ondelete="SET NULL"), nullable=True)
+    )
 
     admin: Optional[User] = Relationship(back_populates="question_papers")
+    team: Optional["Team"] = Relationship(back_populates="question_papers")
     questions: List["Questions"] = Relationship(
         back_populates="paper",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
@@ -98,6 +127,12 @@ class InterviewSession(SQLModel, table=True):
     invite_link: Optional[str] = None
     paper_id: int = Field(foreign_key="questionpaper.id")
 
+    # Team & Round
+    team_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("team.id", ondelete="SET NULL"), nullable=True)
+    )
+    interview_round: Optional[InterviewRound] = Field(default=None)
+
     # Timing
     schedule_time: datetime
     duration_minutes: int = Field(default=1440)  # 1 Day default
@@ -131,6 +166,7 @@ class InterviewSession(SQLModel, table=True):
     admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
     candidate: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
     paper: QuestionPaper = Relationship(back_populates="sessions")
+    team: Optional["Team"] = Relationship(back_populates="interview_sessions")
 
     # Cascade delete when interview is deleted
     result: Optional["InterviewResult"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
@@ -217,6 +253,7 @@ class Answers(SQLModel, table=True):
 
 # Rebuild models
 User.model_rebuild()
+Team.model_rebuild()
 QuestionPaper.model_rebuild()
 Questions.model_rebuild()
 InterviewSession.model_rebuild()

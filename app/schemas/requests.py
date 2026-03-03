@@ -1,6 +1,6 @@
 from typing import Optional
 from pydantic import BaseModel
-from ..models.db_models import UserRole
+from ..models.db_models import UserRole, InterviewRound
 
 # Candidate Requests
 class UserUpdate(BaseModel):
@@ -20,10 +20,21 @@ class UserCreate(BaseModel):
 class InterviewScheduleCreate(BaseModel):
     candidate_id: int
     paper_id: int
+    team_id: int  # Required: must assign interview to a team
+    interview_round: InterviewRound  # Required: e.g. ROUND_1, ROUND_2
     schedule_time: str # ISO format expected from frontend
     duration_minutes: int = 1440
     max_questions: Optional[int] = None  # Limit questions, None = use all
     allow_copy_paste: bool = False  # Whether candidate can copy/paste during interview
+
+# Team Requests (super admin only for create/update/delete)
+class TeamCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+class TeamUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
 
 class InterviewUpdate(BaseModel):
     schedule_time: Optional[str] = None  # ISO format
