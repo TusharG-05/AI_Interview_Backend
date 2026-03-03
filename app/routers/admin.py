@@ -335,6 +335,12 @@ async def generate_paper(
         f" ({request_data.years_of_experience} yrs, {request_data.num_questions} Qs)"
     )
 
+    # Validate team existence
+    from ..models.db_models import Team
+    team = session.get(Team, request_data.team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
     # Create QuestionPaper
     new_paper = QuestionPaper(
         name=paper_name,
@@ -344,6 +350,7 @@ async def generate_paper(
             f"Questions: {request_data.num_questions}."
         ),
         adminUser=current_user.id,
+        team_id=request_data.team_id,
     )
     session.add(new_paper)
     try:
@@ -411,6 +418,7 @@ async def generate_paper(
         ],
         created_at=new_paper.created_at.isoformat(),
         created_by=serialize_user(current_user),
+        team_id=new_paper.team_id
     )
 
     return ApiResponse(

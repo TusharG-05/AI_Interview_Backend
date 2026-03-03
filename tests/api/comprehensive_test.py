@@ -64,6 +64,22 @@ def test_api():
     paper_id = paper_res.json()["data"]["id"]
     print(f"✅ Paper Created: ID {paper_id}, Team ID {paper_res.json()['data']['team_id']}")
 
+    # 6.5 ADMIN: Generate Paper (AI)
+    print("\n[6.5] Testing AI Paper Generation (Linked to Team)...")
+    gen_res = requests.post(f"{BASE_URL}/admin/generate-paper", headers=admin_headers, json={
+        "ai_prompt": "Python and FastAPI basics",
+        "years_of_experience": 2,
+        "num_questions": 3,
+        "team_id": team_id,
+        "paper_name": f"AI Paper {uuid.uuid4().hex[:6]}"
+    })
+    # This might fail if LLM is not configured, so we'll just log and continue if it's not a 201
+    if gen_res.status_code == 201:
+        gen_paper_id = gen_res.json()["data"]["id"]
+        print(f"✅ AI Paper Generated: ID {gen_paper_id}, Team ID {gen_res.json()['data']['team_id']}")
+    else:
+        print(f"⚠️ AI Paper Generation skipped/failed (Check LLM config/Ollama): {gen_res.status_code} - {gen_res.text}")
+
     # 7. ADMIN: Add Question
     print("\n[7] Testing Adding Question...")
     q_res = requests.post(f"{BASE_URL}/admin/papers/{paper_id}/questions", headers=admin_headers, json={
@@ -148,6 +164,9 @@ def test_api():
         "password": CANDIDATE_PASS,
         "access_token": access_token
     })
+    if c_login_res.status_code != 200:
+        print(f"❌ Candidate Login Failed: {c_login_res.status_code} - {c_login_res.text}")
+        print(f"Debug: Email: {CANDIDATE_EMAIL}, Pass: {CANDIDATE_PASS}, Token: {access_token}")
     assert c_login_res.status_code == 200
     c_token = c_login_res.json()["data"]["access_token"]
     c_headers = {"Authorization": f"Bearer {c_token}"}
