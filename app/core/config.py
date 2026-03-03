@@ -75,15 +75,23 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# Configure DeepFace to use project-local storage (within venv)
+# Configure DeepFace to use project-local storage
 # DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights
-if ENV == "production":
+# In production (like HF Spaces), use /tmp for writable storage
+if ENV == "production" or os.path.exists("/app"):
     DEEPFACE_STORAGE_DIR = "/tmp/deepface"
 else:
-    DEEPFACE_STORAGE_DIR = os.path.abspath(".venv/models/deepface")
+    # Local dev
+    DEEPFACE_STORAGE_DIR = os.path.abspath("models/deepface")
     
 os.environ["DEEPFACE_HOME"] = DEEPFACE_STORAGE_DIR
-os.makedirs(DEEPFACE_STORAGE_DIR, exist_ok=True)
+try:
+    os.makedirs(DEEPFACE_STORAGE_DIR, exist_ok=True)
+except Exception as e:
+    # Last resort fallback to /tmp
+    DEEPFACE_STORAGE_DIR = "/tmp/deepface"
+    os.environ["DEEPFACE_HOME"] = DEEPFACE_STORAGE_DIR
+    os.makedirs(DEEPFACE_STORAGE_DIR, exist_ok=True)
 
 # Ensure directories exist
 for d in [ASSETS_DIR, AUDIO_DIR, PROCTORING_LOGS_DIR]:

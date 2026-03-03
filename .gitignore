@@ -73,7 +73,7 @@ app/assets/images/*
 temp_uploads/
 *.pem
 *.key
-models/
+/models/
 
 # === OS ===
 .DS_Store

@@ -35,7 +35,7 @@ fi
 
 # ── 2. Sync local code into deploy directory ─────────────────
 echo "📦 Syncing code to $DEPLOY_DIR ..."
-rsync -av --progress . "$DEPLOY_DIR/" \
+rsync -av --delete --progress . "$DEPLOY_DIR/" \
     --exclude .git \
     --exclude .venv \
     --exclude __pycache__ \

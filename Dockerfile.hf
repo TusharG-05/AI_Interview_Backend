@@ -22,7 +22,9 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -u 1000 user
 USER user
 ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH
+    PATH=/home/user/.local/bin:$PATH \
+    PYTHONPATH=/app \
+    ENV=production
 
 # Copy requirements first to leverage cache
 COPY --chown=user requirements.txt .
@@ -43,4 +45,4 @@ EXPOSE 7860
 
 # Command to run the application
 # Note: HF Spaces expect port 7860
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1"]
