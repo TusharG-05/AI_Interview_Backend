@@ -154,16 +154,14 @@ def event_loop():
     loop.close()
 
 @pytest.fixture
-def auth_headers(client):
+def auth_headers(session, test_users):
     """
     Creates a test user and returns JWT headers.
     """
-    # Create test user
-    from app.models.db_models import User, UserRole
+    # Use the existing admin user from test_users fixture
     from app.auth.security import create_access_token
+    admin, candidate = test_users
     
-    # We can invoke the registration endpoint or just mock the token
-    # For speed, we'll mock the token generation directly
-    access_token = create_access_token(data={"sub": "test@example.com"})
+    access_token = create_access_token(data={"sub": admin.email})
     return {"Authorization": f"Bearer {access_token}"}
 

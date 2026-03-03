@@ -53,6 +53,7 @@ class PaperRead(BaseModel):
     name: str
     description: Optional[str] = None
     question_count: int = 0
+    total_marks: int = 0
     questions: List[QuestionRead] = []
     created_at: str
     created_by: Optional[dict] = None # {"id": ..., "email": ..., "full_name": ..., "role": ...}

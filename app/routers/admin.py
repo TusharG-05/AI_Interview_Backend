@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 from ..schemas.requests import (
     QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, 
-    QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate
+    QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate, GeneratePaperRequest
 )
 from ..schemas.responses import (
     PaperRead, QuestionRead, SessionRead, UserRead, DetailedResult, 
@@ -291,6 +291,134 @@ async def list_paper_questions(
         data=questions,
         message=f"Questions for paper '{paper.name}' retrieved successfully"
     )
+
+
+# --- AI Question Paper Generation ---
+
+@router.post("/generate-paper", response_model=ApiResponse[PaperRead], status_code=201)
+async def generate_paper(
+    request_data: GeneratePaperRequest,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session),
+):
+    """
+    Generate a complete question paper using AI.
+
+    Accepts an AI prompt (topic/job description), the expected years of experience,
+    and the number of questions to generate. The LLM produces the questions and
+    the resulting QuestionPaper is persisted in the database.
+    """
+    from ..services.interview import generate_questions_from_prompt
+
+    # Call LLM
+    try:
+        generated_questions = generate_questions_from_prompt(
+            ai_prompt=request_data.ai_prompt,
+            years_of_experience=request_data.years_of_experience,
+            num_questions=request_data.num_questions,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI service unavailable: {str(e)}"
+        )
+
+    if not generated_questions:
+        raise HTTPException(
+            status_code=502,
+            detail="AI returned no questions. Please try again."
+        )
+
+    # Build paper name
+    paper_name = request_data.paper_name or (
+        f"AI Generated: {request_data.ai_prompt[:50].strip()}"
+        f" ({request_data.years_of_experience} yrs, {request_data.num_questions} Qs)"
+    )
+
+    # Create QuestionPaper
+    new_paper = QuestionPaper(
+        name=paper_name,
+        description=(
+            f"AI-generated paper. Topic: {request_data.ai_prompt}. "
+            f"Experience: {request_data.years_of_experience} years. "
+            f"Questions: {request_data.num_questions}."
+        ),
+        adminUser=current_user.id,
+    )
+    session.add(new_paper)
+    try:
+        session.commit()
+        session.refresh(new_paper)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create paper: {str(e)}")
+
+    # Bulk-insert the generated questions
+    question_objects = []
+    total_marks = 0
+    for q in generated_questions:
+        question_text = q.get("question_text", "").strip()
+        if not question_text:
+            continue  # Skip malformed entries
+
+        marks = int(q.get("marks", 5))
+        total_marks += marks
+
+        new_q = Questions(
+            paper_id=new_paper.id,
+            content=question_text,
+            question_text=question_text,
+            topic=q.get("topic", "General"),
+            difficulty=q.get("difficulty", "Medium"),
+            marks=marks,
+            response_type=q.get("response_type", "text"),
+        )
+        session.add(new_q)
+        question_objects.append(new_q)
+
+    # Update counts on the paper
+    new_paper.question_count = len(question_objects)
+    new_paper.total_marks = total_marks
+    session.add(new_paper)
+
+    try:
+        session.commit()
+        session.refresh(new_paper)
+        for q in question_objects:
+            session.refresh(q)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save questions: {str(e)}")
+
+    # Build response
+    paper_read = PaperRead(
+        id=new_paper.id,
+        name=new_paper.name,
+        description=new_paper.description,
+        question_count=new_paper.question_count,
+        total_marks=new_paper.total_marks,
+        questions=[
+            QuestionRead(
+                id=q.id,
+                content=q.content,
+                question_text=q.question_text,
+                topic=q.topic,
+                difficulty=q.difficulty,
+                marks=q.marks,
+                response_type=q.response_type,
+            )
+            for q in question_objects
+        ],
+        created_at=new_paper.created_at.isoformat(),
+        created_by=serialize_user(current_user),
+    )
+
+    return ApiResponse(
+        status_code=201,
+        data=paper_read,
+        message=f"Question paper generated successfully with {len(question_objects)} questions",
+    )
+
 
 @router.post("/upload-doc", response_model=ApiResponse[dict])
 async def upload_document(
