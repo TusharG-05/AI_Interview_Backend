@@ -197,3 +197,92 @@ def get_or_create_question(session: Session, content: str, topic: str = "General
 def get_custom_response(prompt: str) -> str:
     response = local_llm.invoke(prompt)
     return response.content
+
+
+def generate_questions_from_prompt(
+    ai_prompt: str,
+    years_of_experience: int,
+    num_questions: int,
+) -> list[dict]:
+    """
+    Use the LLM to generate interview questions based on a topic/description.
+    Returns a list of question dicts with keys:
+    question_text, topic, difficulty, marks, response_type.
+
+    Falls back through: Hugging Face Inference API → local Ollama.
+    Raises ValueError if the LLM response cannot be parsed.
+    """
+    from ..prompts.question_generation import question_generation_prompt
+
+    generation_chain = question_generation_prompt | local_llm
+
+    # Build the rendered prompt string to use for the HF fallback
+    rendered_messages = question_generation_prompt.format_messages(
+        ai_prompt=ai_prompt,
+        years_of_experience=years_of_experience,
+        num_questions=num_questions,
+    )
+
+    def _parse_json(raw: str) -> list[dict]:
+        """Strip markdown fences and parse JSON array."""
+        content = raw.strip()
+        # Remove ```json ... ``` or ``` ... ``` wrappers
+        if content.startswith("```"):
+            lines = content.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            content = "\n".join(lines).strip()
+        data = json.loads(content)
+        if not isinstance(data, list):
+            raise ValueError("LLM did not return a JSON array")
+        return data
+
+    last_error = None
+
+    # --- Hugging Face Inference API ---
+    hf_token = os.getenv("HF_TOKEN")
+    if hf_token:
+        try:
+            logger.info("generate_questions: Attempting HF Inference API...")
+            client = InferenceClient(token=hf_token)
+            model_id = "Qwen/Qwen2.5-7B-Instruct"
+            messages = [
+                {"role": msg.type if hasattr(msg, "type") else "user", "content": msg.content}
+                for msg in rendered_messages
+            ]
+            # Normalise role names for OpenAI-style API
+            role_map = {"system": "system", "human": "user", "ai": "assistant"}
+            messages = [
+                {"role": role_map.get(m["role"], "user"), "content": m["content"]}
+                for m in messages
+            ]
+            response = client.chat_completion(
+                model=model_id,
+                messages=messages,
+                max_tokens=2048,
+                temperature=0.4,
+            )
+            content = response.choices[0].message.content
+            result = _parse_json(content)
+            logger.info(f"generate_questions: HF API returned {len(result)} questions")
+            return result
+        except Exception as e:
+            last_error = f"HF API failed: {str(e)}"
+            logger.warning(last_error)
+
+    # --- Local Ollama ---
+    try:
+        logger.info("generate_questions: Using local Ollama...")
+        response = generation_chain.invoke({
+            "ai_prompt": ai_prompt,
+            "years_of_experience": years_of_experience,
+            "num_questions": num_questions,
+        })
+        result = _parse_json(response.content)
+        logger.info(f"generate_questions: Ollama returned {len(result)} questions")
+        return result
+    except Exception as e:
+        error_msg = f"Ollama failed: {str(e)}"
+        if last_error:
+            error_msg = f"{last_error} | {error_msg}"
+        logger.error(error_msg)
+        raise ValueError(f"Question generation failed: {error_msg}")
