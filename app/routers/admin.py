@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
-from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus
+from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
@@ -66,11 +66,15 @@ async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
 
 @router.get("/papers", response_model=ApiResponse[List[PaperRead]])
 async def list_papers(
+    team_id: Optional[int] = None,  # Optional filter by team
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """List all question papers created by the admin."""
-    papers = session.exec(select(QuestionPaper).where(QuestionPaper.adminUser == current_user.id)).all()
+    """List all question papers created by the admin. Optionally filter by ?team_id="""
+    stmt = select(QuestionPaper).where(QuestionPaper.adminUser == current_user.id)
+    if team_id is not None:
+        stmt = stmt.where(QuestionPaper.team_id == team_id)
+    papers = session.exec(stmt).all()
     papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
         question_count=len(p.questions), 
@@ -80,7 +84,8 @@ async def list_papers(
             response_type=q.response_type
         ) for q in p.questions],
         created_at=p.created_at.isoformat(),
-        created_by=serialize_user(p.admin, fallback_role="admin")
+        created_by=serialize_user(p.admin, fallback_role="admin"),
+        team_id=p.team_id
     ) for p in papers]
     return ApiResponse(
         status_code=200,
@@ -93,6 +98,7 @@ from pydantic import BaseModel, Field
 class PaperCreate(BaseModel):
     name: str = Field(..., min_length=1, description="Name of the question paper")
     description: Optional[str] = None
+    team_id: Optional[int] = None  # Optionally link paper to an existing team
 
 
 
@@ -102,11 +108,18 @@ async def create_paper(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Create a new collection of questions."""
+    """Create a new collection of questions. Optionally link to a team via team_id."""
+    # Validate team if provided
+    if paper_data.team_id is not None:
+        team = session.get(Team, paper_data.team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail=f"Team with id {paper_data.team_id} not found")
+
     new_paper = QuestionPaper(
         name=paper_data.name,
         description=paper_data.description or "",
-        adminUser=current_user.id
+        adminUser=current_user.id,
+        team_id=paper_data.team_id
     )
     session.add(new_paper)
     try:
@@ -118,7 +131,8 @@ async def create_paper(
     paper_read = PaperRead(
         id=new_paper.id, name=new_paper.name, description=new_paper.description, 
         question_count=0, questions=[], created_at=new_paper.created_at.isoformat(),
-        created_by=serialize_user(current_user)
+        created_by=serialize_user(current_user),
+        team_id=new_paper.team_id
     )
     return ApiResponse(
         status_code=201,
@@ -449,6 +463,11 @@ async def schedule_interview(
     """
     Schedule a new one-to-one interview and email the link.
     """
+    # Validate Team
+    team = session.get(Team, schedule_data.team_id)
+    if not team:
+        raise HTTPException(status_code=400, detail=f"Team with id {schedule_data.team_id} not found")
+
     # Validate Paper
     paper = session.get(QuestionPaper, schedule_data.paper_id)
     if not paper or paper.adminUser != current_user.id:
@@ -476,6 +495,8 @@ async def schedule_interview(
         admin_id=current_user.id,
         candidate_id=schedule_data.candidate_id,
         paper_id=schedule_data.paper_id,
+        team_id=schedule_data.team_id,
+        interview_round=schedule_data.interview_round,
         schedule_time=schedule_dt,
         duration_minutes=schedule_data.duration_minutes or 1440,
         max_questions=schedule_data.max_questions or 0,
@@ -590,6 +611,8 @@ async def schedule_interview(
         admin_id=new_session.admin_id,
         candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
+        team_id=new_session.team_id,
+        interview_round=new_session.interview_round.value if new_session.interview_round else None,
         schedule_time=format_iso_datetime(new_session.schedule_time),
         duration_minutes=new_session.duration_minutes,
         max_questions=new_session.max_questions,
@@ -653,7 +676,9 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             status=s.status.value,
             scheduled_at=format_iso_datetime(s.schedule_time),
             score=s.total_score,
-            allow_copy_paste=s.allow_copy_paste or False
+            allow_copy_paste=s.allow_copy_paste or False,
+            team_id=s.team_id,
+            interview_round=s.interview_round.value if s.interview_round else None
         ))
     return ApiResponse(
         status_code=200,
@@ -818,6 +843,8 @@ async def get_interview(
         admin_id=admin_dict,
         candidate_id=candidate_dict,
         paper_id=paper_dict,
+        team_id=getattr(interview_session, "team_id", None),
+        interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
         schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
         duration_minutes=interview_session.duration_minutes,
         max_questions=getattr(interview_session, "max_questions", 0) or 0,

@@ -2,7 +2,14 @@ from typing import Optional, List
 from pydantic import BaseModel, Field
 from .interview_result import UserNested, QuestionPaperNested
 
-# Candidate Responses
+# Team Responses
+class TeamRead(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    created_by: Optional[dict] = None  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    created_at: str
+    paper_count: int = 0
 class HistoryItem(BaseModel):
     interview_id: int
     access_token: str
@@ -49,6 +56,7 @@ class PaperRead(BaseModel):
     questions: List[QuestionRead] = []
     created_at: str
     created_by: Optional[dict] = None # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    team_id: Optional[int] = None  # Team this paper belongs to
 
 class SessionRead(BaseModel):
     id: int
@@ -58,6 +66,8 @@ class SessionRead(BaseModel):
     scheduled_at: str
     score: Optional[float] = None
     allow_copy_paste: bool = False
+    team_id: Optional[int] = None
+    interview_round: Optional[str] = None
 
 class UserRead(BaseModel):
     id: int
@@ -91,6 +101,8 @@ class InterviewSessionDetail(BaseModel):
     admin_id: Optional[int] = None
     candidate_id: Optional[int] = None
     paper_id: int
+    team_id: Optional[int] = None
+    interview_round: Optional[str] = None
     schedule_time: str
     duration_minutes: int
     max_questions: Optional[int] = None
@@ -108,7 +120,6 @@ class InterviewSessionDetail(BaseModel):
     suspended_at: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
-    allow_copy_paste: bool = False
 
 class InterviewLinkResponse(BaseModel):
     interview: InterviewSessionDetail
@@ -153,6 +164,8 @@ class InterviewSessionExpanded(BaseModel):
     admin_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
     candidate_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
     paper_id: QuestionPaperExpanded = Field(default_factory=lambda: QuestionPaperExpanded())
+    team_id: Optional[int] = None
+    interview_round: Optional[str] = None
     schedule_time: str
     duration_minutes: int
     max_questions: int = 0
