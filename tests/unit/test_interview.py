@@ -26,12 +26,12 @@ def test_create_interview_session(session, test_users):
     assert interview.id is not None
     assert interview.access_token is not None
 
-def test_access_interview_invalid_token(client):
-    response = client.get("/api/interview/access/invalid-token")
+def test_access_interview_invalid_token(client, auth_headers):
+    response = client.get("/api/interview/access/invalid-token", headers=auth_headers)
     assert response.status_code == 404
     assert "Invalid Interview Link" in response.json()["message"]
 
-def test_access_interview_valid(session, client, test_users):
+def test_access_interview_valid(session, client, test_users, auth_headers):
     admin, candidate = test_users
 
     from app.models.db_models import InterviewSession, QuestionPaper, InterviewStatus
@@ -51,13 +51,13 @@ def test_access_interview_valid(session, client, test_users):
     session.add(interview)
     session.commit()
 
-    response = client.get(f"/api/interview/access/{interview.access_token}")
+    response = client.get(f"/api/interview/access/{interview.access_token}", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()["data"]
     # Check that it returns the exact schema IDs (the message field was removed from schema)
     assert data["id"] == interview.id
 
-def test_start_session(session, client, test_users):
+def test_start_session(session, client, test_users, auth_headers):
     admin, candidate = test_users
 
     from app.models.db_models import InterviewSession, QuestionPaper, InterviewStatus
@@ -81,7 +81,7 @@ def test_start_session(session, client, test_users):
         with patch("app.services.audio.AudioService.calculate_energy", return_value=100) as mock_energy:
              with patch("app.services.audio.AudioService.cleanup_audio") as mock_cleanup:
                 files = {"enrollment_audio": ("enroll.wav", b"fake-audio-content", "audio/wav")}
-                response = client.post(f"/api/interview/start-session/{interview.id}", files=files)
+                response = client.post(f"/api/interview/start-session/{interview.id}", files=files, headers=auth_headers)
 
                 assert response.status_code == 200
                 assert response.json()["data"]["status"] == "LIVE"
@@ -90,7 +90,7 @@ def test_start_session(session, client, test_users):
                 assert interview.status == InterviewStatus.LIVE
                 assert interview.start_time is not None
 
-def test_submit_answer_text(session, client, test_users):
+def test_submit_answer_text(session, client, test_users, auth_headers):
     admin, candidate = test_users
 
     from app.models.db_models import InterviewSession, QuestionPaper, Questions, InterviewStatus
@@ -118,7 +118,7 @@ def test_submit_answer_text(session, client, test_users):
         "question_id": question.id,
         "answer_text": "AI is Artificial Intelligence."
     }
-    response = client.post("/api/interview/submit-answer-text", data=payload)
+    response = client.post("/api/interview/submit-answer-text", data=payload, headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["data"]["Question_id"]["id"] == question.id
 
@@ -127,7 +127,7 @@ def test_submit_answer_text(session, client, test_users):
     saved_answer = session.query(Answers).first()
     assert saved_answer.candidate_answer == "AI is Artificial Intelligence."
 
-def test_evaluate_answer_modal_fallback(session, client, test_users):
+def test_evaluate_answer_modal_fallback(session, client, test_users, auth_headers):
     admin, candidate = test_users
 
     from app.models.db_models import InterviewSession, QuestionPaper, Questions, InterviewStatus
@@ -153,6 +153,6 @@ def test_evaluate_answer_modal_fallback(session, client, test_users):
             "question": "What is AI?",
             "answer": "Artificial Intelligence"
         }
-        response = client.post("/api/interview/evaluate-answer", json=payload)
+        response = client.post("/api/interview/evaluate-answer", json=payload, headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["data"]["score"] == 8.5

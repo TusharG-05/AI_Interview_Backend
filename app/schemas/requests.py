@@ -1,6 +1,8 @@
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ..models.db_models import UserRole, InterviewRound
+
+
 
 # Candidate Requests
 class UserUpdate(BaseModel):
@@ -82,3 +84,10 @@ class QuestionCreate(BaseModel):
     difficulty: str = "Medium"
     marks: int = 1
     response_type: str = "audio"
+
+
+class GeneratePaperRequest(BaseModel):
+    ai_prompt: str = Field(..., min_length=5, description="Topic or job description to base questions on")
+    years_of_experience: int = Field(..., ge=0, le=40, description="Candidate's expected years of experience")
+    num_questions: int = Field(..., ge=1, le=50, description="Number of questions to generate")
+    paper_name: Optional[str] = Field(None, description="Optional name for the question paper")
