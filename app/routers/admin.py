@@ -888,7 +888,9 @@ async def get_live_status_dashboard(
             "suspended_at": format_iso_datetime(interview_session.suspended_at),
             "enrollment_audio_path": interview_session.enrollment_audio_path,
             "is_completed": interview_session.is_completed or False,
-            "allow_copy_paste": interview_session.allow_copy_paste
+            "allow_copy_paste": interview_session.allow_copy_paste,
+            "team_id": interview_session.team_id,
+            "interview_round": interview_session.interview_round.value if interview_session.interview_round else None
         }
         
         results.append(LiveStatusItem(
