@@ -7,7 +7,7 @@ from ..core.database import get_db as get_session
 from ..models.db_models import Team, QuestionPaper, User
 from ..auth.dependencies import get_super_admin_user, get_admin_user
 from ..schemas.requests import TeamCreate, TeamUpdate
-from ..schemas.responses import TeamRead
+from ..schemas.responses import TeamRead, PaperRead, QuestionRead
 from ..schemas.api_response import ApiResponse
 from ..core.logger import get_logger
 from ..utils import format_iso_datetime
@@ -16,21 +16,64 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/super-admin", tags=["Teams"])
 
-
 def _serialize_team(team: Team, session: Session) -> TeamRead:
-    """Convert a Team ORM object to a TeamRead schema."""
+    """Convert a Team ORM object to a TeamRead schema with full nested papers and questions."""
     from ..schemas.user_schemas import serialize_user_flat
+
     creator_dict = serialize_user_flat(team.creator) if team.creator else None
-    paper_count = session.exec(
+
+    # Load all papers for this team, with their questions and creator info
+    papers_orm = session.exec(
         select(QuestionPaper).where(QuestionPaper.team_id == team.id)
     ).all()
+
+    papers_out = []
+    for paper in papers_orm:
+        # Get question objects (lazy-loaded or manually fetched)
+        from ..models.db_models import Questions
+        questions_orm = session.exec(
+            select(Questions).where(Questions.paper_id == paper.id)
+        ).all()
+
+        questions_out = [
+            QuestionRead(
+                id=q.id,
+                content=q.content or "",
+                question_text=q.question_text or "",
+                topic=q.topic or "",
+                difficulty=q.difficulty.value if hasattr(q.difficulty, "value") else str(q.difficulty),
+                marks=q.marks or 1,
+                response_type=q.response_type.value if hasattr(q.response_type, "value") else str(q.response_type),
+            )
+            for q in questions_orm
+        ]
+
+        # Paper creator info
+        paper_creator = None
+        if paper.adminUser:
+            admin_user = session.get(User, paper.adminUser)
+            if admin_user:
+                paper_creator = serialize_user_flat(admin_user)
+
+        papers_out.append(PaperRead(
+            id=paper.id,
+            name=paper.name,
+            description=paper.description,
+            created_by=paper_creator,
+            created_at=paper.created_at.isoformat() if paper.created_at else "",
+            question_count=len(questions_out),
+            total_marks=paper.total_marks or 0,
+            questions=questions_out,
+        ))
+
     return TeamRead(
         id=team.id,
         name=team.name,
         description=team.description,
         created_by=creator_dict,
         created_at=team.created_at.isoformat(),
-        paper_count=len(paper_count)
+        paper_count=len(papers_out),
+        papers=papers_out,
     )
 
 

@@ -618,32 +618,55 @@ split_response "$RESP"
 check "POST /video/watch/1" "000 200 500 422 404" "$CODE" "$BODY"
 
 # ================================================================
-# 10. SUSPENSION SYSTEM TESTS
+# 10. SUSPENSION SYSTEM TESTS (Wait for a fresh session)
 # ================================================================
 echo ""
 echo "━━━ 10. SUSPENSION SYSTEM ━━━"
 
-# Test 3-strike suspension for Tab Switching (Real API)
-if [ -n "$INT_ID" ]; then
-    echo "  Testing 3-strike suspension for Tab Switching..."
+# Create a NEW session specifically for suspension testing to avoid "already completed" errors
+echo "  Creating a new session for suspension testing..."
+RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/admin/schedule-interview" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"candidate_email\": \"e2e_test_candidate_1772699741@test.com\",
+    \"paper_id\": $PAPER_ID,
+    \"schedule_time\": \"$(date -u -d '1 minute ago' +'%Y-%m-%dT%H:%M:%SZ')\",
+    \"duration_minutes\": 30
+  }")
+split_response "$RESP"
+SUSP_INT_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('id',''))" 2>/dev/null)
+
+if [ -n "$SUSP_INT_ID" ]; then
+    echo "  Testing 3-strike suspension for Tab Switching (Session $SUSP_INT_ID)..."
     
-    # Strike 2 (Strike 1 was already done via tab-switch test at line 352)
+    # 1. Start Session
+    curl -s -X POST "$BASE/interview/start-session/$SUSP_INT_ID" -H "Authorization: Bearer $CAND_TOKEN" > /dev/null
+
+    # Strike 1
+    echo "  Triggering Strike 1..."
+    curl -s -X POST "$BASE/interview/$SUSP_INT_ID/tab-switch" \
+      -H "Authorization: Bearer $CAND_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"event_type": "tab_switch"}' > /dev/null
+
+    # Strike 2
     echo "  Triggering Strike 2..."
-    RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/interview/$INT_ID/tab-switch" \
+    RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/interview/$SUSP_INT_ID/tab-switch" \
       -H "Authorization: Bearer $CAND_TOKEN" \
       -H "Content-Type: application/json" \
       -d '{"event_type": "tab_switch"}')
     split_response "$RESP"
-    check "POST /interview/$INT_ID/tab-switch (Strike 2)" "200" "$CODE" "$BODY"
+    check "POST /interview/$SUSP_INT_ID/tab-switch (Strike 2)" "200" "$CODE" "$BODY"
     
     # Strike 3 (Final)
     echo "  Triggering Strike 3..."
-    RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/interview/$INT_ID/tab-switch" \
+    RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/interview/$SUSP_INT_ID/tab-switch" \
       -H "Authorization: Bearer $CAND_TOKEN" \
       -H "Content-Type: application/json" \
       -d '{"event_type": "tab_switch"}')
     split_response "$RESP"
-    check "POST /interview/$INT_ID/tab-switch (Strike 3 - SUSPENSION)" "403" "$CODE" "$BODY"
+    check "POST /interview/$SUSP_INT_ID/tab-switch (Strike 3 - SUSPENSION)" "403" "$CODE" "$BODY"
     
     # Verify is_suspended in final response
     IS_SUSP=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('data',{}).get('is_suspended', 'false'))" 2>/dev/null)
@@ -652,6 +675,11 @@ if [ -n "$INT_ID" ]; then
     else
         echo "  ❌ Suspension System: Failed to suspend (is_suspended: $IS_SUSP)"
     fi
+
+    # Cleanup the test session
+    curl -s -X DELETE "$BASE/admin/interviews/$SUSP_INT_ID" -H "Authorization: Bearer $ADMIN_TOKEN" > /dev/null
+else
+    echo "  ⚠️ Skipping Suspension tests (could not create fresh session)"
 fi
 
 echo ""

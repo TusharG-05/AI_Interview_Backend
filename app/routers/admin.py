@@ -462,7 +462,14 @@ async def upload_document(
     
     try:
         # Default to questions_only extraction
-        extracted_data = nlp_service.extract_qa_from_file(file_path, questions_only=True)
+        try:
+            extracted_data = nlp_service.extract_qa_from_file(file_path, questions_only=True)
+        except Exception as extract_err:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to extract questions from file: {str(extract_err)}. "
+                       "Ensure the file is a valid document with readable text."
+            )
         for item in extracted_data:
             q = Questions(
                 paper_id=paper_id,
