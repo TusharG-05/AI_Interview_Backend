@@ -182,6 +182,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# HF Proxy Fix: Support X-Forwarded-Proto and X-Forwarded-For
+# This ensures that WebSockets and Redirects use the correct protocol (https)
+from fastapi import Request
+try:
+    from uvloop import install as uvloop_install
+    uvloop_install()
+    logger.info("PRE-INIT: uvloop installed.")
+except ImportError:
+    pass
+
+@app.middleware("http")
+async def proxy_fix_middleware(request: Request, call_next):
+    # Hugging Face and other proxies send X-Forwarded-Proto
+    # If it's https, we want to make sure the request's scope reflects that
+    # so that redirects and link generations (like for WebSockets) are correct.
+    proto = request.headers.get("x-forwarded-proto")
+    if proto == "https":
+        request.scope["scheme"] = "https"
+    
+    response = await call_next(request)
+    return response
+
 # (Redundant endpoint removed. Use settings.router instead)
 
 # Lazy include routers to ensure AI models (imported within routers) 

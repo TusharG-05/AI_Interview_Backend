@@ -329,11 +329,16 @@ async def start_session_logic(
             enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
             content = await enrollment_audio.read()
             audio_service.save_audio_blob(content, enrollment_path)
-            audio_service.cleanup_audio(enrollment_path)
             
             # Silence/Quality Check
-            if audio_service.calculate_energy(enrollment_path) < 50:
-                 warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
+            try:
+                if audio_service.calculate_energy(enrollment_path) < 50:
+                     warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
+            except Exception as e:
+                logger.warning(f"Energy check failed: {e}")
+            
+            # Cleanup only after processing
+            audio_service.cleanup_audio(enrollment_path)
             
             session.enrollment_audio_path = enrollment_path
             
@@ -647,28 +652,22 @@ async def submit_answer_audio(
     # STT and LLM errors are caught inside the helpers; answer is already saved.
     transcribed_text = ""
     try:
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            transcribed_text = loop.run_until_complete(
-                audio_service.speech_to_text(audio_path)
-            )
-            # Speaker verification (best-effort)
-            if session_obj.enrollment_audio_path:
-                try:
-                    match, _ = loop.run_until_complete(
-                        audio_service.verify_speaker(
-                            session_obj.enrollment_audio_path, audio_path
-                        )
-                    )
-                    if not match:
-                        transcribed_text = f"[VOICE MISMATCH] {transcribed_text}"
-                except Exception as spk_exc:
-                    logger.warning(
-                        f"Speaker verification failed for answer {answer.id}: {spk_exc}"
-                    )
-        finally:
-            loop.close()
+        # REF: Using await instead of new_event_loop().run_until_complete()
+        # triggering nested loops in Uvicorn is unstable and prone to 000 crashes.
+        transcribed_text = await audio_service.speech_to_text(audio_path)
+        
+        # Speaker verification (best-effort)
+        if session_obj.enrollment_audio_path:
+            try:
+                match, _ = await audio_service.verify_speaker(
+                    session_obj.enrollment_audio_path, audio_path
+                )
+                if not match:
+                    transcribed_text = f"[VOICE MISMATCH] {transcribed_text}"
+            except Exception as spk_exc:
+                logger.warning(
+                    f"Speaker verification failed for answer {answer.id}: {spk_exc}"
+                )
 
         if transcribed_text:
             answer.transcribed_text = transcribed_text
