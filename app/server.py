@@ -12,6 +12,18 @@ from .core.config import SENTRY_DSN, REDIS_URL
 setup_logging()
 logger = get_logger(__name__)
 
+# Ensure ffmpeg is available for local environments
+if not shutil.which("ffmpeg"):
+    try:
+        import static_ffmpeg
+        static_ffmpeg.add_paths()
+        logger.info("PRE-INIT: static_ffmpeg initialized.")
+    except ImportError:
+        logger.warning("PRE-INIT: static_ffmpeg not installed on host.")
+
+logger.info("PRE-INIT: Initializing database...")
+init_db()
+
 # SENTRY: Professional Error Tracking
 if SENTRY_DSN:
     sentry_sdk.init(
@@ -35,18 +47,6 @@ async def lifespan(app: FastAPI):
         logger.info("Lifespan: API Rate Limiting initialized (Redis).")
     except Exception as re_e:
         logger.warning(f"Lifespan: Rate Limiter failed to start: {re_e}")
-    
-    # Ensure ffmpeg is available for local environments (port 8001)
-    if not shutil.which("ffmpeg"):
-        try:
-            import static_ffmpeg
-            static_ffmpeg.add_paths()
-            logger.info("Lifespan: static_ffmpeg initialized.")
-        except ImportError:
-            logger.warning("Lifespan: static_ffmpeg not installed on host.")
-
-    logger.info("PRE-INIT: Initializing database...")
-    init_db()
     
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
     try:

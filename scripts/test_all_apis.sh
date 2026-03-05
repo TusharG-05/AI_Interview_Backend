@@ -21,9 +21,11 @@ check() {
     done
     if [ $found -eq 1 ]; then
         echo "  ✅ $name ($code)"
+        echo "     Response: $(echo "$body" | head -c 500 | tr -d '\n')"
         PASS=$((PASS+1))
     else
         echo "  ❌ $name (got $code, expected $expected)"
+        echo "     Response: $(echo "$body" | head -c 500 | tr -d '\n')"
         echo "     $(echo "$body" | head -c 200)"
         FAIL=$((FAIL+1))
         FAILED_LIST="$FAILED_LIST\n  - $name (HTTP $code): $(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message','')[:80])" 2>/dev/null || echo "$body" | head -c 80)"
