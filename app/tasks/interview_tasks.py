@@ -4,7 +4,7 @@ from ..services import interview as interview_service
 from ..models.db_models import InterviewSession, InterviewResult, Answers, Questions, CandidateStatus
 from ..core.database import engine
 from ..core.logger import get_logger
-from ..utils import format_iso_datetime, calculate_average_score
+from ..utils import format_iso_datetime, calculate_total_score
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import logging
@@ -88,7 +88,8 @@ def process_session_results(interview_id: int, db: Session = None):
         fresh_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
         all_scores = [r.score for r in fresh_answers if r.score is not None]
 
-        computed_score = calculate_average_score(all_scores)
+        # Use sum (not average) to match the real-time score accumulated per answer
+        computed_score = calculate_total_score(all_scores)
         result_obj.total_score = computed_score
         session.total_score = computed_score
         db.add(result_obj)
