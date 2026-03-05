@@ -20,10 +20,11 @@ check() {
     done
     if [ $found -eq 1 ]; then
         echo "  ✅ $name ($code)"
+        echo "     Response: $(echo "$body" | head -c 500 | tr -d '\n')"
         PASS=$((PASS+1))
     else
         echo "  ❌ $name (got $code, expected $expected)"
-        echo "     $(echo "$body" | head -c 200)"
+        echo "     Response: $(echo "$body" | head -c 500 | tr -d '\n')"
         FAIL=$((FAIL+1))
         FAILED_LIST="$FAILED_LIST\n  - $name (HTTP $code): $(echo "$body" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message','')[:80])" 2>/dev/null || echo "$body" | head -c 80)"
     fi
@@ -158,6 +159,24 @@ split_response "$RESP"
 check "POST /auth/logout" "200" "$CODE" "$BODY"
 
 # ================================================================
+# 1.5 TEAMS CRUD (Super Admin)
+# ================================================================
+echo ""
+echo "━━━ 1.5 TEAMS CRUD ━━━"
+
+UNIQUE_TEAM="E2E Team $(date +%s)"
+RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/super-admin/teams" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d "{\"name\":\"$UNIQUE_TEAM\",\"description\":\"End-to-end test team\"}")
+split_response "$RESP"
+check "POST /super-admin/teams (create)" "201" "$CODE" "$BODY"
+TEAM_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
+
+RESP=$(curl -s --max-time 60 -w "\n%{http_code}" "$BASE/super-admin/teams" -H "Authorization: Bearer $ADMIN_TOKEN")
+split_response "$RESP"
+check "GET /super-admin/teams (list)" "200" "$CODE" "$BODY"
+
+# ================================================================
 # 2. PAPERS CRUD
 # ================================================================
 echo ""
@@ -274,7 +293,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
     
     RESP=$(curl -s --max-time 30 -w "\n%{http_code}" -X POST "$BASE/admin/interviews/schedule" \
       -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
-      -d "{\"candidate_id\":$CAND_ID,\"paper_id\":$PAPER_ID,\"schedule_time\":\"$SCHED_TIME\",\"duration_minutes\":120,\"max_questions\":1}")
+      -d "{\"candidate_id\":$CAND_ID,\"paper_id\":$PAPER_ID,\"team_id\":$TEAM_ID,\"interview_round\":\"ROUND_1\",\"schedule_time\":\"$SCHED_TIME\",\"duration_minutes\":120,\"max_questions\":1}")
     split_response "$RESP"
     check "POST /admin/interviews/schedule" "201" "$CODE" "$BODY"
     INT_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['interview']['id'])" 2>/dev/null || echo "")

@@ -44,6 +44,8 @@ def upgrade() -> None:
     op.create_foreign_key(None, 'interviewsession', 'team', ['team_id'], ['id'], ondelete='SET NULL')
     op.add_column('questionpaper', sa.Column('team_id', sa.Integer(), nullable=True))
     op.create_foreign_key(None, 'questionpaper', 'team', ['team_id'], ['id'], ondelete='SET NULL')
+    # Clean up orphaned questions (paper_id IS NULL) before enforcing NOT NULL
+    op.execute("DELETE FROM questions WHERE paper_id IS NULL")
     op.alter_column('questions', 'paper_id',
                existing_type=sa.INTEGER(),
                nullable=False)

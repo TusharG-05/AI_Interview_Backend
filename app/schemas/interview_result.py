@@ -71,6 +71,7 @@ class InterviewResultDetail(BaseModel):
     id: int
     interview: InterviewSessionNested
     interview_response: List[AnswersNested] = []
+    result_status: str
     total_score: Optional[float] = None
     created_at: datetime
     proctoring_logs: List = [] 
@@ -78,6 +79,7 @@ class InterviewResultDetail(BaseModel):
 class InterviewResultBrief(BaseModel):
     id: int
     interview: InterviewSessionNested
+    result_status: str
     total_score: Optional[float] = None
     created_at: datetime
-    proctoring_logs: List = []   
+    proctoring_logs: List = []

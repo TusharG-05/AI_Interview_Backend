@@ -90,11 +90,19 @@ def process_session_results(interview_id: int, db: Session = None):
 
         computed_score = calculate_average_score(all_scores)
         result_obj.total_score = computed_score
+        
+        # Auto-evaluate result_status based on 30% threshold
+        if computed_score >= 30.0:
+            result_obj.result_status = "PASS"
+        else:
+            result_obj.result_status = "FAIL"
+            
         session.total_score = computed_score
+        
         db.add(result_obj)
         db.add(session)
         db.commit()
-        logger.info(f"Session {interview_id} processing complete. Final score: {computed_score}")
+        logger.info(f"Session {interview_id} processing complete. Final score: {computed_score}, Status: {result_obj.result_status}")
 
     except Exception as e:
         logger.error(f"Session {interview_id} processing failed: {e}", exc_info=True)

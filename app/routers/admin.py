@@ -1507,6 +1507,12 @@ async def update_result(
     # Update total score if provided
     if "total_score" in update_dict:
         interview_session.total_score = update_dict["total_score"]
+        if interview_session.result:
+            interview_session.result.total_score = update_dict["total_score"]
+            
+    # Update result status if provided
+    if "result_status" in update_dict and interview_session.result:
+        interview_session.result.result_status = update_dict["result_status"]
     
     # Update individual responses if provided
     if "responses" in update_dict and update_dict["responses"]:
