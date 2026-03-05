@@ -15,6 +15,18 @@ def calculate_average_score(scores: List[Optional[float]]) -> float:
     return sum(valid_scores) / len(valid_scores) if valid_scores else 0.0
 
 
+def calculate_total_score(scores: List[Optional[float]]) -> float:
+    """Calculate cumulative total score (sum) for an interview session.
+
+    Args:
+        scores: List of per-answer scores, may contain None values
+
+    Returns:
+        Sum of all non-None scores, or 0.0 if list is empty / all None
+    """
+    return sum(s for s in scores if s is not None)
+
+
 def format_iso_datetime(dt):
     """
     Ensures that ISO strings always include a timezone offset or 'Z' suffix.

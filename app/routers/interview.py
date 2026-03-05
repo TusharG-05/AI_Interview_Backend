@@ -22,10 +22,82 @@ from pydub import AudioSegment
 import logging
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
-from ..utils import format_iso_datetime
+from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
 logger = logging.getLogger(__name__)
 audio_service = AudioService()
+
+from ..services.status_manager import add_violation
+
+
+def _evaluate_and_update_score(
+    db: Session,
+    answer: Answers,
+    question_text: str,
+    session_obj: InterviewSession,
+    result_obj: InterviewResult,
+) -> None:
+    """
+    Evaluate a single answer using the LLM service, persist score & feedback onto
+    the Answers row, then recompute and persist the running total_score (sum of all
+    answer scores) on both InterviewResult and InterviewSession.
+
+    Wrapped in a broad try/except so an LLM failure or stale-session error never
+    prevents the answer from being saved successfully.
+    """
+    try:
+        # 1. Skip evaluation if there is no text to evaluate
+        if not answer.candidate_answer and not answer.transcribed_text:
+            logger.warning(
+                f"Answer {answer.id}: no text to evaluate, skipping LLM call."
+            )
+            return
+
+        text_to_evaluate = answer.candidate_answer or answer.transcribed_text
+
+        # 2. Call LLM evaluation
+        logger.info(f"Answer {answer.id}: running real-time evaluation...")
+        evaluation = interview_service.evaluate_answer_content(question_text, text_to_evaluate)
+
+        answer.feedback = evaluation.get("feedback", "")
+        answer.score = float(evaluation.get("score") or 0.0)
+        db.add(answer)
+        db.flush()  # write score to DB without committing yet
+
+        logger.info(f"Answer {answer.id}: evaluated, score={answer.score}")
+
+        # 3. Recompute running total_score (sum) — re-fetch all saved scores
+        all_answers = db.exec(
+            select(Answers).where(Answers.interview_result_id == result_obj.id)
+        ).all()
+        all_scores = [a.score for a in all_answers if a.score is not None]
+        new_total = calculate_total_score(all_scores)
+
+        result_obj.total_score = new_total
+        session_obj.total_score = new_total
+
+        db.add(result_obj)
+        db.add(session_obj)
+        db.commit()
+
+        logger.info(
+            f"Interview {session_obj.id}: total_score updated to {new_total}"
+        )
+
+    except Exception as exc:
+        # Roll back only the evaluation updates; the answer row itself was already
+        # committed by the caller before this helper runs.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.error(
+            f"Real-time evaluation failed for answer {answer.id} "
+            f"(interview {session_obj.id}): {exc}",
+            exc_info=True,
+        )
+        # Do NOT re-raise — a failed evaluation must never block answer saving.
+
 
 from ..services.status_manager import add_violation
 
@@ -547,8 +619,6 @@ async def submit_answer_audio(
     ).first()
 
     if answer:
-        # Override fields, delete old audio if changing the path?
-        # Typically the audio path will just overwrite or we just leave the old file on disk for now
         answer.audio_path = audio_path
         if feedback is not None:
             answer.feedback = feedback
@@ -556,7 +626,6 @@ async def submit_answer_audio(
             answer.score = score
         answer.timestamp = datetime.now(timezone.utc)
     else:
-        # Save Answer
         answer = Answers(
             interview_result_id=result.id, 
             question_id=question_id, 
@@ -571,15 +640,80 @@ async def submit_answer_audio(
     update_last_activity(session_db, session_obj)
     
     session_db.commit()
+    session_db.refresh(answer)
+
+    # ── Real-time: Transcribe + Evaluate ─────────────────────────────────────
+    # Transcribe audio immediately so evaluation can run right away.
+    # STT and LLM errors are caught inside the helpers; answer is already saved.
+    transcribed_text = ""
+    try:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        try:
+            transcribed_text = loop.run_until_complete(
+                audio_service.speech_to_text(audio_path)
+            )
+            # Speaker verification (best-effort)
+            if session_obj.enrollment_audio_path:
+                try:
+                    match, _ = loop.run_until_complete(
+                        audio_service.verify_speaker(
+                            session_obj.enrollment_audio_path, audio_path
+                        )
+                    )
+                    if not match:
+                        transcribed_text = f"[VOICE MISMATCH] {transcribed_text}"
+                except Exception as spk_exc:
+                    logger.warning(
+                        f"Speaker verification failed for answer {answer.id}: {spk_exc}"
+                    )
+        finally:
+            loop.close()
+
+        if transcribed_text:
+            answer.transcribed_text = transcribed_text
+            answer.candidate_answer = transcribed_text
+            session_db.add(answer)
+            session_db.commit()
+            session_db.refresh(answer)
+
+    except Exception as stt_exc:
+        logger.error(
+            f"STT failed for answer {answer.id} (interview {interview_id}): {stt_exc}",
+            exc_info=True,
+        )
+
+    # Evaluate (uses candidate_answer / transcribed_text set just above)
+    question = session_db.get(Questions, question_id)
+    q_text = ""
+    if question:
+        q_text = question.question_text or question.content or ""
+
+    _evaluate_and_update_score(
+        db=session_db,
+        answer=answer,
+        question_text=q_text,
+        session_obj=session_obj,
+        result_obj=result,
+    )
+
+    # Refresh to get latest score/feedback written by the helper
+    try:
+        session_db.refresh(answer)
+    except Exception:
+        pass
+
     return ApiResponse(
         status_code=200,
         data={
             "status": "saved",
             "feedback": answer.feedback,
-            "score": answer.score
+            "score": answer.score,
+            "transcribed_text": answer.transcribed_text,
         },
-        message="Audio answer submitted successfully"
+        message="Audio answer submitted and evaluated successfully"
     )
+
 
 from ..schemas.interview_responses import AnswersData, QuestionData
 
@@ -649,7 +783,25 @@ async def submit_answer_text(
     question = session_db.get(Questions, question_id)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
-        
+
+    # ── Real-time Evaluation ─────────────────────────────────────────────────
+    # Evaluate immediately and update running total_score.  Errors are swallowed
+    # inside the helper so a failed LLM call never blocks the response.
+    q_text = question.question_text or question.content or ""
+    _evaluate_and_update_score(
+        db=session_db,
+        answer=answer,
+        question_text=q_text,
+        session_obj=session,
+        result_obj=result,
+    )
+
+    # Refresh to pick up score/feedback written by the evaluation helper
+    try:
+        session_db.refresh(answer)
+    except Exception:
+        pass
+
     question_data = QuestionData(
         id=question.id,
         paper_id=question.paper_id,
@@ -677,8 +829,9 @@ async def submit_answer_text(
     return ApiResponse(
         status_code=200,
         data=answer_data,
-        message="Text answer submitted successfully"
+        message="Text answer submitted and evaluated successfully"
     )
+
 
 
 @router.post("/finish/{interview_id}", response_model=ApiResponse[dict])
