@@ -156,3 +156,125 @@ def test_evaluate_answer_modal_fallback(session, client, test_users, auth_header
         response = client.post("/api/interview/evaluate-answer", json=payload, headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["data"]["score"] == 8.5
+
+
+def test_submit_answer_text_evaluates_immediately(session, client, test_users, auth_headers):
+    """score and feedback should be present immediately in the API response,
+    and InterviewResult.total_score / InterviewSession.total_score should be updated."""
+    admin, candidate = test_users
+
+    from app.models.db_models import (
+        InterviewSession, QuestionPaper, Questions, InterviewStatus, InterviewResult
+    )
+
+    paper = QuestionPaper(name="Eval Paper")
+    session.add(paper)
+    session.commit()
+
+    question = Questions(paper_id=paper.id, content="Explain recursion.", question_text="Explain recursion.")
+    session.add(question)
+    session.commit()
+
+    interview = InterviewSession(
+        admin_id=admin.id,
+        candidate_id=candidate.id,
+        paper_id=paper.id,
+        schedule_time=datetime.now(timezone.utc),
+        status=InterviewStatus.LIVE,
+    )
+    session.add(interview)
+    session.commit()
+
+    with patch("app.services.interview.evaluate_answer_content") as mock_eval:
+        mock_eval.return_value = {"feedback": "Excellent", "score": 9.0}
+
+        payload = {
+            "interview_id": interview.id,
+            "question_id": question.id,
+            "answer_text": "Recursion is a function calling itself.",
+        }
+        response = client.post(
+            "/api/interview/submit-answer-text", data=payload, headers=auth_headers
+        )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+
+    # Score and feedback must be in the response immediately
+    assert data["score"] == 9.0, f"Expected score=9.0 in response, got {data['score']}"
+    assert data["feedback"] == "Excellent"
+
+    # InterviewResult.total_score must reflect the sum
+    result_obj = session.exec(
+        __import__("sqlmodel", fromlist=["select"]).select(InterviewResult).where(
+            InterviewResult.interview_id == interview.id
+        )
+    ).first()
+    assert result_obj is not None
+    assert result_obj.total_score == 9.0, (
+        f"InterviewResult.total_score should be 9.0, got {result_obj.total_score}"
+    )
+
+    # InterviewSession.total_score must also be updated
+    session.refresh(interview)
+    assert interview.total_score == 9.0, (
+        f"InterviewSession.total_score should be 9.0, got {interview.total_score}"
+    )
+
+
+def test_two_answers_accumulate_total_score(session, client, test_users, auth_headers):
+    """Submitting two answers should accumulate total_score as a sum."""
+    admin, candidate = test_users
+
+    from app.models.db_models import (
+        InterviewSession, QuestionPaper, Questions, InterviewStatus, InterviewResult
+    )
+
+    paper = QuestionPaper(name="Accumulation Paper")
+    session.add(paper)
+    session.commit()
+
+    q1 = Questions(paper_id=paper.id, content="Q1?", question_text="Q1?")
+    q2 = Questions(paper_id=paper.id, content="Q2?", question_text="Q2?")
+    session.add_all([q1, q2])
+    session.commit()
+
+    interview = InterviewSession(
+        admin_id=admin.id,
+        candidate_id=candidate.id,
+        paper_id=paper.id,
+        schedule_time=datetime.now(timezone.utc),
+        status=InterviewStatus.LIVE,
+    )
+    session.add(interview)
+    session.commit()
+
+    scores = iter([
+        {"feedback": "OK", "score": 5.0},
+        {"feedback": "Great", "score": 3.0},
+    ])
+
+    with patch("app.services.interview.evaluate_answer_content", side_effect=scores):
+        for q in [q1, q2]:
+            client.post(
+                "/api/interview/submit-answer-text",
+                data={
+                    "interview_id": interview.id,
+                    "question_id": q.id,
+                    "answer_text": f"Answer to {q.content}",
+                },
+                headers=auth_headers,
+            )
+
+    result_obj = session.exec(
+        __import__("sqlmodel", fromlist=["select"]).select(InterviewResult).where(
+            InterviewResult.interview_id == interview.id
+        )
+    ).first()
+    assert result_obj is not None
+    assert result_obj.total_score == 8.0, (
+        f"Expected total_score=8.0 (5+3), got {result_obj.total_score}"
+    )
+
+    session.refresh(interview)
+    assert interview.total_score == 8.0
