@@ -74,10 +74,12 @@ class InterviewSessionData(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool
     allow_copy_paste: bool = False
+    result_status: Optional[str] = "PENDING"
 
 class AdminResultData(BaseModel):
     id: int
     interviewData: InterviewSessionData
     Interview_response: List[AnswersDataAdmin] = []
     total_score: float
+    result_status: Optional[str] = "PENDING"
     created_at: datetime
