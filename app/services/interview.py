@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 from ..models.db_models import Questions
 from ..core.config import local_llm
 from ..prompts.evaluation import evaluation_prompt
+from ..prompts.code_evaluation import code_evaluation_prompt
 from ..core.logger import get_logger
 from huggingface_hub import InferenceClient
 
@@ -48,8 +49,23 @@ def get_modal_evaluator():
     return _modal_evaluator
 
 
-def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, float]]:
-    """Evaluate interview answer using LLM. Uses Modal if enabled, else local Ollama."""
+def evaluate_answer_content(
+    question: str,
+    answer: str,
+    response_type: str = "text",
+    question_title: str = "",
+) -> Dict[str, Union[str, float]]:
+    """Evaluate interview answer using LLM.
+    
+    For response_type='code', delegates to evaluate_code_submission().
+    Uses Modal if enabled, else falls back through HF → local Ollama.
+    """
+    if response_type == "code":
+        return evaluate_code_submission(
+            problem_title=question_title or "Coding Problem",
+            problem_statement=question,
+            code=answer,
+        )
     
     last_error = None
 
@@ -179,6 +195,189 @@ def evaluate_answer_content(question: str, answer: str) -> Dict[str, Union[str, 
             "error": True,
             "details": error_msg if USE_MODAL else "Local Ollama unreachable"
         }
+
+
+# ---------------------------------------------------------------------------
+# Code Submission Evaluation
+# ---------------------------------------------------------------------------
+
+def evaluate_code_submission(
+    problem_title: str,
+    problem_statement: str,
+    code: str,
+) -> Dict[str, Union[str, float]]:
+    """Evaluate a candidate's code submission for a coding problem.
+    
+    Returns a dict with: feedback, score, correctness, time_complexity,
+    space_complexity, issues.
+    """
+    import json as _json
+
+    def _chain_invoke(chain, vars_: dict) -> dict:
+        """Run chain and parse JSON response."""
+        raw = chain.invoke(vars_).content.strip()
+        if raw.startswith("```"):
+            lines = raw.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            raw = "\n".join(lines).strip()
+        try:
+            return _json.loads(raw)
+        except _json.JSONDecodeError:
+            return {
+                "feedback": raw,
+                "score": 0.0,
+                "correctness": "unknown",
+                "time_complexity": "unknown",
+                "space_complexity": "unknown",
+                "issues": [],
+            }
+
+    chain_vars = {
+        "title": problem_title,
+        "problem_statement": problem_statement,
+        "code": code,
+    }
+
+    code_eval_chain = code_evaluation_prompt | local_llm
+
+    # --- Hugging Face Inference API ---
+    hf_token = os.getenv("HF_TOKEN")
+    if hf_token:
+        try:
+            logger.info("evaluate_code: Attempting HF Inference API...")
+            from huggingface_hub import InferenceClient
+            client = InferenceClient(token=hf_token)
+            model_id = "Qwen/Qwen2.5-7B-Instruct"
+            rendered = code_evaluation_prompt.format_messages(**chain_vars)
+            role_map = {"system": "system", "human": "user", "ai": "assistant"}
+            messages = [
+                {"role": role_map.get(m.type if hasattr(m, "type") else "user", "user"), "content": m.content}
+                for m in rendered
+            ]
+            response = client.chat_completion(
+                model=model_id, messages=messages, max_tokens=1024, temperature=0.1
+            )
+            content = response.choices[0].message.content
+            if content.startswith("```"):
+                lines = content.split("\n")
+                lines = [l for l in lines if not l.startswith("```")]
+                content = "\n".join(lines).strip()
+            result = _json.loads(content)
+            # Ensure all expected keys exist
+            result.setdefault("correctness", "unknown")
+            result.setdefault("time_complexity", "unknown")
+            result.setdefault("space_complexity", "unknown")
+            result.setdefault("issues", [])
+            logger.info(f"evaluate_code: HF API score={result.get('score')}")
+            return result
+        except Exception as e:
+            logger.warning(f"evaluate_code: HF API failed: {e}")
+
+    # --- Local Ollama fallback ---
+    try:
+        logger.info("evaluate_code: Using local Ollama...")
+        result = _chain_invoke(code_eval_chain, chain_vars)
+        result.setdefault("correctness", "unknown")
+        result.setdefault("time_complexity", "unknown")
+        result.setdefault("space_complexity", "unknown")
+        result.setdefault("issues", [])
+        logger.info(f"evaluate_code: Ollama score={result.get('score')}")
+        return result
+    except Exception as e:
+        logger.error(f"evaluate_code: Ollama failed: {e}")
+        return {
+            "feedback": "Code evaluation service temporarily unavailable.",
+            "score": 0.0,
+            "correctness": "unknown",
+            "time_complexity": "unknown",
+            "space_complexity": "unknown",
+            "issues": [],
+            "error": True,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Coding Question Generation
+# ---------------------------------------------------------------------------
+
+def generate_coding_questions_from_prompt(
+    ai_prompt: str,
+    difficulty_mix: str,
+    num_questions: int,
+) -> list[dict]:
+    """Generate LeetCode-style coding problems using LLM.
+    
+    Returns a list of question dicts with keys:
+    title, problem_statement, examples, constraints, starter_code,
+    topic, difficulty, marks, response_type.
+
+    Falls back through: Hugging Face Inference API → local Ollama.
+    Raises ValueError if no questions can be generated.
+    """
+    import json as _json
+    from ..prompts.coding_question_generation import coding_question_generation_prompt
+
+    generation_chain = coding_question_generation_prompt | local_llm
+    rendered_messages = coding_question_generation_prompt.format_messages(
+        ai_prompt=ai_prompt,
+        difficulty_mix=difficulty_mix,
+        num_questions=num_questions,
+    )
+
+    def _parse_json(raw: str) -> list[dict]:
+        content = raw.strip()
+        if content.startswith("```"):
+            lines = content.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            content = "\n".join(lines).strip()
+        data = _json.loads(content)
+        if not isinstance(data, list):
+            raise ValueError("LLM did not return a JSON array")
+        return data
+
+    last_error = None
+
+    # --- Hugging Face Inference API ---
+    hf_token = os.getenv("HF_TOKEN")
+    if hf_token:
+        try:
+            logger.info("generate_coding_questions: Attempting HF Inference API...")
+            from huggingface_hub import InferenceClient
+            client = InferenceClient(token=hf_token)
+            model_id = "Qwen/Qwen2.5-7B-Instruct"
+            role_map = {"system": "system", "human": "user", "ai": "assistant"}
+            messages = [
+                {"role": role_map.get(m.type if hasattr(m, "type") else "user", "user"), "content": m.content}
+                for m in rendered_messages
+            ]
+            response = client.chat_completion(
+                model=model_id, messages=messages, max_tokens=4096, temperature=0.4
+            )
+            content = response.choices[0].message.content
+            result = _parse_json(content)
+            logger.info(f"generate_coding_questions: HF API returned {len(result)} problems")
+            return result
+        except Exception as e:
+            last_error = f"HF API failed: {str(e)}"
+            logger.warning(last_error)
+
+    # --- Local Ollama ---
+    try:
+        logger.info("generate_coding_questions: Using local Ollama...")
+        response = generation_chain.invoke({
+            "ai_prompt": ai_prompt,
+            "difficulty_mix": difficulty_mix,
+            "num_questions": num_questions,
+        })
+        result = _parse_json(response.content)
+        logger.info(f"generate_coding_questions: Ollama returned {len(result)} problems")
+        return result
+    except Exception as e:
+        error_msg = f"Ollama failed: {str(e)}"
+        if last_error:
+            error_msg = f"{last_error} | {error_msg}"
+        logger.error(error_msg)
+        raise ValueError(f"Coding question generation failed: {error_msg}")
 
 
 def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> Questions:

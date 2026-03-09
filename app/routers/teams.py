@@ -66,8 +66,9 @@ async def create_team(
         # Eager-load creator for serialisation
         if new_team.created_by:
             new_team.creator = session.get(User, new_team.created_by)
-    except IntegrityError:
+    except IntegrityError as e:
         session.rollback()
+        logger.error(f"IntegrityError creating team: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"A team with the name '{name}' already exists. Team names must be globally unique."
