@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 from app.services.interview import evaluate_answer_content
 
 def test_groq_evaluation():
@@ -14,8 +15,10 @@ def test_groq_evaluation():
     print(f"A: {answer}")
     
     print("\nCalling evaluate_answer_content()...")
-    # This should hit the Groq fallback logic since USE_MODAL is false
+    start = time.time()
     result = evaluate_answer_content(question, answer)
+    elapsed = time.time() - start
+    print(f"Evaluation took {elapsed:.4f}s")
     
     print("\n--- Result ---")
     print(f"Score: {result.get('score')}")
