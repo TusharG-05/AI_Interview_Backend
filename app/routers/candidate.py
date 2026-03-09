@@ -158,11 +158,19 @@ async def upload_selfie(
         logger.error(f"Embedding generation failed: {e}")
         # We still save the bytes even if embedding fails, but log it
         
-    # 4. Store image as base64 in database profile_image instead of local disk
-    import base64
-    base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-    current_user.profile_image = f"data:{file.content_type};base64,{base64_encoded}"
-    
+    # 4. Store image URL in database profile_image
+    from ..services.cloudinary_service import CloudinaryService
+    cloudinary_service = CloudinaryService()
+    try:
+        cloudinary_url = cloudinary_service.upload_image(image_bytes, folder="profile_selfies")
+        current_user.profile_image = cloudinary_url
+    except Exception as e:
+        logger.error(f"Cloudinary upload failed: {e}")
+        # Fallback to base64 for now to avoid breaking the app if Cloudinary fails
+        import base64
+        base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
+        current_user.profile_image = f"data:{file.content_type};base64,{base64_encoded}"
+
     session.add(current_user)
     
     try:
@@ -179,7 +187,7 @@ async def upload_selfie(
         status_code=200,
         data={
             "user_id": current_user.id,
-            "profile_image_url": f"/api/candidate/profile-image/{current_user.id}"
+            "profile_image_url": current_user.profile_image
         },
         message="Selfie uploaded and identity verified successfully"
     )
@@ -212,7 +220,12 @@ async def get_profile_image(
             headers={"Content-Disposition": "inline"}
         )
         
-    # 2. Try Disk Fallback
+    # 2. Try URL (Cloudinary)
+    if user.profile_image and user.profile_image.startswith("http"):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=user.profile_image)
+
+    # 3. Try Disk Fallback
     if user.profile_image and os.path.exists(user.profile_image):
         return FileResponse(
             user.profile_image,

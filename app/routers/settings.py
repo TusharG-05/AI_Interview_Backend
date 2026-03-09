@@ -71,9 +71,13 @@ async def get_system_status(interview_id: int):
     else:
         try:
             local_llm.invoke("ping")
-            llm_status = "healthy"
+            llm_status = "healthy (local Ollama)"
         except Exception:
-            llm_status = "disconnected (local Ollama not found)"
+            # Fallback to Hugging Face Inference API check
+            if os.getenv("HF_TOKEN"):
+                llm_status = "healthy (HF Inference API fallback)"
+            else:
+                llm_status = "disconnected (local Ollama not found & no HF_TOKEN)"
 
     hw_status = "idle"
     if camera_service.running:
