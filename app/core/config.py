@@ -80,6 +80,10 @@ CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
 
+# Groq Configuration
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+
 # Configure DeepFace to use project-local storage
 # DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights
 # In production (like HF Spaces), use /tmp for writable storage

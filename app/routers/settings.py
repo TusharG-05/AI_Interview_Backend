@@ -69,15 +69,19 @@ async def get_system_status(interview_id: int):
             modal_status = f"error ({str(e)})"
         llm_status = modal_status # Modal is the primary LLM
     else:
-        try:
-            local_llm.invoke("ping")
-            llm_status = "healthy (local Ollama)"
-        except Exception:
-            # Fallback to Hugging Face Inference API check
-            if os.getenv("HF_TOKEN"):
-                llm_status = "healthy (HF Inference API fallback)"
-            else:
-                llm_status = "disconnected (local Ollama not found & no HF_TOKEN)"
+        # Check Groq First (Primary Fallback)
+        if os.getenv("GROQ_API_KEY"):
+            llm_status = "healthy (Groq API fallback)"
+        else:
+            try:
+                local_llm.invoke("ping")
+                llm_status = "healthy (local Ollama)"
+            except Exception:
+                # Fallback to Hugging Face Inference API check
+                if os.getenv("HF_TOKEN"):
+                    llm_status = "healthy (HF Inference API fallback)"
+                else:
+                    llm_status = "disconnected (local Ollama not found & no fallback keys)"
 
     hw_status = "idle"
     if camera_service.running:
