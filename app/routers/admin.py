@@ -18,7 +18,8 @@ logger = get_logger(__name__)
 
 from ..schemas.requests import (
     QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, 
-    QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate, GeneratePaperRequest
+    QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate, GeneratePaperRequest,
+    GenerateCodingPaperRequest
 )
 from ..schemas.responses import (
     PaperRead, QuestionRead, SessionRead, UserRead, DetailedResult, 
@@ -428,6 +429,163 @@ async def generate_paper(
     )
 
 
+# --- AI Coding Question Paper Generation (LeetCode-style) ---
+
+@router.post("/generate-coding-paper", response_model=ApiResponse[PaperRead], status_code=201)
+async def generate_coding_paper(
+    request_data: GenerateCodingPaperRequest,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session),
+):
+    """
+    Generate a LeetCode-style coding problem paper using AI.
+
+    Each generated question includes:
+    - A full problem statement
+    - Example test cases with explanations
+    - Constraints list
+    - A language-agnostic starter function signature
+
+    The `content` field of each question stores all problem data as a JSON string.
+    Candidate answers are evaluated by AI when response_type='code'.
+    """
+    from ..services.interview import generate_coding_questions_from_prompt
+    import json as _json
+
+    # Validate difficulty_mix
+    valid_mixes = {"easy", "medium", "hard", "mixed"}
+    difficulty_mix = request_data.difficulty_mix.lower().strip()
+    if difficulty_mix not in valid_mixes:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid difficulty_mix '{difficulty_mix}'. Must be one of: {sorted(valid_mixes)}"
+        )
+
+    # Validate team
+    team = session.get(Team, request_data.team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    # Generate problems via LLM
+    try:
+        generated_problems = generate_coding_questions_from_prompt(
+            ai_prompt=request_data.ai_prompt,
+            difficulty_mix=difficulty_mix,
+            num_questions=request_data.num_questions,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI service unavailable: {str(e)}"
+        )
+
+    if not generated_problems:
+        raise HTTPException(
+            status_code=502,
+            detail="AI returned no problems. Please try again."
+        )
+
+    # Build paper name
+    paper_name = request_data.paper_name or (
+        f"Coding Paper: {request_data.ai_prompt[:50].strip()}"
+        f" ({difficulty_mix}, {request_data.num_questions} problems)"
+    )
+
+    # Persist the QuestionPaper
+    new_paper = QuestionPaper(
+        name=paper_name,
+        description=(
+            f"AI-generated coding paper. Topic: {request_data.ai_prompt}. "
+            f"Difficulty: {difficulty_mix}. Problems: {request_data.num_questions}."
+        ),
+        adminUser=current_user.id,
+        team_id=request_data.team_id,
+    )
+    session.add(new_paper)
+    try:
+        session.commit()
+        session.refresh(new_paper)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to create coding paper: {str(e)}")
+
+    # Bulk-insert problems as Questions
+    question_objects = []
+    total_marks = 0
+
+    for prob in generated_problems:
+        title = prob.get("title", "").strip()
+        if not title:
+            continue
+
+        marks = int(prob.get("marks", 6))
+        total_marks += marks
+
+        # Store full problem body as JSON in `content`
+        # This keeps the schema backward-compatible while carrying rich data
+        problem_body = {
+            "title": title,
+            "problem_statement": prob.get("problem_statement", ""),
+            "examples": prob.get("examples", []),
+            "constraints": prob.get("constraints", []),
+            "starter_code": prob.get("starter_code", ""),
+        }
+
+        new_q = Questions(
+            paper_id=new_paper.id,
+            content=_json.dumps(problem_body, ensure_ascii=False),  # Full problem as JSON
+            question_text=title,                                      # Plain title for backward compat
+            topic=prob.get("topic", "Algorithms"),
+            difficulty=prob.get("difficulty", "Medium"),
+            marks=marks,
+            response_type="code",
+        )
+        session.add(new_q)
+        question_objects.append(new_q)
+
+    # Update counts
+    new_paper.question_count = len(question_objects)
+    new_paper.total_marks = total_marks
+    session.add(new_paper)
+
+    try:
+        session.commit()
+        session.refresh(new_paper)
+        for q in question_objects:
+            session.refresh(q)
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save coding problems: {str(e)}")
+
+    # Build response
+    paper_read = PaperRead(
+        id=new_paper.id,
+        name=new_paper.name,
+        description=new_paper.description,
+        question_count=new_paper.question_count,
+        total_marks=new_paper.total_marks,
+        questions=[
+            QuestionRead(
+                id=q.id,
+                content=q.content,
+                question_text=q.question_text,
+                topic=q.topic,
+                difficulty=q.difficulty,
+                marks=q.marks,
+                response_type=q.response_type,
+            )
+            for q in question_objects
+        ],
+        created_at=new_paper.created_at.isoformat(),
+        created_by=serialize_user(current_user),
+        team_id=new_paper.team_id,
+    )
+
+    return ApiResponse(
+        status_code=201,
+        data=paper_read,
+        message=f"Coding paper generated successfully with {len(question_objects)} problems",
+    )
 @router.post("/upload-doc", response_model=ApiResponse[dict])
 async def upload_document(
     paper_id: int,

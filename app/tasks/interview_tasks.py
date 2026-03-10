@@ -70,9 +70,15 @@ def process_session_results(interview_id: int, db: Session = None):
                 if needs_eval:
                     q = db.get(Questions, resp.question_id)
                     q_text = q.question_text or q.content or "General Question"
+                    resp_type = q.response_type if q else "text"
+                    q_title = q.question_text or q.content or "" if q else ""
 
-                    logger.info(f"  Answer {resp.id}: evaluating...")
-                    evaluation = interview_service.evaluate_answer_content(q_text, resp.candidate_answer)
+                    logger.info(f"  Answer {resp.id}: evaluating (type={resp_type})...")
+                    evaluation = interview_service.evaluate_answer_content(
+                        q_text, resp.candidate_answer,
+                        response_type=resp_type or "text",
+                        question_title=q_title,
+                    )
 
                     resp.feedback = evaluation.get("feedback", "")
                     resp.score = evaluation.get("score")

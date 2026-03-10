@@ -55,9 +55,21 @@ def _evaluate_and_update_score(
 
         text_to_evaluate = answer.candidate_answer or answer.transcribed_text
 
-        # 2. Call LLM evaluation
-        logger.info(f"Answer {answer.id}: running real-time evaluation...")
-        evaluation = interview_service.evaluate_answer_content(question_text, text_to_evaluate)
+        # 2. Load question to get response_type and title
+        question_obj = db.get(Questions, answer.question_id)
+        resp_type = "text"
+        q_title = question_text
+        if question_obj:
+            resp_type = question_obj.response_type or "text"
+            q_title = question_obj.question_text or question_obj.content or question_text
+
+        # 3. Call LLM evaluation (routes to code evaluator if response_type='code')
+        logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type})...")
+        evaluation = interview_service.evaluate_answer_content(
+            question_text, text_to_evaluate,
+            response_type=resp_type,
+            question_title=q_title,
+        )
 
         answer.feedback = evaluation.get("feedback", "")
         answer.score = float(evaluation.get("score") or 0.0)
