@@ -102,6 +102,25 @@ def test_api():
     else:
         print(f" AI Paper Generation skipped/failed (Check LLM config/Ollama): {gen_res.status_code} - {gen_res.text}")
 
+    # 6.6 ADMIN: Generate Coding Paper (AI)
+    print("\n[6.6] Testing AI Coding Paper Generation (Linked to Team)...")
+    coding_gen_res = requests.post(f"{BASE_URL}/admin/generate-coding-paper", headers=admin_headers, json={
+        "ai_prompt": "Arrays and Hashing",
+        "difficulty_mix": "mixed",
+        "num_questions": 1,
+        "team_id": team_id,
+        "paper_name": f"AI Coding Paper {uuid.uuid4().hex[:6]}"
+    })
+    coding_paper_id = None
+    if coding_gen_res.status_code == 201:
+        coding_paper_id = coding_gen_res.json()["data"]["id"]
+        assert coding_gen_res.json()["data"]["team_id"] == team_id
+        assert len(coding_gen_res.json()["data"]["questions"]) == 1
+        assert coding_gen_res.json()["data"]["questions"][0]["response_type"] == "code"
+        print(f" AI Coding Paper Generated: ID {coding_paper_id}, Team ID {coding_gen_res.json()['data']['team_id']}")
+    else:
+        print(f" AI Coding Paper Generation skipped/failed: {coding_gen_res.status_code} - {coding_gen_res.text}")
+
     # 7. ADMIN: Add Question
     print("\n[7] Testing Adding Question...")
     q_res = requests.post(f"{BASE_URL}/admin/papers/{paper_id}/questions", headers=admin_headers, json={
@@ -171,6 +190,22 @@ def test_api():
     assert interview_data["interview_round"] == "ROUND_1", f"Interview round mismatch: expected ROUND_1, got {interview_data['interview_round']}"
     print(f" Interview Scheduled: ID {interview_id}, Round: {interview_data['interview_round']}, Team: {interview_data['team_id']}")
 
+    coding_interview_id = None
+    coding_access_token = None
+    if coding_paper_id:
+        print("\n[9.1] Testing Coding Interview Scheduling...")
+        coding_sched_res = requests.post(f"{BASE_URL}/admin/interviews/schedule", headers=admin_headers, json={
+            "candidate_id": candidate_id,
+            "paper_id": coding_paper_id,
+            "team_id": team_id,
+            "interview_round": "ROUND_2",
+            "schedule_time": "2026-03-10T16:00:00Z",
+            "duration_minutes": 60
+        })
+        assert coding_sched_res.status_code == 201
+        coding_interview_id = coding_sched_res.json()["data"]["interview"]["id"]
+        coding_access_token = coding_sched_res.json()["data"]["access_token"]
+        print(f" Coding Interview Scheduled: ID {coding_interview_id}")
     # 10. ADMIN: List Interviews (Verify Team/Round)
     print("\n[10] Testing Interview Listing...")
     interviews_res = requests.get(f"{BASE_URL}/admin/interviews", headers=admin_headers)
@@ -203,6 +238,36 @@ def test_api():
     assert c_history.status_code == 200, f"Candidate History failed: {c_history.status_code} - {c_history.text}"
     print(" Candidate Login & History Verified")
 
+    # 12.1 CANDIDATE: Submit Coding Answer
+    if coding_interview_id and coding_access_token:
+        print("\n[12.1] Testing Candidate Coding Submission...")
+        # 1. Start Session to get to LIVE status
+        start_res = requests.post(f"{BASE_URL}/interview/start-session/{coding_interview_id}", headers=c_headers)
+        assert start_res.status_code == 200, f"Failed to start coding session: {start_res.text}"
+        
+        # 2. Get Next Question
+        nq_res = requests.get(f"{BASE_URL}/interview/next-question/{coding_interview_id}", headers=c_headers)
+        assert nq_res.status_code == 200
+        nq_data = nq_res.json()["data"]
+        
+        if nq_data.get("status") != "finished":
+            assert nq_data["response_type"] == "code", f"Expected response_type=code, got {nq_data.get('response_type')}"
+            coding_q_id = nq_data["question_id"]
+            
+            # 3. Submit Code Answer
+            sample_code = "def solve(nums):\n    return sum(nums)"
+            sub_res = requests.post(f"{BASE_URL}/interview/submit-answer-text", headers=c_headers, data={
+                "interview_id": coding_interview_id,
+                "question_id": coding_q_id,
+                "answer_text": sample_code
+            })
+            assert sub_res.status_code == 200, f"Code submission failed: {sub_res.text}"
+            sub_data = sub_res.json()["data"]
+            print(f" Code Submitted via Text API successfully.")
+            print(f" LLM Feedback: {sub_data.get('feedback', '')[:100]}...")
+            print(f" Score: {sub_data.get('score')} | Time Complexity: {sub_data.get('time_complexity', 'unknown')}")
+        else:
+            print(" Session already finished, no coding question available.")
     # 13. SYSTEM: Status
     print("\n[13] Testing System Status...")
     status_res = requests.get(f"{BASE_URL}/status/", params={"interview_id": interview_id})
