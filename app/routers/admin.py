@@ -620,7 +620,14 @@ async def upload_document(
     
     try:
         # Default to questions_only extraction
-        extracted_data = nlp_service.extract_qa_from_file(file_path, questions_only=True)
+        try:
+            extracted_data = nlp_service.extract_qa_from_file(file_path, questions_only=True)
+        except Exception as extract_err:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Failed to extract questions from file: {str(extract_err)}. "
+                       "Ensure the file is a valid document with readable text."
+            )
         for item in extracted_data:
             q = Questions(
                 paper_id=paper_id,
@@ -1046,7 +1053,9 @@ async def get_live_status_dashboard(
             "suspended_at": format_iso_datetime(interview_session.suspended_at),
             "enrollment_audio_path": interview_session.enrollment_audio_path,
             "is_completed": interview_session.is_completed or False,
-            "allow_copy_paste": interview_session.allow_copy_paste
+            "allow_copy_paste": interview_session.allow_copy_paste,
+            "team_id": interview_session.team_id,
+            "interview_round": interview_session.interview_round.value if interview_session.interview_round else None
         }
         
         results.append(LiveStatusItem(
@@ -1485,13 +1494,15 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             suspended_at=s.suspended_at,
             enrollment_audio_path=f"/api/admin/interviews/enrollment-audio/{s.id}" if s.enrollment_audio_path else None,
             allow_copy_paste=s.allow_copy_paste or False,
-            is_completed=s.is_completed or False
+            is_completed=s.is_completed or False,
+            result_status=s.result.result_status if s.result else "PENDING"
         )
             
         # 5. Top Level Result
         results.append(InterviewResultBrief(
             id=s.result.id,
             interview=session_nested,
+            result_status=s.result.result_status or "PENDING",
             total_score=s.result.total_score,
             created_at=s.result.created_at
         ))
@@ -1582,7 +1593,8 @@ async def get_result(
         suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
         enrollment_audio_path=s.enrollment_audio_path,
         is_completed=s.is_completed or False,
-        allow_copy_paste=s.allow_copy_paste or False
+        allow_copy_paste=s.allow_copy_paste or False,
+        result_status=s.result.result_status if s.result else "PENDING"
     )
     
     # 5. Answers (mapped to Interview_response)
@@ -1616,6 +1628,7 @@ async def get_result(
         interviewData=session_nested,
         Interview_response=answers_nested,
         total_score=s.result.total_score or 0.0,
+        result_status=s.result.result_status or "PENDING",
         created_at=s.result.created_at or datetime.now(timezone.utc)
     )
 
@@ -1665,6 +1678,12 @@ async def update_result(
     # Update total score if provided
     if "total_score" in update_dict:
         interview_session.total_score = update_dict["total_score"]
+        if interview_session.result:
+            interview_session.result.total_score = update_dict["total_score"]
+            
+    # Update result status if provided
+    if "result_status" in update_dict and interview_session.result:
+        interview_session.result.result_status = update_dict["result_status"]
     
     # Update individual responses if provided
     if "responses" in update_dict and update_dict["responses"]:

@@ -10,6 +10,8 @@ class TeamRead(BaseModel):
     created_by: Optional[dict] = None  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     created_at: str
     paper_count: int = 0
+    papers: List["PaperRead"] = []  # Full nested papers with questions
+
 class HistoryItem(BaseModel):
     interview_id: int
     access_token: str
