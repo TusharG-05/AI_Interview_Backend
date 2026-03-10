@@ -122,9 +122,11 @@ class AudioService:
             
             logger.info("Attempting HF Inference API for STT...")
             # Passing the path directly allows the client to detect content type
+            # Added 60s timeout to prevent hanging on slow HF Inference requests
             result = client.automatic_speech_recognition(
                 audio=audio_path,
-                model="openai/whisper-large-v3-turbo"
+                model="openai/whisper-large-v3-turbo",
+                timeout=60
             )
             text = result.get("text", "").strip()
             logger.info(f"HF Inference STT successful: {text[:50]}...")

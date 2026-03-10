@@ -218,6 +218,7 @@ class InterviewResult(SQLModel, table=True):
     interview_id: int = Field(
         sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"), unique=True)
     )
+    result_status: str = Field(default="PENDING", title="Status: PENDING, PASS, or FAIL")
     total_score: float = Field(default=0.0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 

@@ -54,6 +54,7 @@ class ResponseUpdate(BaseModel):
 
 class ResultUpdate(BaseModel):
     """Update overall result and individual responses"""
+    result_status: Optional[str] = None  # "PENDING", "PASS", "FAIL"
     total_score: Optional[float] = None
     responses: Optional[list] = None  # List of ResponseUpdate dicts
 

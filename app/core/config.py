@@ -75,6 +75,11 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+# Cloudinary Configuration
+CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
+CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
+CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
+
 # Configure DeepFace to use project-local storage
 # DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights
 # In production (like HF Spaces), use /tmp for writable storage
