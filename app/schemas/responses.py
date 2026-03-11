@@ -3,14 +3,16 @@ from pydantic import BaseModel, Field
 from .interview_result import UserNested, QuestionPaperNested
 
 # Team Responses
-class TeamRead(BaseModel):
+class TeamReadBasic(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
     created_by: Optional[dict] = None  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     created_at: str
-    paper_count: int = 0
-    papers: List["PaperRead"] = []  # Full nested papers with questions
+    user_count: int = 0
+
+class TeamRead(TeamReadBasic):
+    users: List["UserRead"] = []  # Full nested users
 
 class HistoryItem(BaseModel):
     interview_id: int
@@ -59,8 +61,6 @@ class PaperRead(BaseModel):
     questions: List[QuestionRead] = []
     created_at: str
     created_by: Optional[dict] = None # {"id": ..., "email": ..., "full_name": ..., "role": ...}
-    team_id: Optional[int] = None  # Team this paper belongs to
-
 class SessionRead(BaseModel):
     id: int
     admin: Optional[dict] = None
@@ -69,14 +69,13 @@ class SessionRead(BaseModel):
     scheduled_at: str
     score: Optional[float] = None
     allow_copy_paste: bool = False
-    team_id: Optional[int] = None
     interview_round: Optional[str] = None
-
 class UserRead(BaseModel):
     id: int
     email: str
     full_name: str
     role: str
+    team: Optional[TeamReadBasic] = None
 
 class UserMeResponse(BaseModel):
     """Complete user profile response for /auth/me endpoint"""
@@ -88,6 +87,7 @@ class UserMeResponse(BaseModel):
     has_profile_image: bool = False
     has_face_embedding: bool = False
     resume_text: Optional[str] = None
+    team: Optional[TeamReadBasic] = None
 
 class Token(BaseModel):
     access_token: str
@@ -97,6 +97,7 @@ class Token(BaseModel):
     full_name: str
     role: str
     expires_at: str
+    team: Optional[TeamReadBasic] = None
 
 class InterviewSessionDetail(BaseModel):
     id: int
@@ -104,7 +105,6 @@ class InterviewSessionDetail(BaseModel):
     admin_id: Optional[int] = None
     candidate_id: Optional[int] = None
     paper_id: int
-    team_id: Optional[int] = None
     interview_round: Optional[str] = None
     schedule_time: str
     duration_minutes: int
@@ -201,6 +201,7 @@ class UserDetailRead(BaseModel):
     created_interviews_count: int  # As admin
     participated_interviews_count: int  # As candidate
     profile_image_url: Optional[str] = None
+    team: Optional[TeamReadBasic] = None
 
 class ProctoringLogItem(BaseModel):
     type: str

@@ -11,18 +11,19 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     role: Optional[str] = None  # String, will be converted to UserRole
     resume_text: Optional[str] = None
+    team_id: Optional[int] = None
 
 class UserCreate(BaseModel):
     email: str
     password: str
     full_name: str
     role: UserRole = UserRole.CANDIDATE
+    team_id: Optional[int] = None
 
 # Admin Requests
 class InterviewScheduleCreate(BaseModel):
     candidate_id: int
     paper_id: int
-    team_id: int  # Required: must assign interview to a team
     interview_round: InterviewRound  # Required: e.g. ROUND_1, ROUND_2
     schedule_time: str # ISO format expected from frontend
     duration_minutes: int = 1440
@@ -91,7 +92,6 @@ class GeneratePaperRequest(BaseModel):
     ai_prompt: str = Field(..., min_length=5, description="Topic or job description to base questions on")
     years_of_experience: int = Field(..., ge=0, le=40, description="Candidate's expected years of experience")
     num_questions: int = Field(..., ge=1, le=50, description="Number of questions to generate")
-    team_id: int = Field(..., description="Team ID to associate the paper with")
     paper_name: Optional[str] = Field(None, description="Optional name for the question paper")
 
 
@@ -108,5 +108,4 @@ class GenerateCodingPaperRequest(BaseModel):
         ..., ge=1, le=20,
         description="Number of coding problems to generate (max 20)"
     )
-    team_id: int = Field(..., description="Team ID to associate the paper with")
     paper_name: Optional[str] = Field(None, description="Optional name for the coding paper")
