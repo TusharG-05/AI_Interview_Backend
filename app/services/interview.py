@@ -9,13 +9,25 @@ from ..prompts.evaluation import evaluation_prompt
 from ..prompts.code_evaluation import code_evaluation_prompt
 from ..core.logger import get_logger
 from huggingface_hub import InferenceClient
+from groq import Groq
 
 logger = get_logger(__name__)
 
 # Modal integration flag (shared with audio.py)
 USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+# Initialize Groq Client if key is available
+groq_client = None
+if GROQ_API_KEY:
+    try:
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        logger.info("Groq client initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Groq client: {e}")
 
 evaluation_chain = evaluation_prompt | local_llm
+
 
 # Lazy load Modal LLM
 _modal_evaluator = None
@@ -86,8 +98,52 @@ def evaluate_answer_content(
             # Direct access since we are in the same module
             last_error = f"Modal setup failed: {_modal_lookup_error or 'Unknown error'}"
             logger.warning(last_error)
-    
+            
+    # Groq API Fallback (Ultra-fast)
+    if groq_client:
+        try:
+            logger.info("Using Groq API for evaluation")
+            system_instruction = (
+                "You are an expert technical interviewer. Evaluate the candidate's answer. "
+                "Return a JSON object with 'feedback' (string) and 'score' (float 0-10)."
+            )
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": f"Question: {question}\n\nCandidate's Answer: {answer}"}
+                ],
+                temperature=0.1,
+                max_completion_tokens=512,
+                top_p=1,
+                stream=False,
+                response_format={"type": "json_object"},
+            )
+            content = completion.choices[0].message.content
+            try:
+                result = json.loads(content)
+                if "feedback" not in result:
+                    result["feedback"] = content
+                if "score" not in result:
+                    result["score"] = 5.0
+                logger.info("✅ Groq API evaluation successful")
+                return result
+            except json.JSONDecodeError:
+                logger.warning("Groq API returned non-JSON")
+                return {
+                    "feedback": content,
+                    "score": 5.0
+                }
+        except Exception as e:
+            fallback_error = f"Groq API Execution failed: {str(e)}"
+            logger.error(fallback_error)
+            if last_error:
+                last_error += f" | {fallback_error}"
+            else:
+                last_error = fallback_error
+
     # Hugging Face Inference API Fallback
+
     hf_token = os.getenv("HF_TOKEN")
     if hf_token:
         try:
@@ -436,6 +492,49 @@ def generate_questions_from_prompt(
         return data
 
     last_error = None
+
+    # --- Groq API ---
+    if groq_client:
+        try:
+            logger.info("generate_questions: Attempting Groq API...")
+            system_instruction = (
+                "You are an expert technical interviewer. Generate interview questions in JSON format. "
+                "Return a JSON array of objects where each object has: "
+                "'question_text' (string), 'topic' (string), 'difficulty' (string: Easy/Medium/Hard), "
+                "'marks' (int), and 'response_type' (string: text)."
+            )
+            
+            # Using the same llama-3.3-70b-versatile for high quality
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": f"Topic: {ai_prompt}\nYears of Experience: {years_of_experience}\nNumber of Questions: {num_questions}"}
+                ],
+                temperature=0.6, # Slightly higher temperature for variety in questions
+                max_completion_tokens=4096, # 20 questions might need more tokens
+                top_p=1,
+                stream=False,
+                response_format={"type": "json_object"} if num_questions > 1 else None, # JSON mode if possible
+            )
+            
+            content = completion.choices[0].message.content
+            # If JSON mode was used, it might be wrapped in an object depending on prompt
+            # But the prompt asks for a JSON array. 
+            # Note: Groq with response_format={"type": "json_object"} requires the word "json" in the prompt
+            # and returns a JSON object, not a raw array.
+            
+            result = _parse_json(content)
+            # Some LLMs wrap the array in a "questions" key if forced into "json_object" mode
+            if isinstance(result, dict) and "questions" in result:
+                result = result["questions"]
+            
+            if isinstance(result, list):
+                logger.info(f"generate_questions: Groq API returned {len(result)} questions")
+                return result
+        except Exception as e:
+            last_error = f"Groq API failed: {str(e)}"
+            logger.warning(last_error)
 
     # --- Hugging Face Inference API ---
     hf_token = os.getenv("HF_TOKEN")
