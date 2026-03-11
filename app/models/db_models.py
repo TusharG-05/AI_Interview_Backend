@@ -57,10 +57,6 @@ class User(SQLModel, table=True):
         sa_relationship_kwargs={"foreign_keys": "User.team_id"}
     )
     question_papers: List["QuestionPaper"] = Relationship(back_populates="admin")
-    created_teams: List["Team"] = Relationship(
-        back_populates="creator",
-        sa_relationship_kwargs={"foreign_keys": "Team.created_by"}
-    )
 
 
 class Team(SQLModel, table=True):
@@ -68,16 +64,9 @@ class Team(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(unique=True, index=True)  # Globally unique
     description: Optional[str] = Field(default=None)
-    created_by: Optional[int] = Field(
-        sa_column=Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
-    )
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     # Relationships
-    creator: Optional[User] = Relationship(
-        back_populates="created_teams",
-        sa_relationship_kwargs={"foreign_keys": "Team.created_by"}
-    )
     users: List["User"] = Relationship(
         back_populates="team",
         sa_relationship_kwargs={"foreign_keys": "User.team_id"}

@@ -642,6 +642,13 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
 
             question_index = len(answered_ids) + 1
             total_coding = len(all_coding_qs)
+            
+            # Calculate total_questions (similar to line 678)
+            total_questions = 0
+            if has_assignments:
+                total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)).all())
+            elif session_obj and session_obj.paper_id:
+                total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
 
             return ApiResponse(
                 status_code=200,

@@ -18,9 +18,6 @@ router = APIRouter(prefix="/super-admin", tags=["Teams"])
 
 def _serialize_team(team: Team, session: Session) -> TeamRead:
     """Convert a Team ORM object to a TeamRead schema with nested users."""
-    from ..schemas.user_schemas import serialize_user_flat
-    creator_dict = serialize_user_flat(team.creator) if team.creator else None
-
     # Load all users for this team
     users_orm = session.exec(
         select(User).where(User.team_id == team.id)
@@ -48,17 +45,12 @@ def _serialize_team(team: Team, session: Session) -> TeamRead:
         id=team.id,
         name=team.name,
         description=team.description,
-        created_by=creator_dict,
         created_at=team.created_at.isoformat() if team.created_at else "",
         user_count=len(users_out),
         users=users_out,
     )
 
 def _serialize_team_basic(team: Team, session: Session) -> TeamReadBasic:
-    """Convert a Team ORM object to a TeamReadBasic schema."""
-    from ..schemas.user_schemas import serialize_user_flat
-    creator_dict = serialize_user_flat(team.creator) if team.creator else None
-    
     from sqlalchemy import func
     user_count = session.exec(
         select(func.count(User.id)).where(User.team_id == team.id)
@@ -68,7 +60,6 @@ def _serialize_team_basic(team: Team, session: Session) -> TeamReadBasic:
         id=team.id,
         name=team.name,
         description=team.description,
-        created_by=creator_dict,
         created_at=team.created_at.isoformat() if team.created_at else "",
         user_count=user_count,
     )
@@ -96,16 +87,13 @@ async def create_team(
 
     new_team = Team(
         name=name,
-        description=team_data.description,
-        created_by=current_user.id
+        description=team_data.description
     )
     session.add(new_team)
     try:
         session.commit()
         session.refresh(new_team)
-        # Eager-load creator for serialisation
-        if new_team.created_by:
-            new_team.creator = session.get(User, new_team.created_by)
+        pass
     except IntegrityError as e:
         session.rollback()
         logger.error(f"IntegrityError creating team: {str(e)}")
@@ -138,10 +126,8 @@ async def list_teams(
     *(Admin + Super Admin)*
     """
     teams = session.exec(select(Team).order_by(Team.name)).all()
-    # Eager-load creators
     for t in teams:
-        if t.created_by:
-            t.creator = session.get(User, t.created_by)
+        pass
             
     # Serialize, completely omitting nested data
     data = []
@@ -172,8 +158,6 @@ async def get_team(
     team = session.get(Team, team_id)
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
-    if team.created_by:
-        team.creator = session.get(User, team.created_by)
     return ApiResponse(
         status_code=200,
         data=_serialize_team(team, session),
@@ -214,8 +198,7 @@ async def update_team(
     try:
         session.commit()
         session.refresh(team)
-        if team.created_by:
-            team.creator = session.get(User, team.created_by)
+        pass
     except IntegrityError:
         session.rollback()
         raise HTTPException(

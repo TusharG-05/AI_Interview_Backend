@@ -65,19 +65,6 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
                 detail="Invalid interview link or candidate mismatch.",
             )
 
-    # Ensure Super Admin has a team if they are one
-    if user.role == UserRole.SUPER_ADMIN and not user.team_id:
-        super_team = session.exec(select(Team).where(Team.name == "SUPER_ADMIN")).first()
-        if not super_team:
-            super_team = Team(name="SUPER_ADMIN", description="Default team for super administrators")
-            session.add(super_team)
-            session.commit()
-            session.refresh(super_team)
-        user.team_id = super_team.id
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
@@ -121,19 +108,6 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Ensure Super Admin has a team if they are one
-    if user.role == UserRole.SUPER_ADMIN and not user.team_id:
-        super_team = session.exec(select(Team).where(Team.name == "SUPER_ADMIN")).first()
-        if not super_team:
-            super_team = Team(name="SUPER_ADMIN", description="Default team for super administrators")
-            session.add(super_team)
-            session.commit()
-            session.refresh(super_team)
-        user.team_id = super_team.id
-        session.add(user)
-        session.commit()
-        session.refresh(user)
-
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
@@ -198,16 +172,10 @@ async def register(
     # Handle Team assignment for new user
     team_id = user_data.team_id
     
-    # Bootstrap: First user is SUPER_ADMIN and gets SUPER_ADMIN team
+    # Bootstrap: First user is SUPER_ADMIN
     if all_user_count == 0:
         user_data.role = UserRole.SUPER_ADMIN
-        super_team = session.exec(select(Team).where(Team.name == "SUPER_ADMIN")).first()
-        if not super_team:
-            super_team = Team(name="SUPER_ADMIN", description="Default team for super administrators")
-            session.add(super_team)
-            session.commit()
-            session.refresh(super_team)
-        team_id = super_team.id
+        team_id = None
 
     new_user = User(
         email=user_data.email.lower(),
