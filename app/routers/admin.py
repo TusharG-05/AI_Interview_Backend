@@ -26,7 +26,8 @@ from ..schemas.responses import (
     ResponseDetail, ProctoringLogItem, InterviewLinkResponse, 
     InterviewDetailRead, UserDetailRead, CandidateStatusResponse, 
     LiveStatusItem, AnswerRead, InterviewSessionDetail, InterviewSessionExpanded,
-    CodingQuestionRead, CodingPaperRead, CodingQuestionFull, CodingPaperFull
+    CodingQuestionRead, CodingPaperRead, CodingQuestionFull, CodingPaperFull,
+    TeamReadBasic
 )
 from ..schemas.interview_result import (
     InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested
@@ -68,14 +69,11 @@ async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
 
 @router.get("/papers", response_model=ApiResponse[List[PaperRead]])
 async def list_papers(
-    team_id: Optional[int] = None,  # Optional filter by team
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """List all question papers created by the admin. Optionally filter by ?team_id="""
+    """List all question papers created by the admin."""
     stmt = select(QuestionPaper).where(QuestionPaper.adminUser == current_user.id)
-    if team_id is not None:
-        stmt = stmt.where(QuestionPaper.team_id == team_id)
     papers = session.exec(stmt).all()
     papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
@@ -86,8 +84,7 @@ async def list_papers(
             response_type=q.response_type
         ) for q in p.questions],
         created_at=p.created_at.isoformat(),
-        created_by=serialize_user(p.admin, fallback_role="admin"),
-        team_id=p.team_id
+        created_by=serialize_user(p.admin, fallback_role="admin")
     ) for p in papers]
     return ApiResponse(
         status_code=200,
@@ -100,7 +97,6 @@ from pydantic import BaseModel, Field
 class PaperCreate(BaseModel):
     name: str = Field(..., min_length=1, description="Name of the question paper")
     description: Optional[str] = None
-    team_id: Optional[int] = None  # Optionally link paper to an existing team
 
 
 
@@ -110,18 +106,11 @@ async def create_paper(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Create a new collection of questions. Optionally link to a team via team_id."""
-    # Validate team if provided
-    if paper_data.team_id is not None:
-        team = session.get(Team, paper_data.team_id)
-        if not team:
-            raise HTTPException(status_code=404, detail=f"Team with id {paper_data.team_id} not found")
-
+    """Create a new collection of questions."""
     new_paper = QuestionPaper(
         name=paper_data.name,
         description=paper_data.description or "",
-        adminUser=current_user.id,
-        team_id=paper_data.team_id
+        adminUser=current_user.id
     )
     session.add(new_paper)
     try:
@@ -133,8 +122,7 @@ async def create_paper(
     paper_read = PaperRead(
         id=new_paper.id, name=new_paper.name, description=new_paper.description, 
         question_count=0, questions=[], created_at=new_paper.created_at.isoformat(),
-        created_by=serialize_user(current_user),
-        team_id=new_paper.team_id
+        created_by=serialize_user(current_user)
     )
     return ApiResponse(
         status_code=201,
@@ -337,12 +325,6 @@ async def generate_paper(
         f" ({request_data.years_of_experience} yrs, {request_data.num_questions} Qs)"
     )
 
-    # Validate team existence
-    from ..models.db_models import Team
-    team = session.get(Team, request_data.team_id)
-    if not team:
-        raise HTTPException(status_code=404, detail="Team not found")
-
     # Create QuestionPaper
     new_paper = QuestionPaper(
         name=paper_name,
@@ -351,8 +333,7 @@ async def generate_paper(
             f"Experience: {request_data.years_of_experience} years. "
             f"Questions: {request_data.num_questions}."
         ),
-        adminUser=current_user.id,
-        team_id=request_data.team_id,
+        adminUser=current_user.id
     )
     session.add(new_paper)
     try:
@@ -419,8 +400,7 @@ async def generate_paper(
             for q in question_objects
         ],
         created_at=new_paper.created_at.isoformat(),
-        created_by=serialize_user(current_user),
-        team_id=new_paper.team_id
+        created_by=serialize_user(current_user)
     )
 
     return ApiResponse(
@@ -732,10 +712,16 @@ async def schedule_interview(
     """
     Schedule a new one-to-one interview and email the link.
     """
-    # Validate Team
-    team = session.get(Team, schedule_data.team_id)
-    if not team:
-        raise HTTPException(status_code=400, detail=f"Team with id {schedule_data.team_id} not found")
+    # Validate Candidate & Get their Team
+    candidate = session.get(User, schedule_data.candidate_id)
+    if not candidate or candidate.role != UserRole.CANDIDATE:
+         raise HTTPException(status_code=400, detail="Invalid Candidate ID")
+
+    # Inherit team from candidate
+    team_id = candidate.team_id
+    if not team_id:
+        # Fallback to "Other" or throw error if business requires team
+        raise HTTPException(status_code=400, detail="Candidate must be assigned to a team before scheduling an interview.")
 
     # Validate Standard Paper (optional)
     paper = None
@@ -751,19 +737,12 @@ async def schedule_interview(
         if not coding_paper or coding_paper.adminUser != current_user.id:
             raise HTTPException(status_code=400, detail="Invalid Coding Paper ID — paper not found or you do not own it")
 
-    candidate = session.get(User, schedule_data.candidate_id)
-    if not candidate or candidate.role != UserRole.CANDIDATE:
-         raise HTTPException(status_code=400, detail="Invalid Candidate ID")
-
     # Access fields before any commits to prevent DetachedInstanceError in background tasks
     candidate_email = candidate.email.strip()
     candidate_full_name = candidate.full_name
 
-    # Availability Check (Optional - can be expanded later)
-
     # Parse schedule time
     try:
-        # Handle "Z" for UTC if present, though fromisoformat supports it in newer Python versions
         dt_str = schedule_data.schedule_time.replace("Z", "+00:00")
         schedule_dt = datetime.fromisoformat(dt_str)
     except ValueError:
@@ -1856,7 +1835,8 @@ async def create_user(
         email=user_data.email,
         full_name=user_data.full_name,
         password_hash=get_password_hash(user_data.password),
-        role=user_data.role
+        role=user_data.role,
+        team_id=user_data.team_id
     )
     session.add(new_user)
     try:
@@ -1866,26 +1846,43 @@ async def create_user(
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
     
+    # Serialize team for response
+    team_data = None
+    if new_user.id and new_user.team_id:
+        from .teams import _serialize_team_basic
+        team_data = _serialize_team_basic(new_user.team, session)
+
     return ApiResponse(
         status_code=201,
         data=UserRead(
             id=new_user.id,
             email=new_user.email,
             full_name=new_user.full_name,
-            role=new_user.role.value
+            role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
+            team=team_data
         ),
         message="User created successfully"
     )
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    users = [
-        UserRead(id=u.id, email=u.email, full_name=u.full_name, role=u.role.value) 
-        for u in session.exec(select(User)).all()
-    ]
+    users_orm = session.exec(select(User)).all()
+    from .teams import _serialize_team_basic
+    
+    users_data = []
+    for u in users_orm:
+        team_data = _serialize_team_basic(u.team, session) if u.team else None
+        users_data.append(UserRead(
+            id=u.id, 
+            email=u.email, 
+            full_name=u.full_name, 
+            role=u.role.value if hasattr(u.role, "value") else str(u.role),
+            team=team_data
+        ))
+        
     return ApiResponse(
         status_code=200,
-        data=users,
+        data=users_data,
         message="Users retrieved successfully"
     )
 
@@ -1911,19 +1908,23 @@ async def get_user(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
     ).all()
     
+    from .teams import _serialize_team_basic
+    team_data = _serialize_team_basic(user.team, session) if user.team else None
+
     return ApiResponse(
         status_code=200,
         data=UserDetailRead(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
-            role=user.role.value,
+            role=user.role.value if hasattr(user.role, "value") else str(user.role),
             resume_text=user.resume_text,
             has_profile_image=user.profile_image_bytes is not None,
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
-            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
+            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
+            team=team_data
         ),
         message="User details retrieved successfully"
     )
@@ -1954,6 +1955,15 @@ async def update_user(
     # Password hashing
     if "password" in update_dict:
         update_dict["password_hash"] = get_password_hash(update_dict.pop("password"))
+    
+    # Team association
+    if "team_id" in update_dict:
+        # Validate team if not None
+        if update_dict["team_id"] is not None:
+            team = session.get(Team, update_dict["team_id"])
+            if not team:
+                raise HTTPException(status_code=404, detail="Team not found")
+        setattr(user, "team_id", update_dict.pop("team_id"))
     
     # Role change validation
     if "role" in update_dict:

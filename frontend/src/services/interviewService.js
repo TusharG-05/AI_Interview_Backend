@@ -8,6 +8,11 @@ export const interviewService = {
     updatePaper: (id, data) => api.patch(`/admin/papers/${id}`, data),
     deletePaper: (id) => api.delete(`/admin/papers/${id}`),
 
+    // Teams
+    getTeams: () => api.get('/super-admin/teams'),
+    createTeam: (data) => api.post('/super-admin/teams', data),
+    deleteTeam: (id) => api.delete(`/super-admin/teams/${id}`),
+
     // Questions
     addQuestion: (paperId, data) => api.post(`/admin/papers/${paperId}/questions`, data),
     updateQuestion: (qId, data) => api.patch(`/admin/questions/${qId}`, data),
