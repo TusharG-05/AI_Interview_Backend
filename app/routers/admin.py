@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
-from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper
+from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
@@ -26,7 +26,7 @@ from ..schemas.responses import (
     ResponseDetail, ProctoringLogItem, InterviewLinkResponse, 
     InterviewDetailRead, UserDetailRead, CandidateStatusResponse, 
     LiveStatusItem, AnswerRead, InterviewSessionDetail, InterviewSessionExpanded,
-    CodingQuestionRead, CodingPaperRead
+    CodingQuestionRead, CodingPaperRead, CodingQuestionFull, CodingPaperFull
 )
 from ..schemas.interview_result import (
     InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested
@@ -432,24 +432,17 @@ async def generate_paper(
 
 # --- AI Coding Question Paper Generation (LeetCode-style) ---
 
-@router.post("/generate-coding-paper", response_model=ApiResponse[CodingPaperRead], status_code=201)
+@router.post("/generate-coding-paper", response_model=ApiResponse[CodingPaperFull], status_code=201)
 async def generate_coding_paper(
     request_data: GenerateCodingPaperRequest,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session),
 ):
     """
-    Generate LeetCode-style coding problems and append them to an existing question paper.
-
-    Looks up the paper by `paper_id`, validates admin ownership, then generates and
-    appends the requested coding problems. Each generated question includes:
-    - A full problem statement
-    - Example test cases with explanations
-    - Constraints list
-    - A language-agnostic starter function signature
-
-    The `content` field of each question stores all problem data as a JSON string.
-    Candidate answers are evaluated by AI when response_type='code'.
+    Generate LeetCode-style coding problems via AI and append them to an
+    existing CodingQuestionPaper. Each problem is saved as a structured
+    `CodingQuestions` row (title, problem_statement, examples, constraints,
+    starter_code) — not a JSON blob.
     """
     from ..services.interview import generate_coding_questions_from_prompt
     import json as _json
@@ -463,10 +456,13 @@ async def generate_coding_paper(
             detail=f"Invalid difficulty_mix '{difficulty_mix}'. Must be one of: {sorted(valid_mixes)}"
         )
 
-    # Fetch and validate the existing paper
-    paper = session.get(QuestionPaper, request_data.paper_id)
+    # Fetch and validate the existing CodingQuestionPaper
+    paper = session.get(CodingQuestionPaper, request_data.coding_paper_id)
     if not paper or paper.adminUser != current_user.id:
-        raise HTTPException(status_code=404, detail="Question paper not found or you do not have permission to modify it")
+        raise HTTPException(
+            status_code=404,
+            detail="Coding question paper not found or you do not have permission to modify it"
+        )
 
     # Generate problems via LLM
     try:
@@ -476,19 +472,13 @@ async def generate_coding_paper(
             num_questions=request_data.num_questions,
         )
     except ValueError as e:
-        raise HTTPException(
-            status_code=503,
-            detail=f"AI service unavailable: {str(e)}"
-        )
+        raise HTTPException(status_code=503, detail=f"AI service unavailable: {str(e)}")
 
     if not generated_problems:
-        raise HTTPException(
-            status_code=502,
-            detail="AI returned no problems. Please try again."
-        )
+        raise HTTPException(status_code=502, detail="AI returned no problems. Please try again.")
 
-    # Bulk-insert problems as Questions into the existing paper
-    question_objects = []
+    # Bulk-insert problems as CodingQuestions rows
+    question_objects: list[CodingQuestions] = []
     added_marks = 0
 
     for prob in generated_problems:
@@ -499,28 +489,21 @@ async def generate_coding_paper(
         marks = int(prob.get("marks", 6))
         added_marks += marks
 
-        # Store full problem body as JSON in `content`
-        problem_body = {
-            "title": title,
-            "problem_statement": prob.get("problem_statement", ""),
-            "examples": prob.get("examples", []),
-            "constraints": prob.get("constraints", []),
-            "starter_code": prob.get("starter_code", ""),
-        }
-
-        new_q = Questions(
+        new_q = CodingQuestions(
             paper_id=paper.id,
-            content=_json.dumps(problem_body, ensure_ascii=False),
-            question_text=title,
+            title=title,
+            problem_statement=prob.get("problem_statement", ""),
+            examples=_json.dumps(prob.get("examples", []), ensure_ascii=False),
+            constraints=_json.dumps(prob.get("constraints", []), ensure_ascii=False),
+            starter_code=prob.get("starter_code", ""),
             topic=prob.get("topic", "Algorithms"),
             difficulty=prob.get("difficulty", "Medium"),
             marks=marks,
-            response_type="code",
         )
         session.add(new_q)
         question_objects.append(new_q)
 
-    # Update cumulative counts on the existing paper
+    # Update cumulative counts on the paper
     paper.question_count = (paper.question_count or 0) + len(question_objects)
     paper.total_marks = (paper.total_marks or 0) + added_marks
     session.add(paper)
@@ -534,26 +517,29 @@ async def generate_coding_paper(
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to save coding problems: {str(e)}")
 
-    # Build response using the updated paper's full question list
+    # Build response using all questions now in the paper
     all_questions = session.exec(
-        select(Questions).where(Questions.paper_id == paper.id)
+        select(CodingQuestions).where(CodingQuestions.paper_id == paper.id)
     ).all()
 
-    paper_read = CodingPaperRead(
+    paper_full = CodingPaperFull(
         id=paper.id,
         name=paper.name,
-        description=paper.description,
+        description=paper.description or "",
         question_count=paper.question_count,
         total_marks=paper.total_marks,
         questions=[
-            CodingQuestionRead(
+            CodingQuestionFull(
                 id=q.id,
-                content=q.content,   # raw JSON string — validator auto-parses it
-                question_text=q.question_text,
+                paper_id=q.paper_id,
+                title=q.title,
+                problem_statement=q.problem_statement,
+                examples=q.examples,        # model_validator parses JSON string
+                constraints=q.constraints,  # model_validator parses JSON string
+                starter_code=q.starter_code or None,
                 topic=q.topic,
                 difficulty=q.difficulty,
                 marks=q.marks,
-                response_type=q.response_type,
             )
             for q in all_questions
         ],
@@ -564,9 +550,10 @@ async def generate_coding_paper(
 
     return ApiResponse(
         status_code=201,
-        data=paper_read,
-        message=f"Added {len(question_objects)} coding problems to paper '{paper.name}' (ID: {paper.id})",
+        data=paper_full,
+        message=f"Added {len(question_objects)} coding problems to '{paper.name}' (ID: {paper.id})",
     )
+
 @router.post("/upload-doc", response_model=ApiResponse[dict])
 async def upload_document(
     paper_id: int,

@@ -1,6 +1,7 @@
-from typing import List, Optional, Union
-from pydantic import BaseModel, Field
+from typing import List, Optional, Union, Any
+from pydantic import BaseModel, Field, model_validator
 from datetime import datetime
+import json as _json
 
 class LoginUserNested(BaseModel):
     id: str
@@ -18,7 +19,19 @@ class QuestionData(BaseModel):
     difficulty: str
     marks: int
     response_type: str
-    
+    coding_content: Optional[dict] = None  # Populated for response_type='code' questions
+
+    @model_validator(mode="after")
+    def populate_coding_content(self) -> "QuestionData":
+        """If this is a code-type question with JSON content, parse it into coding_content."""
+        if self.response_type == "code" and self.coding_content is None and self.content:
+            try:
+                parsed = _json.loads(self.content)
+                if isinstance(parsed, dict) and "title" in parsed:
+                    self.coding_content = parsed
+            except (_json.JSONDecodeError, TypeError):
+                pass
+        return self
 class QuestionPaperData(BaseModel):
     id: int
     name: str

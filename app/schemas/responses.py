@@ -215,7 +215,7 @@ class InterviewSessionDetail(BaseModel):
     access_token: str
     admin_id: Optional[int] = None
     candidate_id: Optional[int] = None
-    paper_id: int
+    paper_id: Optional[int] = None
     team_id: Optional[int] = None
     interview_round: Optional[str] = None
     schedule_time: str
