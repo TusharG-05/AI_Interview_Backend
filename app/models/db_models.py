@@ -82,7 +82,6 @@ class Team(SQLModel, table=True):
         back_populates="team",
         sa_relationship_kwargs={"foreign_keys": "User.team_id"}
     )
-    interview_sessions: List["InterviewSession"] = Relationship(back_populates="team")
 
 class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -105,7 +104,7 @@ class QuestionPaper(SQLModel, table=True):
 class Questions(SQLModel, table=True):
     """Formerly named 'QuestionGroup'"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    paper_id: int = Field(foreign_key="questionpaper.id")  # Not null; required
+    paper_id: Optional[int] = Field(default=None, foreign_key="questionpaper.id", nullable=True)
     content: str = Field(default="string")          # Not null; default 'string'
     question_text: str = Field(default="string")    # Not null; legacy sync of content
     topic: str = Field(default="General")           # Not null; default 'General'
@@ -243,7 +242,7 @@ class InterviewSession(SQLModel, table=True):
         back_populates="sessions",
         sa_relationship_kwargs={"primaryjoin": "InterviewSession.coding_paper_id == CodingQuestionPaper.id"}
     )
-    team: Optional["Team"] = Relationship(back_populates="interview_sessions")
+    # team: Optional["Team"] = Relationship(back_populates="interview_sessions")
 
     # Cascade delete when interview is deleted
     result: Optional["InterviewResult"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
