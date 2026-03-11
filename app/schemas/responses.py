@@ -1,6 +1,7 @@
-from typing import Optional, List
-from pydantic import BaseModel, Field
+from typing import Optional, List, Any
+from pydantic import BaseModel, Field, model_validator
 from .interview_result import UserNested, QuestionPaperNested
+import json as _json
 
 # Team Responses
 class TeamRead(BaseModel):
@@ -49,6 +50,70 @@ class QuestionRead(BaseModel):
     difficulty: str
     marks: int
     response_type: str
+
+# --- Coding Question Schemas (structured content) ---
+
+class CodingExample(BaseModel):
+    """A single input/output example for a coding problem."""
+    input: str
+    output: str
+    explanation: Optional[str] = None
+
+class CodingContent(BaseModel):
+    """Structured body of a LeetCode-style coding problem."""
+    title: str
+    problem_statement: str
+    examples: List[CodingExample] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+
+class CodingQuestionRead(BaseModel):
+    """
+    A question whose `content` field is a structured coding problem object
+    rather than a raw JSON string.
+
+    During serialisation the raw JSON stored in the database is parsed
+    automatically by the model validator below.
+    """
+    id: int
+    content: Optional[CodingContent] = None
+    question_text: Optional[str] = None
+    topic: Optional[str] = None
+    difficulty: str
+    marks: int
+    response_type: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_content(cls, data: Any) -> Any:
+        """
+        If `content` is a JSON string, decode it into a CodingContent dict so
+        Pydantic can validate it as a nested object.  Silently falls back to
+        None when the string cannot be parsed.
+        """
+        raw = data.get("content") if isinstance(data, dict) else None
+        if isinstance(raw, str):
+            try:
+                data = dict(data)  # make mutable copy
+                data["content"] = _json.loads(raw)
+            except (_json.JSONDecodeError, TypeError):
+                data = dict(data)
+                data["content"] = None
+        return data
+
+class CodingPaperRead(BaseModel):
+    """A question paper whose questions list uses CodingQuestionRead."""
+    id: int
+    name: str
+    description: Optional[str] = None
+    question_count: int = 0
+    total_marks: int = 0
+    questions: List[CodingQuestionRead] = []
+    created_at: str
+    created_by: Optional[dict] = None
+    team_id: Optional[int] = None
+
+
 
 class PaperRead(BaseModel):
     id: int

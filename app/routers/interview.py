@@ -577,16 +577,36 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     elif session_obj and session_obj.paper_id:
         total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
     
+    import json as _json
+
+    # Build response data; for code-type questions expose structured content
+    response_data: dict = {
+        "question_id": question.id,
+        "text": question.question_text or question.content,
+        "audio_url": f"/interview/audio/question/{question.id}",
+        "response_type": question.response_type,
+        "question_index": question_index,
+        "total_questions": total_questions,
+        "coding_content": None,
+    }
+
+    if question.response_type == "code" and question.content:
+        try:
+            parsed = _json.loads(question.content)
+            response_data["text"] = parsed.get("title", question.question_text or "")
+            response_data["coding_content"] = {
+                "title": parsed.get("title", ""),
+                "problem_statement": parsed.get("problem_statement", ""),
+                "examples": parsed.get("examples", []),
+                "constraints": parsed.get("constraints", []),
+                "starter_code": parsed.get("starter_code"),
+            }
+        except (_json.JSONDecodeError, TypeError):
+            pass  # leave coding_content as None if parsing fails
+
     return ApiResponse(
         status_code=200,
-        data={
-            "question_id": question.id,
-            "text": question.question_text or question.content,
-            "audio_url": f"/interview/audio/question/{question.id}",
-            "response_type": question.response_type,
-            "question_index": question_index,
-            "total_questions": total_questions
-        },
+        data=response_data,
         message="Next question retrieved successfully"
     )
 

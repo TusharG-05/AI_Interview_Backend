@@ -96,6 +96,7 @@ class GeneratePaperRequest(BaseModel):
 
 
 class GenerateCodingPaperRequest(BaseModel):
+    paper_id: int = Field(..., description="ID of the existing question paper to add coding problems to")
     ai_prompt: str = Field(
         ..., min_length=3,
         description="Topic area for the coding problems, e.g. 'Arrays and Hashing', 'Dynamic Programming'"
@@ -108,5 +109,3 @@ class GenerateCodingPaperRequest(BaseModel):
         ..., ge=1, le=20,
         description="Number of coding problems to generate (max 20)"
     )
-    team_id: int = Field(..., description="Team ID to associate the paper with")
-    paper_name: Optional[str] = Field(None, description="Optional name for the coding paper")
