@@ -47,12 +47,23 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
     
     role_key = user.role.value if isinstance(user.role, UserRole) else str(user.role)
     
+    # Optional team info
+    team_data = None
+    if hasattr(user, "team") and user.team:
+        team_data = {
+            "id": user.team.id,
+            "name": user.team.name,
+            "description": user.team.description,
+            "created_at": user.team.created_at.isoformat() if user.team.created_at else ""
+        }
+
     return {
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
         "role": role_key,
-        "profile_image": user.profile_image
+        "profile_image": user.profile_image,
+        "team": team_data
     }
 
 
@@ -68,10 +79,20 @@ def serialize_user_flat(user: User) -> Dict[str, Any]:
     """
     role_key = user.role.value if isinstance(user.role, UserRole) else str(user.role)
     
+    team_data = None
+    if hasattr(user, "team") and user.team:
+         team_data = {
+            "id": user.team.id,
+            "name": user.team.name,
+            "description": user.team.description,
+            "created_at": user.team.created_at.isoformat() if user.team.created_at else ""
+        }
+
     return {
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
         "role": role_key,
-        "profile_image": user.profile_image
+        "profile_image": user.profile_image,
+        "team": team_data
     }

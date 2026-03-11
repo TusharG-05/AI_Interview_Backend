@@ -15,7 +15,7 @@ from ..schemas.responses import Token, UserRead
 from ..schemas.api_response import ApiResponse
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
-from ..models.db_models import User, UserRole, InterviewSession
+from ..models.db_models import User, UserRole, InterviewSession, Team
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -35,7 +35,7 @@ def set_auth_cookie(response: Response, token: str):
 @router.post("/login", response_model=ApiResponse[Token])
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
-    user = session.exec(select(User).where(User.email == login_data.email)).first()
+    user = session.exec(select(User).where(User.email == login_data.email.lower())).first()
     if not user or not verify_password(login_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -65,6 +65,19 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
                 detail="Invalid interview link or candidate mismatch.",
             )
 
+    # Ensure Super Admin has a team if they are one
+    if user.role == UserRole.SUPER_ADMIN and not user.team_id:
+        super_team = session.exec(select(Team).where(Team.name == "SUPER_ADMIN")).first()
+        if not super_team:
+            super_team = Team(name="SUPER_ADMIN", description="Default team for super administrators")
+            session.add(super_team)
+            session.commit()
+            session.refresh(super_team)
+        user.team_id = super_team.id
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
@@ -73,14 +86,18 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     set_auth_cookie(response, token)
     expire_time = datetime.now(timezone.utc) + access_token_expires
     
+    from .teams import _serialize_team_basic
+    team_data = _serialize_team_basic(user.team, session) if user.team else None
+
     token_data = {
         "access_token": token, 
         "token_type": "bearer",
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
-        "role": user.role,
-        "expires_at": expire_time.isoformat()
+        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
+        "expires_at": expire_time.isoformat(),
+        "team": team_data
     }
     
     return ApiResponse(
@@ -96,7 +113,7 @@ async def login_for_access_token(
     session: Session = Depends(get_session)
 ):
     """Standard OAuth2 token endpoint for Swagger UI (Authorize button)."""
-    user = session.exec(select(User).where(User.email == form_data.username)).first()
+    user = session.exec(select(User).where(User.email == form_data.username.lower())).first()
     if not user or not verify_password(form_data.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -104,20 +121,38 @@ async def login_for_access_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    # Ensure Super Admin has a team if they are one
+    if user.role == UserRole.SUPER_ADMIN and not user.team_id:
+        super_team = session.exec(select(Team).where(Team.name == "SUPER_ADMIN")).first()
+        if not super_team:
+            super_team = Team(name="SUPER_ADMIN", description="Default team for super administrators")
+            session.add(super_team)
+            session.commit()
+            session.refresh(super_team)
+        user.team_id = super_team.id
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
     )
     
     set_auth_cookie(response, token)
+    
+    from .teams import _serialize_team_basic
+    team_data = _serialize_team_basic(user.team, session) if user.team else None
+
     return {
         "access_token": token, 
         "token_type": "bearer",
         "id": user.id,
-        "role": user.role,
+        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
         "email": user.email,
         "full_name": user.full_name,
-        "expires_at": (datetime.now(timezone.utc) + access_token_expires).isoformat()
+        "expires_at": (datetime.now(timezone.utc) + access_token_expires).isoformat(),
+        "team": team_data
     }
 
 @router.post("/logout", response_model=ApiResponse[dict])
@@ -154,16 +189,32 @@ async def register(
                 detail="Registration is restricted to Admins. Please contact an administrator."
             )
 
-    existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
+    existing_user = session.exec(select(User).where(User.email == user_data.email.lower())).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     hashed_password = get_password_hash(user_data.password)
+    
+    # Handle Team assignment for new user
+    team_id = user_data.team_id
+    
+    # Bootstrap: First user is SUPER_ADMIN and gets SUPER_ADMIN team
+    if all_user_count == 0:
+        user_data.role = UserRole.SUPER_ADMIN
+        super_team = session.exec(select(Team).where(Team.name == "SUPER_ADMIN")).first()
+        if not super_team:
+            super_team = Team(name="SUPER_ADMIN", description="Default team for super administrators")
+            session.add(super_team)
+            session.commit()
+            session.refresh(super_team)
+        team_id = super_team.id
+
     new_user = User(
-        email=user_data.email,
+        email=user_data.email.lower(),
         full_name=user_data.full_name,
         password_hash=hashed_password,
-        role=user_data.role
+        role=user_data.role,
+        team_id=team_id
     )
     session.add(new_user)
     
@@ -182,14 +233,18 @@ async def register(
     set_auth_cookie(response, token)
     expire_time = datetime.now(timezone.utc) + access_token_expires
     
+    from .teams import _serialize_team_basic
+    team_data = _serialize_team_basic(new_user.team, session) if new_user.team else None
+
     token_data = {
         "access_token": token, 
         "token_type": "bearer",
         "id": new_user.id,
         "email": new_user.email,
         "full_name": new_user.full_name,
-        "role": new_user.role,
-        "expires_at": expire_time.isoformat()
+        "role": new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
+        "expires_at": expire_time.isoformat(),
+        "team": team_data
     }
     
     return ApiResponse(
@@ -199,7 +254,7 @@ async def register(
     )
 
 @router.get("/me", response_model=ApiResponse[dict])
-async def read_users_me(current_user: User = Depends(get_current_user)):
+async def read_users_me(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     """Get current logged in user details with complete profile information."""
     from ..schemas.user_schemas import serialize_user
     
@@ -212,6 +267,11 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
         "has_face_embedding": current_user.face_embedding is not None,
         "resume_text": current_user.resume_text
     })
+
+    # Ensure team is serialized correctly if present
+    if current_user.team:
+        from .teams import _serialize_team_basic
+        user_data["team"] = _serialize_team_basic(current_user.team, session)
     
     return ApiResponse(
         status_code=200,

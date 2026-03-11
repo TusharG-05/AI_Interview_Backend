@@ -49,8 +49,18 @@ class User(SQLModel, table=True):
     face_embedding: Optional[str] = Field(default=None) # JSON/CSV string of the ArcFace/Sface vector
     
     # Relationships
+    team_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("team.id", ondelete="SET NULL"), nullable=True)
+    )
+    team: Optional["Team"] = Relationship(
+        back_populates="users",
+        sa_relationship_kwargs={"foreign_keys": "User.team_id"}
+    )
     question_papers: List["QuestionPaper"] = Relationship(back_populates="admin")
-    created_teams: List["Team"] = Relationship(back_populates="creator")
+    created_teams: List["Team"] = Relationship(
+        back_populates="creator",
+        sa_relationship_kwargs={"foreign_keys": "Team.created_by"}
+    )
 
 
 class Team(SQLModel, table=True):
@@ -64,8 +74,14 @@ class Team(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     # Relationships
-    creator: Optional[User] = Relationship(back_populates="created_teams")
-    question_papers: List["QuestionPaper"] = Relationship(back_populates="team")
+    creator: Optional[User] = Relationship(
+        back_populates="created_teams",
+        sa_relationship_kwargs={"foreign_keys": "Team.created_by"}
+    )
+    users: List["User"] = Relationship(
+        back_populates="team",
+        sa_relationship_kwargs={"foreign_keys": "User.team_id"}
+    )
     interview_sessions: List["InterviewSession"] = Relationship(back_populates="team")
 
 class QuestionPaper(SQLModel, table=True):
@@ -76,13 +92,7 @@ class QuestionPaper(SQLModel, table=True):
     question_count: int = Field(default=0)
     total_marks: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    # Team association (nullable for backwards compatibility)
-    team_id: Optional[int] = Field(
-        sa_column=Column(Integer, ForeignKey("team.id", ondelete="SET NULL"), nullable=True)
-    )
-
     admin: Optional[User] = Relationship(back_populates="question_papers")
-    team: Optional["Team"] = Relationship(back_populates="question_papers")
     questions: List["Questions"] = Relationship(
         back_populates="paper",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
@@ -190,10 +200,7 @@ class InterviewSession(SQLModel, table=True):
         sa_column=Column(Integer, ForeignKey("codingquestionpaper.id", ondelete="SET NULL"), nullable=True)
     )
 
-    # Team & Round
-    team_id: Optional[int] = Field(
-        sa_column=Column(Integer, ForeignKey("team.id", ondelete="SET NULL"), nullable=True)
-    )
+    # Interview Round
     interview_round: Optional[InterviewRound] = Field(default=None)
 
     # Timing
