@@ -103,23 +103,39 @@ def test_api():
         print(f" AI Paper Generation skipped/failed (Check LLM config/Ollama): {gen_res.status_code} - {gen_res.text}")
 
     # 6.6 ADMIN: Generate Coding Paper (AI)
-    print("\n[6.6] Testing AI Coding Paper Generation (Linked to Team)...")
+    print("\n[6.6] Testing AI Coding Paper Generation (Appended to Existing Paper)...")
     coding_gen_res = requests.post(f"{BASE_URL}/admin/generate-coding-paper", headers=admin_headers, json={
+        "paper_id": paper_id,          # Required: add coding problems to the existing paper
         "ai_prompt": "Arrays and Hashing",
         "difficulty_mix": "mixed",
         "num_questions": 1,
-        "team_id": team_id,
-        "paper_name": f"AI Coding Paper {uuid.uuid4().hex[:6]}"
     })
     coding_paper_id = None
     if coding_gen_res.status_code == 201:
-        coding_paper_id = coding_gen_res.json()["data"]["id"]
-        assert coding_gen_res.json()["data"]["team_id"] == team_id
-        assert len(coding_gen_res.json()["data"]["questions"]) == 1
-        assert coding_gen_res.json()["data"]["questions"][0]["response_type"] == "code"
-        print(f" AI Coding Paper Generated: ID {coding_paper_id}, Team ID {coding_gen_res.json()['data']['team_id']}")
+        res_data = coding_gen_res.json()["data"]
+        coding_paper_id = res_data["id"]
+        assert res_data["team_id"] == team_id, f"team_id mismatch: expected {team_id}, got {res_data['team_id']}"
+
+        # Verify at least 1 coding question is present (paper now has original + coding questions)
+        coding_questions = [q for q in res_data["questions"] if q.get("response_type") == "code"]
+        assert len(coding_questions) >= 1, "Expected at least 1 coding question in response"
+
+        # KEY ASSERTION: content must be a nested object, not a raw JSON string
+        cq = coding_questions[0]
+        assert isinstance(cq["content"], dict), (
+            f"Expected content to be a dict (nested object), got {type(cq['content'])}: {cq['content']}"
+        )
+        required_keys = {"title", "problem_statement", "examples", "constraints", "starter_code"}
+        missing = required_keys - set(cq["content"].keys())
+        assert not missing, f"content dict is missing keys: {missing}"
+        assert isinstance(cq["content"]["examples"], list), "examples should be a list"
+        assert isinstance(cq["content"]["constraints"], list), "constraints should be a list"
+
+        print(f"  AI Coding Paper Generated: ID {coding_paper_id}, Team ID {res_data['team_id']}")
+        print(f"  Content structure verified: title='{cq['content']['title']}'")
     else:
-        print(f" AI Coding Paper Generation skipped/failed: {coding_gen_res.status_code} - {coding_gen_res.text}")
+        print(f"  AI Coding Paper Generation skipped/failed: {coding_gen_res.status_code} - {coding_gen_res.text}")
+
 
     # 7. ADMIN: Add Question
     print("\n[7] Testing Adding Question...")
