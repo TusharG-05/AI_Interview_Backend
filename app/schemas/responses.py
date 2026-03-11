@@ -8,7 +8,6 @@ class TeamReadBasic(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
-    created_by: Optional[dict] = None  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
     created_at: str
     user_count: int = 0
 
@@ -112,7 +111,6 @@ class CodingPaperRead(BaseModel):
     total_marks: int = 0
     questions: List[CodingQuestionRead] = []
     created_at: str
-    created_by: Optional[dict] = None
     team_id: Optional[int] = None
 
 
@@ -159,7 +157,6 @@ class CodingPaperFull(BaseModel):
     total_marks: int = 0
     questions: List[CodingQuestionFull] = []
     created_at: str
-    created_by: Optional[dict] = None
     team_id: Optional[int] = None
 
 
@@ -172,7 +169,6 @@ class PaperRead(BaseModel):
     total_marks: int = 0
     questions: List[QuestionRead] = []
     created_at: str
-    created_by: Optional[dict] = None # {"id": ..., "email": ..., "full_name": ..., "role": ...}
 class SessionRead(BaseModel):
     id: int
     admin: Optional[dict] = None
@@ -217,7 +213,6 @@ class InterviewSessionDetail(BaseModel):
     admin_id: Optional[int] = None
     candidate_id: Optional[int] = None
     paper_id: Optional[int] = None
-    team_id: Optional[int] = None
     interview_round: Optional[str] = None
     schedule_time: str
     duration_minutes: int
@@ -281,7 +276,6 @@ class InterviewSessionExpanded(BaseModel):
     admin_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
     candidate_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
     paper_id: QuestionPaperExpanded = Field(default_factory=lambda: QuestionPaperExpanded())
-    team_id: Optional[int] = None
     interview_round: Optional[str] = None
     schedule_time: str
     duration_minutes: int

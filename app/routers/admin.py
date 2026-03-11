@@ -717,11 +717,8 @@ async def schedule_interview(
     if not candidate or candidate.role != UserRole.CANDIDATE:
          raise HTTPException(status_code=400, detail="Invalid Candidate ID")
 
-    # Inherit team from candidate
+    # Inherit team from candidate (used logic only, not stored in session)
     team_id = candidate.team_id
-    if not team_id:
-        # Fallback to "Other" or throw error if business requires team
-        raise HTTPException(status_code=400, detail="Candidate must be assigned to a team before scheduling an interview.")
 
     # Validate Standard Paper (optional)
     paper = None
@@ -753,7 +750,6 @@ async def schedule_interview(
         candidate_id=schedule_data.candidate_id,
         paper_id=schedule_data.paper_id,
         coding_paper_id=schedule_data.coding_paper_id,
-        team_id=schedule_data.team_id,
         interview_round=schedule_data.interview_round,
         schedule_time=schedule_dt,
         duration_minutes=schedule_data.duration_minutes or 1440,
@@ -933,7 +929,6 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             scheduled_at=format_iso_datetime(s.schedule_time),
             score=s.total_score,
             allow_copy_paste=s.allow_copy_paste or False,
-            team_id=s.team_id,
             interview_round=s.interview_round.value if s.interview_round else None
         ))
     return ApiResponse(
@@ -1009,7 +1004,6 @@ async def get_live_status_dashboard(
             "enrollment_audio_path": interview_session.enrollment_audio_path,
             "is_completed": interview_session.is_completed or False,
             "allow_copy_paste": interview_session.allow_copy_paste,
-            "team_id": interview_session.team_id,
             "interview_round": interview_session.interview_round.value if interview_session.interview_round else None
         }
         
@@ -1101,7 +1095,6 @@ async def get_interview(
         admin_id=admin_dict,
         candidate_id=candidate_dict,
         paper_id=paper_dict,
-        team_id=getattr(interview_session, "team_id", None),
         interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
         schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
         duration_minutes=interview_session.duration_minutes,

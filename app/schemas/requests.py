@@ -25,7 +25,6 @@ class InterviewScheduleCreate(BaseModel):
     candidate_id: int
     paper_id: Optional[int] = None         # Standard question paper (optional)
     coding_paper_id: Optional[int] = None  # Coding question paper (optional)
-    team_id: int  # Required: must assign interview to a team
     interview_round: InterviewRound  # Required: e.g. ROUND_1, ROUND_2
     schedule_time: str # ISO format expected from frontend
     duration_minutes: int = 1440
