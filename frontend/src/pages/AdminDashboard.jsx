@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
     Users, BookOpen, Calendar, Clock, Plus,
-    Search, Filter, ChevronRight, AlertCircle, CheckCircle2, MoreVertical
+    Search, Filter, ChevronRight, AlertCircle, CheckCircle2, MoreVertical, Trash2
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { interviewService } from '../services/interviewService';
@@ -9,15 +9,18 @@ import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import CreatePaperModal from '../components/CreatePaperModal';
 import ScheduleInterviewModal from '../components/ScheduleInterviewModal';
+import CreateTeamModal from '../components/CreateTeamModal';
 
 const AdminDashboard = () => {
     const navigate = useNavigate();
     const [interviews, setInterviews] = useState([]);
     const [papers, setPapers] = useState([]);
+    const [teams, setTeams] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [isPaperModalOpen, setIsPaperModalOpen] = useState(false);
     const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+    const [isTeamModalOpen, setIsTeamModalOpen] = useState(false);
 
     const [liveCount, setLiveCount] = useState(0);
 
@@ -43,13 +46,15 @@ const AdminDashboard = () => {
     const fetchData = async () => {
         try {
             setLoading(true);
-            const [interviewsRes, papersRes, liveRes] = await Promise.all([
+            const [interviewsRes, papersRes, liveRes, teamsRes] = await Promise.all([
                 interviewService.getInterviews(),
                 interviewService.getPapers(),
-                interviewService.getLiveStatus()
+                interviewService.getLiveStatus(),
+                interviewService.getTeams().catch(() => ({ data: [] }))
             ]);
             setInterviews(interviewsRes.data || []);
             setPapers(papersRes.data || []);
+            setTeams(teamsRes.data || []);
 
             // Store live count for stats
             const liveCount = liveRes.data?.length || 0;
@@ -60,6 +65,16 @@ const AdminDashboard = () => {
             return 0;
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleDeleteTeam = async (id, name) => {
+        if (!window.confirm(`Are you sure you want to delete the team "${name}"?`)) return;
+        try {
+            await interviewService.deleteTeam(id);
+            fetchData();
+        } catch (err) {
+            alert(err.message || 'Failed to delete team (ensure no question papers are tied to it).');
         }
     };
 
@@ -89,20 +104,34 @@ const AdminDashboard = () => {
                 onClose={() => setIsScheduleModalOpen(false)}
                 onScheduled={fetchData}
             />
+            <CreateTeamModal
+                isOpen={isTeamModalOpen}
+                onClose={() => setIsTeamModalOpen(false)}
+                onCreated={fetchData}
+            />
 
             {/* Welcome Section */}
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold text-gray-900">Admin Dashboard</h1>
-                    <p className="text-gray-500 mt-1">Manage your interview pipeline and assessment papers.</p>
+                    <p className="text-gray-500 mt-1">Manage your interview pipeline, teams, and assessment papers.</p>
                 </div>
-                <button
-                    onClick={() => setIsScheduleModalOpen(true)}
-                    className="btn-primary flex items-center gap-2 shadow-lg shadow-brand-orange/20"
-                >
-                    <Plus size={18} />
-                    <span>New Interview</span>
-                </button>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => setIsScheduleModalOpen(true)}
+                        className="btn-primary flex items-center gap-2 shadow-lg shadow-brand-orange/20"
+                    >
+                        <Plus size={18} />
+                        <span>New Interview</span>
+                    </button>
+                    <button
+                        onClick={() => setIsTeamModalOpen(true)}
+                        className="px-4 py-2.5 text-sm font-medium text-white bg-gray-900 hover:bg-gray-800 rounded-xl transition-all shadow-lg flex items-center gap-2"
+                    >
+                        <Users size={18} />
+                        <span>New Team</span>
+                    </button>
+                </div>
             </div>
 
             {/* Stats Grid */}
@@ -155,41 +184,41 @@ const AdminDashboard = () => {
                                         .sort((a, b) => new Date(b.schedule_time || b.scheduled_at) - new Date(a.schedule_time || a.scheduled_at))
                                         .slice(0, 5)
                                         .map((interview) => (
-                                        <tr key={interview.id} className="hover:bg-gray-50/50 transition-colors group">
-                                            <td className="px-6 py-4">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-9 h-9 bg-brand-orange/5 rounded-full flex items-center justify-center text-brand-orange font-bold text-xs border border-brand-orange/10">
-                                                        {(interview.candidate?.full_name || 'U').charAt(0)}
+                                            <tr key={interview.id} className="hover:bg-gray-50/50 transition-colors group">
+                                                <td className="px-6 py-4">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-9 h-9 bg-brand-orange/5 rounded-full flex items-center justify-center text-brand-orange font-bold text-xs border border-brand-orange/10">
+                                                            {(interview.candidate?.full_name || 'U').charAt(0)}
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-semibold text-gray-900">{interview.candidate?.full_name || 'Unknown'}</p>
+                                                            <p className="text-xs text-gray-400">{interview.candidate?.email || 'N/A'}</p>
+                                                        </div>
                                                     </div>
-                                                    <div>
-                                                        <p className="font-semibold text-gray-900">{interview.candidate?.full_name || 'Unknown'}</p>
-                                                        <p className="text-xs text-gray-400">{interview.candidate?.email || 'N/A'}</p>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <StatusBadge status={interview.status} />
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                <p className="text-sm text-gray-600">{format(new Date(interview.scheduled_at || interview.schedule_time), 'MMM d, h:mm a')}</p>
-                                            </td>
-                                            <td className="px-6 py-4">
-                                                {interview.total_score !== null && interview.total_score !== undefined ? (
-                                                    <div className="flex items-center gap-1.5">
-                                                        <span className="font-bold text-gray-900">{interview.total_score}</span>
-                                                        <span className="text-xs text-gray-400">/ 100</span>
-                                                    </div>
-                                                ) : (
-                                                    <span className="text-xs text-gray-300 italic">No Score</span>
-                                                )}
-                                            </td>
-                                            <td className="px-6 py-4 text-right">
-                                                <button className="p-2 text-gray-400 hover:text-brand-orange hover:bg-brand-orange/5 rounded-lg">
-                                                    <ChevronRight size={18} />
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    )) : (
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <StatusBadge status={interview.status} />
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <p className="text-sm text-gray-600">{format(new Date(interview.scheduled_at || interview.schedule_time), 'MMM d, h:mm a')}</p>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    {interview.total_score !== null && interview.total_score !== undefined ? (
+                                                        <div className="flex items-center gap-1.5">
+                                                            <span className="font-bold text-gray-900">{interview.total_score}</span>
+                                                            <span className="text-xs text-gray-400">/ 100</span>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-xs text-gray-300 italic">No Score</span>
+                                                    )}
+                                                </td>
+                                                <td className="px-6 py-4 text-right">
+                                                    <button className="p-2 text-gray-400 hover:text-brand-orange hover:bg-brand-orange/5 rounded-lg">
+                                                        <ChevronRight size={18} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        )) : (
                                         <tr>
                                             <td colSpan="5" className="px-6 py-12 text-center text-gray-400 bg-white">
                                                 No interviews scheduled yet.
@@ -202,38 +231,72 @@ const AdminDashboard = () => {
                     </div>
                 </div>
 
-                {/* Papers Quick List */}
-                <div className="space-y-4">
-                    <div className="flex justify-between items-center px-2">
-                        <h2 className="text-xl font-bold text-gray-800">Question Papers</h2>
-                        <button
-                            onClick={() => setIsPaperModalOpen(true)}
-                            className="text-brand-orange text-sm font-semibold hover:underline flex items-center gap-1"
-                        >
-                            <Plus size={14} /> New
-                        </button>
-                    </div>
+                {/* Right Column: Papers and Teams */}
+                <div className="space-y-8 xl:col-span-1">
+                    {/* Papers Quick List */}
+                    <div className="space-y-4">
+                        <div className="flex justify-between items-center px-2">
+                            <h2 className="text-xl font-bold text-gray-800">Question Papers</h2>
+                            <button
+                                onClick={() => setIsPaperModalOpen(true)}
+                                className="text-brand-orange text-sm font-semibold hover:underline flex items-center gap-1"
+                            >
+                                <Plus size={14} /> New
+                            </button>
+                        </div>
 
-                    <div className="space-y-3">
-                        {papers.slice(0, 4).map((paper) => (
-                            <div key={paper.id} className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm hover:border-brand-orange/30 transition-all cursor-pointer group">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <h3 className="font-bold text-gray-900 group-hover:text-brand-orange transition-colors">{paper.name}</h3>
-                                        <p className="text-xs text-gray-500 mt-1">{paper.question_count} Questions • Created {format(new Date(paper.created_at), 'MMM d')}</p>
-                                    </div>
-                                    <div className="p-1 px-2 bg-gray-50 rounded text-[10px] font-bold text-gray-400 uppercase tracking-tighter">
-                                        {paper.description || 'No Description'}
+                        <div className="space-y-3">
+                            {papers.slice(0, 4).map((paper) => (
+                                <div key={paper.id} className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm hover:border-brand-orange/30 transition-all cursor-pointer group">
+                                    <div className="flex justify-between items-start">
+                                        <div>
+                                            <h3 className="font-bold text-gray-900 group-hover:text-brand-orange transition-colors">{paper.name}</h3>
+                                            <p className="text-xs text-gray-500 mt-1">{paper.question_count} Questions • Created {format(new Date(paper.created_at), 'MMM d')}</p>
+                                        </div>
+                                        <div className="p-1 px-2 bg-gray-50 rounded text-[10px] font-bold text-gray-400 uppercase tracking-tighter">
+                                            {paper.description ? paper.description.substring(0, 20) : 'No Description'}
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
-                        ))}
-                        {papers.length === 0 && (
-                            <div className="p-8 text-center bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl">
-                                <BookOpen size={32} className="mx-auto text-gray-300 mb-2" />
-                                <p className="text-sm text-gray-400">Add assessment papers to begin scheduling.</p>
-                            </div>
-                        )}
+                            ))}
+                            {papers.length === 0 && (
+                                <div className="p-8 text-center bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl">
+                                    <BookOpen size={32} className="mx-auto text-gray-300 mb-2" />
+                                    <p className="text-sm text-gray-400">Add assessment papers to begin scheduling.</p>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Teams Quick List */}
+                    <div className="space-y-4">
+                        <div className="flex justify-between items-center px-2">
+                            <h2 className="text-xl font-bold text-gray-800">Teams</h2>
+                        </div>
+
+                        <div className="space-y-3">
+                            {teams.map((team) => (
+                                <div key={team.id} className="p-4 bg-white border border-gray-100 rounded-xl shadow-sm flex justify-between items-center group">
+                                    <div>
+                                        <h3 className="font-bold text-gray-900">{team.name}</h3>
+                                        <p className="text-xs text-gray-500 mt-1">{team.description || 'No description'} • {team.paper_count} Papers</p>
+                                    </div>
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteTeam(team.id, team.name); }}
+                                        className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors border-none"
+                                        title="Delete Team"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                </div>
+                            ))}
+                            {teams.length === 0 && (
+                                <div className="p-8 text-center bg-gray-50 border-2 border-dashed border-gray-200 rounded-2xl">
+                                    <Users size={32} className="mx-auto text-gray-300 mb-2" />
+                                    <p className="text-sm text-gray-400">Create teams to organize roles and departments.</p>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
