@@ -102,47 +102,50 @@ def test_api():
     else:
         print(f" AI Paper Generation skipped/failed (Check LLM config/Ollama): {gen_res.status_code} - {gen_res.text}")
 
-    # 6.6 ADMIN: Generate Coding Paper (AI)
-    print("\n[6.6] Testing AI Coding Paper Generation (Appended to Existing Paper)...")
-    coding_gen_res = requests.post(f"{BASE_URL}/admin/generate-coding-paper", headers=admin_headers, json={
-        "paper_id": paper_id,          # Required: add coding problems to the existing paper
-        "ai_prompt": "Arrays and Hashing",
-        "difficulty_mix": "mixed",
-        "num_questions": 1,
-    })
-    coding_paper_id = None
-    if coding_gen_res.status_code == 201:
-        res_data = coding_gen_res.json()["data"]
-        coding_paper_id = res_data["id"]
-        assert res_data["team_id"] == team_id, f"team_id mismatch: expected {team_id}, got {res_data['team_id']}"
-
-        # Verify at least 1 coding question is present (paper now has original + coding questions)
-        coding_questions = [q for q in res_data["questions"] if q.get("response_type") == "code"]
-        assert len(coding_questions) >= 1, "Expected at least 1 coding question in response"
-
-        # KEY ASSERTION: content must be a nested object, not a raw JSON string
-        cq = coding_questions[0]
-        assert isinstance(cq["content"], dict), (
-            f"Expected content to be a dict (nested object), got {type(cq['content'])}: {cq['content']}"
-        )
-        required_keys = {"title", "problem_statement", "examples", "constraints", "starter_code"}
-        missing = required_keys - set(cq["content"].keys())
-        assert not missing, f"content dict is missing keys: {missing}"
-        assert isinstance(cq["content"]["examples"], list), "examples should be a list"
-        assert isinstance(cq["content"]["constraints"], list), "constraints should be a list"
-
-        print(f"  AI Coding Paper Generated: ID {coding_paper_id}, Team ID {res_data['team_id']}")
-        print(f"  Content structure verified: title='{cq['content']['title']}'")
-    else:
-        print(f"  AI Coding Paper Generation skipped/failed: {coding_gen_res.status_code} - {coding_gen_res.text}")
-
-
-    # 6.7 Dedicated Coding Paper CRUD
-    print("\n[6.7] Testing Dedicated Coding Paper CRUD (new /admin/coding-papers endpoints)...")
+    # 6.6 Dedicated Coding Paper CRUD
+    print("\n[6.6] Testing Dedicated Coding Paper CRUD (new /admin/coding-papers endpoints)...")
     dedicated_coding_paper_id = None
     dedicated_coding_question_id = None
 
     # Create paper
+    c_paper_res = requests.post(f"{BASE_URL}/admin/coding-papers/", headers=admin_headers, json={
+        "name": f"Coding Assessment {uuid.uuid4().hex[:6]}",
+        "description": "Tech screen coding",
+        "team_id": team_id
+    })
+    assert c_paper_res.status_code == 201, f"Coding Paper Creation failed: {c_paper_res.status_code}"
+    dedicated_coding_paper_id = c_paper_res.json()["data"]["id"]
+    print(f" Dedicated Coding Paper Created: ID {dedicated_coding_paper_id}")
+
+    # 6.7 ADMIN: Generate Coding Paper (AI) — now saves to the dedicated CodingQuestionPaper
+    print("\n[6.7] Testing AI Coding Paper Generation (Appended to Dedicated CodingPaper)...")
+    coding_gen_res = requests.post(f"{BASE_URL}/admin/generate-coding-paper", headers=admin_headers, json={
+        "coding_paper_id": dedicated_coding_paper_id,
+        "ai_prompt": "Arrays and Hashing",
+        "difficulty_mix": "mixed",
+        "num_questions": 1,
+    })
+    ai_coding_paper_id = None
+    if coding_gen_res.status_code == 201:
+        res_data = coding_gen_res.json()["data"]
+        ai_coding_paper_id = res_data["id"]
+
+        # The response is now CodingPaperFull — questions have direct fields, not a nested "content" dict
+        assert len(res_data["questions"]) >= 1, "Expected at least 1 coding question in response"
+        cq = res_data["questions"][0]
+
+        # KEY ASSERTIONS for CodingQuestionFull response schema
+        assert "title" in cq, f"Expected 'title' field in CodingQuestionFull response, got keys: {list(cq.keys())}"
+        assert "problem_statement" in cq, "Expected 'problem_statement' field"
+        assert isinstance(cq["examples"], list), f"examples should be a list, got {type(cq['examples'])}"
+        assert isinstance(cq["constraints"], list), f"constraints should be a list, got {type(cq['constraints'])}"
+        assert "marks" in cq and isinstance(cq["marks"], int), "Expected integer marks field"
+
+        print(f"  AI Coding Paper Updated: ID {ai_coding_paper_id}")
+        print(f"  Question structure verified: title='{cq['title']}'")
+        print(f"  examples={cq['examples'][:1]}, constraints={cq['constraints'][:1]}")
+    else:
+        print(f"  AI Coding Paper Generation skipped/failed: {coding_gen_res.status_code} - {coding_gen_res.text}")
     cp_create_res = requests.post(f"{BASE_URL}/admin/coding-papers/", headers=admin_headers, json={
         "name": f"Dedicated Coding Paper {uuid.uuid4().hex[:6]}",
         "description": "Test coding paper with structured CRUD",

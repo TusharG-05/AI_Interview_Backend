@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User,Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent
+from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions
 from ..schemas.requests import AnswerRequest
 from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..services import interview as interview_service
@@ -557,6 +557,111 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
              question = session_db.exec(stmt).first()
     
     if not question:
+        # ---------------------------------------------------------------
+        # Option A: Fall through to CodingQuestions if the session has a
+        # coding_paper_id linked. We create a thin proxy Questions row the
+        # first time each coding question is served so the existing Answers
+        # / scoring pipeline continues to work unchanged.
+        # ---------------------------------------------------------------
+        if session_obj and session_obj.coding_paper_id:
+            import json as _json
+
+            # All CodingQuestions for this paper
+            all_coding_qs = session_db.exec(
+                select(CodingQuestions).where(
+                    CodingQuestions.paper_id == session_obj.coding_paper_id
+                )
+            ).all()
+
+            # Answered coding questions (tracked via proxy Questions rows tagged with topic="coding_proxy")
+            answered_proxy_ids = set(answered_ids)  # already collected above
+
+            # Find answered coding question IDs via proxy Questions title match isn't reliable;
+            # instead we tag proxy rows uniquely: question_text = f"__coding__{cq.id}"
+            answered_coding_cq_ids = set()
+            for qid in answered_proxy_ids:
+                proxy = session_db.get(Questions, qid)
+                if proxy and proxy.question_text.startswith("__coding__"):
+                    try:
+                        answered_coding_cq_ids.add(int(proxy.question_text.split("__coding__")[1]))
+                    except (ValueError, IndexError):
+                        pass
+
+            # Pick the next un-answered coding question
+            next_cq = next(
+                (cq for cq in all_coding_qs if cq.id not in answered_coding_cq_ids),
+                None
+            )
+
+            if next_cq is None:
+                return ApiResponse(
+                    status_code=200,
+                    data={"status": "finished"},
+                    message="All questions completed"
+                )
+
+            # Find or create the proxy Questions row for this coding question
+            proxy_tag = f"__coding__{next_cq.id}"
+            proxy_q = session_db.exec(
+                select(Questions).where(Questions.question_text == proxy_tag)
+            ).first()
+
+            if proxy_q is None:
+                # Store full problem body as JSON in `content` so admin results API can parse it later
+                problem_body = {
+                    "title": next_cq.title,
+                    "problem_statement": next_cq.problem_statement,
+                    "examples": _json.loads(next_cq.examples) if isinstance(next_cq.examples, str) else next_cq.examples,
+                    "constraints": _json.loads(next_cq.constraints) if isinstance(next_cq.constraints, str) else next_cq.constraints,
+                    "starter_code": next_cq.starter_code or "",
+                }
+
+                proxy_q = Questions(
+                    paper_id=None,          # orphaned — not tied to any standard paper
+                    content=_json.dumps(problem_body, ensure_ascii=False),
+                    question_text=proxy_tag,
+                    topic=next_cq.topic,
+                    difficulty=next_cq.difficulty,
+                    marks=next_cq.marks,
+                    response_type="code",
+                )
+                session_db.add(proxy_q)
+                try:
+                    session_db.commit()
+                    session_db.refresh(proxy_q)
+                except Exception:
+                    session_db.rollback()
+                    raise HTTPException(status_code=500, detail="Failed to create coding question proxy")
+
+            # Generate TTS for the coding question title
+            os.makedirs("app/assets/audio/questions", exist_ok=True)
+            audio_path = f"app/assets/audio/questions/q_{proxy_q.id}.mp3"
+            if not os.path.exists(audio_path):
+                await audio_service.text_to_speech(next_cq.title, audio_path)
+
+            question_index = len(answered_ids) + 1
+            total_coding = len(all_coding_qs)
+
+            return ApiResponse(
+                status_code=200,
+                data={
+                    "question_id": proxy_q.id,
+                    "text": next_cq.title,
+                    "audio_url": f"/interview/audio/question/{proxy_q.id}",
+                    "response_type": "code",
+                    "question_index": question_index,
+                    "total_questions": total_questions + total_coding,
+                    "coding_content": {
+                        "title": next_cq.title,
+                        "problem_statement": next_cq.problem_statement,
+                        "examples": _json.loads(next_cq.examples) if isinstance(next_cq.examples, str) else next_cq.examples,
+                        "constraints": _json.loads(next_cq.constraints) if isinstance(next_cq.constraints, str) else next_cq.constraints,
+                        "starter_code": next_cq.starter_code or None,
+                    },
+                },
+                message="Next question retrieved successfully"
+            )
+
         return ApiResponse(
             status_code=200,
             data={"status": "finished"},
