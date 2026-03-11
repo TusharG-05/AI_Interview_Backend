@@ -114,6 +114,53 @@ class CodingPaperRead(BaseModel):
     team_id: Optional[int] = None
 
 
+# --- Dedicated Coding Question Paper (new table) response schemas ---
+
+class CodingQuestionFull(BaseModel):
+    """
+    Full representation of a CodingQuestions row.
+    `examples` and `constraints` are returned as parsed Python lists.
+    """
+    id: int
+    paper_id: int
+    title: str
+    problem_statement: str
+    examples: List[Any] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+    topic: str
+    difficulty: str
+    marks: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_json_fields(cls, data: Any) -> Any:
+        """Parse JSON-encoded examples and constraints strings into Python lists."""
+        if isinstance(data, dict):
+            data = dict(data)
+            for field in ("examples", "constraints"):
+                raw = data.get(field)
+                if isinstance(raw, str):
+                    try:
+                        data[field] = _json.loads(raw)
+                    except (_json.JSONDecodeError, TypeError):
+                        data[field] = []
+        return data
+
+
+class CodingPaperFull(BaseModel):
+    """Full representation of a CodingQuestionPaper with all questions."""
+    id: int
+    name: str
+    description: str = ""
+    question_count: int = 0
+    total_marks: int = 0
+    questions: List[CodingQuestionFull] = []
+    created_at: str
+    created_by: Optional[dict] = None
+    team_id: Optional[int] = None
+
+
 
 class PaperRead(BaseModel):
     id: int
@@ -188,6 +235,7 @@ class InterviewSessionDetail(BaseModel):
     suspended_at: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
+    coding_paper_id: Optional[int] = None  # Linked coding question paper (if any)
 
 class InterviewLinkResponse(BaseModel):
     interview: InterviewSessionDetail

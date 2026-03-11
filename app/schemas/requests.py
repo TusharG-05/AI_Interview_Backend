@@ -1,5 +1,5 @@
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Optional, List
+from pydantic import BaseModel, Field, model_validator
 from ..models.db_models import UserRole, InterviewRound
 
 
@@ -21,13 +21,24 @@ class UserCreate(BaseModel):
 # Admin Requests
 class InterviewScheduleCreate(BaseModel):
     candidate_id: int
-    paper_id: int
+    paper_id: Optional[int] = None         # Standard question paper (optional)
+    coding_paper_id: Optional[int] = None  # Coding question paper (optional)
     team_id: int  # Required: must assign interview to a team
     interview_round: InterviewRound  # Required: e.g. ROUND_1, ROUND_2
     schedule_time: str # ISO format expected from frontend
     duration_minutes: int = 1440
     max_questions: Optional[int] = None  # Limit questions, None = use all
     allow_copy_paste: bool = False  # Whether candidate can copy/paste during interview
+
+    @model_validator(mode="after")
+    def at_least_one_paper(self) -> "InterviewScheduleCreate":
+        """Ensure at least one of paper_id or coding_paper_id is provided."""
+        if self.paper_id is None and self.coding_paper_id is None:
+            raise ValueError(
+                "At least one of 'paper_id' (standard questions) or "
+                "'coding_paper_id' (coding questions) must be provided."
+            )
+        return self
 
 # Team Requests (super admin only for create/update/delete)
 class TeamCreate(BaseModel):
@@ -109,3 +120,48 @@ class GenerateCodingPaperRequest(BaseModel):
         ..., ge=1, le=20,
         description="Number of coding problems to generate (max 20)"
     )
+
+
+# --- Coding Question Paper (Dedicated Table) ---
+
+class CodingPaperCreate(BaseModel):
+    """Create a new dedicated coding question paper."""
+    name: str = Field(..., min_length=1, description="Name of the coding paper")
+    description: Optional[str] = Field(None, description="Optional description")
+    team_id: Optional[int] = Field(None, description="Team to associate this paper with")
+
+
+class CodingPaperUpdate(BaseModel):
+    """Partially update a coding question paper."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class CodingQuestionCreate(BaseModel):
+    """Add a single LeetCode-style problem to a coding paper."""
+    title: str = Field(..., min_length=1, description="Problem title")
+    problem_statement: str = Field(..., min_length=10, description="Full problem description (markdown supported)")
+    examples: List[dict] = Field(
+        default_factory=list,
+        description="List of {input, output, explanation} dicts"
+    )
+    constraints: List[str] = Field(
+        default_factory=list,
+        description="List of constraint strings"
+    )
+    starter_code: Optional[str] = Field(None, description="Language-agnostic starter function")
+    topic: str = Field(default="Algorithms", description="Topic category")
+    difficulty: str = Field(default="Medium", description="Easy / Medium / Hard")
+    marks: int = Field(default=6, ge=1, description="Marks awarded for a correct solution")
+
+
+class CodingQuestionUpdate(BaseModel):
+    """Partially update a coding question."""
+    title: Optional[str] = None
+    problem_statement: Optional[str] = None
+    examples: Optional[List[dict]] = None
+    constraints: Optional[List[str]] = None
+    starter_code: Optional[str] = None
+    topic: Optional[str] = None
+    difficulty: Optional[str] = None
+    marks: Optional[int] = None

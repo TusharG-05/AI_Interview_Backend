@@ -137,6 +137,85 @@ def test_api():
         print(f"  AI Coding Paper Generation skipped/failed: {coding_gen_res.status_code} - {coding_gen_res.text}")
 
 
+    # 6.7 Dedicated Coding Paper CRUD
+    print("\n[6.7] Testing Dedicated Coding Paper CRUD (new /admin/coding-papers endpoints)...")
+    dedicated_coding_paper_id = None
+    dedicated_coding_question_id = None
+
+    # Create paper
+    cp_create_res = requests.post(f"{BASE_URL}/admin/coding-papers/", headers=admin_headers, json={
+        "name": f"Dedicated Coding Paper {uuid.uuid4().hex[:6]}",
+        "description": "Test coding paper with structured CRUD",
+        "team_id": team_id,
+    })
+    assert cp_create_res.status_code == 201, f"Create coding paper failed: {cp_create_res.status_code} - {cp_create_res.text}"
+    cp_data = cp_create_res.json()["data"]
+    dedicated_coding_paper_id = cp_data["id"]
+    assert cp_data["question_count"] == 0
+    print(f"  Coding Paper Created: ID {dedicated_coding_paper_id}")
+
+    # Add a question
+    cq_create_res = requests.post(
+        f"{BASE_URL}/admin/coding-papers/{dedicated_coding_paper_id}/questions",
+        headers=admin_headers,
+        json={
+            "title": "Two Sum",
+            "problem_statement": "Given an array of integers, return indices of the two numbers such that they add up to a target.",
+            "examples": [{"input": "nums=[2,7,11,15], target=9", "output": "[0,1]", "explanation": "nums[0]+nums[1]=9"}],
+            "constraints": ["2 <= nums.length <= 10^4", "All integers are distinct"],
+            "starter_code": "def twoSum(nums, target):\n    pass",
+            "topic": "Arrays",
+            "difficulty": "Easy",
+            "marks": 5,
+        }
+    )
+    assert cq_create_res.status_code == 201, f"Add coding question failed: {cq_create_res.status_code} - {cq_create_res.text}"
+    cq_data = cq_create_res.json()["data"]
+    dedicated_coding_question_id = cq_data["id"]
+    assert isinstance(cq_data["examples"], list), "examples should be a list in response"
+    assert isinstance(cq_data["constraints"], list), "constraints should be a list in response"
+    assert cq_data["title"] == "Two Sum"
+    print(f"  Coding Question Added: ID {dedicated_coding_question_id}, title='{cq_data['title']}'")
+
+    # List questions
+    cq_list_res = requests.get(
+        f"{BASE_URL}/admin/coding-papers/{dedicated_coding_paper_id}/questions",
+        headers=admin_headers
+    )
+    assert cq_list_res.status_code == 200, f"List coding questions failed: {cq_list_res.status_code}"
+    assert len(cq_list_res.json()["data"]) == 1
+    print(f"  Coding Questions Listed: {len(cq_list_res.json()['data'])} question(s)")
+
+    # Get paper with questions
+    cp_get_res = requests.get(f"{BASE_URL}/admin/coding-papers/{dedicated_coding_paper_id}", headers=admin_headers)
+    assert cp_get_res.status_code == 200, f"Get coding paper failed: {cp_get_res.status_code}"
+    got_paper = cp_get_res.json()["data"]
+    assert got_paper["question_count"] == 1
+    assert len(got_paper["questions"]) == 1
+    print(f"  Coding Paper Retrieved: ID {got_paper['id']}, question_count={got_paper['question_count']}")
+
+    # Update paper
+    cp_update_res = requests.patch(
+        f"{BASE_URL}/admin/coding-papers/{dedicated_coding_paper_id}",
+        headers=admin_headers,
+        json={"name": "Updated Coding Paper Name"}
+    )
+    assert cp_update_res.status_code == 200, f"Update coding paper failed: {cp_update_res.status_code}"
+    assert cp_update_res.json()["data"]["name"] == "Updated Coding Paper Name"
+    print(f"  Coding Paper Updated: new name='{cp_update_res.json()['data']['name']}'")
+
+    # Update question
+    cq_update_res = requests.patch(
+        f"{BASE_URL}/admin/coding-papers/questions/{dedicated_coding_question_id}",
+        headers=admin_headers,
+        json={"difficulty": "Medium", "marks": 8}
+    )
+    assert cq_update_res.status_code == 200, f"Update coding question failed: {cq_update_res.status_code}"
+    assert cq_update_res.json()["data"]["difficulty"] == "Medium"
+    print(f"  Coding Question Updated: difficulty='{cq_update_res.json()['data']['difficulty']}'")
+
+    print("  All CodingPaper CRUD assertions passed ✓")
+
     # 7. ADMIN: Add Question
     print("\n[7] Testing Adding Question...")
     q_res = requests.post(f"{BASE_URL}/admin/papers/{paper_id}/questions", headers=admin_headers, json={
@@ -208,20 +287,24 @@ def test_api():
 
     coding_interview_id = None
     coding_access_token = None
-    if coding_paper_id:
-        print("\n[9.1] Testing Coding Interview Scheduling...")
+    if dedicated_coding_paper_id:
+        print("\n[9.1] Testing Coding-Only Interview Scheduling (coding_paper_id only)...")
         coding_sched_res = requests.post(f"{BASE_URL}/admin/interviews/schedule", headers=admin_headers, json={
             "candidate_id": candidate_id,
-            "paper_id": coding_paper_id,
+            "coding_paper_id": dedicated_coding_paper_id,   # Only coding paper — no standard paper_id
             "team_id": team_id,
             "interview_round": "ROUND_2",
-            "schedule_time": "2026-03-10T16:00:00Z",
+            "schedule_time": "2026-03-12T16:00:00Z",
             "duration_minutes": 60
         })
-        assert coding_sched_res.status_code == 201
-        coding_interview_id = coding_sched_res.json()["data"]["interview"]["id"]
+        assert coding_sched_res.status_code == 201, f"Coding interview schedule failed: {coding_sched_res.status_code} - {coding_sched_res.text}"
+        csd = coding_sched_res.json()["data"]["interview"]
+        coding_interview_id = csd["id"]
         coding_access_token = coding_sched_res.json()["data"]["access_token"]
-        print(f" Coding Interview Scheduled: ID {coding_interview_id}")
+        assert csd.get("coding_paper_id") == dedicated_coding_paper_id, (
+            f"coding_paper_id mismatch: expected {dedicated_coding_paper_id}, got {csd.get('coding_paper_id')}"
+        )
+        print(f"  Coding Interview Scheduled: ID {coding_interview_id}, coding_paper_id={csd['coding_paper_id']}")
     # 10. ADMIN: List Interviews (Verify Team/Round)
     print("\n[10] Testing Interview Listing...")
     interviews_res = requests.get(f"{BASE_URL}/admin/interviews", headers=admin_headers)
