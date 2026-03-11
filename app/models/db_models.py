@@ -113,6 +113,64 @@ class Questions(SQLModel, table=True):
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
     )
 
+
+class CodingQuestionPaper(SQLModel, table=True):
+    """A question paper containing LeetCode-style coding problems."""
+    __tablename__ = "codingquestionpaper"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    description: str = Field(default="")
+    adminUser: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
+    question_count: int = Field(default=0)
+    total_marks: int = Field(default=0)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    team_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("team.id", ondelete="SET NULL"), nullable=True)
+    )
+
+    # Relationships
+    admin: Optional["User"] = Relationship(
+        sa_relationship_kwargs={"foreign_keys": "CodingQuestionPaper.adminUser", "primaryjoin": "CodingQuestionPaper.adminUser == User.id"}
+    )
+    team: Optional["Team"] = Relationship(
+        sa_relationship_kwargs={"primaryjoin": "CodingQuestionPaper.team_id == Team.id"}
+    )
+    questions: List["CodingQuestions"] = Relationship(
+        back_populates="paper",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    sessions: List["InterviewSession"] = Relationship(
+        back_populates="coding_paper",
+        sa_relationship_kwargs={"primaryjoin": "InterviewSession.coding_paper_id == CodingQuestionPaper.id"}
+    )
+
+    class Config:
+        populate_by_name = True
+
+
+class CodingQuestions(SQLModel, table=True):
+    """A single LeetCode-style coding problem belonging to a CodingQuestionPaper."""
+    __tablename__ = "codingquestions"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    paper_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("codingquestionpaper.id", ondelete="CASCADE"), nullable=False)
+    )
+    # Problem content
+    title: str = Field(default="")
+    problem_statement: str = Field(default="")
+    examples: str = Field(default="[]")        # JSON-encoded list of {input, output, explanation}
+    constraints: str = Field(default="[]")     # JSON-encoded list of strings
+    starter_code: str = Field(default="")
+    # Meta
+    topic: str = Field(default="Algorithms")
+    difficulty: str = Field(default="Medium")
+    marks: int = Field(default=6)
+
+    # Relationships
+    paper: Optional[CodingQuestionPaper] = Relationship(back_populates="questions")
+
 class InterviewSession(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 
@@ -125,7 +183,12 @@ class InterviewSession(SQLModel, table=True):
         sa_column=Column(Integer, ForeignKey("user.id", ondelete="CASCADE"), nullable=True)
     )
     invite_link: Optional[str] = None
-    paper_id: int = Field(foreign_key="questionpaper.id")
+    paper_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("questionpaper.id", ondelete="SET NULL"), nullable=True)
+    )
+    coding_paper_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("codingquestionpaper.id", ondelete="SET NULL"), nullable=True)
+    )
 
     # Team & Round
     team_id: Optional[int] = Field(
@@ -165,7 +228,14 @@ class InterviewSession(SQLModel, table=True):
     # Relationships
     admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
     candidate: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.candidate_id"})
-    paper: QuestionPaper = Relationship(back_populates="sessions")
+    paper: Optional[QuestionPaper] = Relationship(
+        back_populates="sessions",
+        sa_relationship_kwargs={"primaryjoin": "InterviewSession.paper_id == QuestionPaper.id"}
+    )
+    coding_paper: Optional["CodingQuestionPaper"] = Relationship(
+        back_populates="sessions",
+        sa_relationship_kwargs={"primaryjoin": "InterviewSession.coding_paper_id == CodingQuestionPaper.id"}
+    )
     team: Optional["Team"] = Relationship(back_populates="interview_sessions")
 
     # Cascade delete when interview is deleted
@@ -257,6 +327,8 @@ User.model_rebuild()
 Team.model_rebuild()
 QuestionPaper.model_rebuild()
 Questions.model_rebuild()
+CodingQuestionPaper.model_rebuild()
+CodingQuestions.model_rebuild()
 InterviewSession.model_rebuild()
 SessionQuestion.model_rebuild()
 InterviewResult.model_rebuild()

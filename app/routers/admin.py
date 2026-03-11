@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
-from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound
+from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
@@ -750,10 +750,19 @@ async def schedule_interview(
     if not team:
         raise HTTPException(status_code=400, detail=f"Team with id {schedule_data.team_id} not found")
 
-    # Validate Paper
-    paper = session.get(QuestionPaper, schedule_data.paper_id)
-    if not paper or paper.adminUser != current_user.id:
-        raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
+    # Validate Standard Paper (optional)
+    paper = None
+    if schedule_data.paper_id is not None:
+        paper = session.get(QuestionPaper, schedule_data.paper_id)
+        if not paper or paper.adminUser != current_user.id:
+            raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
+
+    # Validate Coding Paper (optional)
+    coding_paper = None
+    if schedule_data.coding_paper_id is not None:
+        coding_paper = session.get(CodingQuestionPaper, schedule_data.coding_paper_id)
+        if not coding_paper or coding_paper.adminUser != current_user.id:
+            raise HTTPException(status_code=400, detail="Invalid Coding Paper ID — paper not found or you do not own it")
 
     candidate = session.get(User, schedule_data.candidate_id)
     if not candidate or candidate.role != UserRole.CANDIDATE:
@@ -777,6 +786,7 @@ async def schedule_interview(
         admin_id=current_user.id,
         candidate_id=schedule_data.candidate_id,
         paper_id=schedule_data.paper_id,
+        coding_paper_id=schedule_data.coding_paper_id,
         team_id=schedule_data.team_id,
         interview_round=schedule_data.interview_round,
         schedule_time=schedule_dt,
@@ -817,51 +827,48 @@ async def schedule_interview(
 
     # Email Invitation will be sent at the end using BackgroundTasks
     
-    # Random Question Selection
+    # Random Question Selection (Standard Paper only)
     import random
     from ..models.db_models import SessionQuestion
-    
-    # Get all questions from the paper
-    available_questions = session.exec(
-        select(Questions).where(Questions.paper_id == schedule_data.paper_id)
-    ).all()
-    
-    if not available_questions:
-        raise HTTPException(status_code=400, detail="Question paper has no questions")
-    
-    # Apply question limit if specified
-    if schedule_data.max_questions:
-        if schedule_data.max_questions <= 0:
-            raise HTTPException(status_code=400, detail="max_questions must be greater than 0")
-        
-        if schedule_data.max_questions > len(available_questions):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Requested {schedule_data.max_questions} questions but only {len(available_questions)} available in this paper"
+
+    if schedule_data.paper_id:
+        # Get all questions from the standard paper
+        available_questions = session.exec(
+            select(Questions).where(Questions.paper_id == schedule_data.paper_id)
+        ).all()
+
+        if not available_questions:
+            raise HTTPException(status_code=400, detail="Standard question paper has no questions")
+
+        # Apply question limit if specified
+        if schedule_data.max_questions:
+            if schedule_data.max_questions <= 0:
+                raise HTTPException(status_code=400, detail="max_questions must be greater than 0")
+            if schedule_data.max_questions > len(available_questions):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Requested {schedule_data.max_questions} questions but only {len(available_questions)} available in this paper"
+                )
+            selected_questions = random.sample(available_questions, schedule_data.max_questions)
+        else:
+            selected_questions = available_questions
+
+        # Create SessionQuestion records with sort order
+        for idx, question in enumerate(selected_questions):
+            session_question = SessionQuestion(
+                interview_id=new_session.id,
+                question_id=question.id,
+                sort_order=idx
             )
-        
-        # Random selection
-        selected_questions = random.sample(available_questions, schedule_data.max_questions)
-    else:
-        # Use all questions
-        selected_questions = available_questions
-    
-    # Create SessionQuestion records with sort order
-    for idx, question in enumerate(selected_questions):
-        session_question = SessionQuestion(
-            interview_id=new_session.id,
-            question_id=question.id,
-            sort_order=idx
-        )
-        session.add(session_question)
-    
-    try:
-        session.commit()
-        # Refresh to ensure relationships are available if we need them later
-        session.refresh(new_session)
-    except Exception as e:
-        session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
+            session.add(session_question)
+
+        try:
+            session.commit()
+            session.refresh(new_session)
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
+    # Coding paper is linked via FK on the session — no pre-assignment needed
     
     # Generate Link - Must match frontend route: /interview/:token
     link = f"{FRONTEND_URL}/interview/{new_session.access_token}"
@@ -893,6 +900,7 @@ async def schedule_interview(
         admin_id=new_session.admin_id,
         candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
+        coding_paper_id=new_session.coding_paper_id,
         team_id=new_session.team_id,
         interview_round=new_session.interview_round.value if new_session.interview_round else None,
         schedule_time=format_iso_datetime(new_session.schedule_time),
