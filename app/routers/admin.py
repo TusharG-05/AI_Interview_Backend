@@ -867,7 +867,7 @@ async def schedule_interview(
         candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
         coding_paper_id=new_session.coding_paper_id,
-        team_id=new_session.team_id,
+        team_id=candidate.team_id,
         interview_round=new_session.interview_round.value if new_session.interview_round else None,
         schedule_time=format_iso_datetime(new_session.schedule_time),
         duration_minutes=new_session.duration_minutes,

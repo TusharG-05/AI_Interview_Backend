@@ -629,9 +629,10 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                 try:
                     session_db.commit()
                     session_db.refresh(proxy_q)
-                except Exception:
+                except Exception as e:
+                    logger.error(f"Failed to create coding question proxy: {e}", exc_info=True)
                     session_db.rollback()
-                    raise HTTPException(status_code=500, detail="Failed to create coding question proxy")
+                    raise HTTPException(status_code=500, detail=f"Failed to create coding question proxy: {str(e)}")
 
             # Generate TTS for the coding question title
             os.makedirs("app/assets/audio/questions", exist_ok=True)
