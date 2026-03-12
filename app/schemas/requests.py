@@ -128,7 +128,6 @@ class CodingPaperCreate(BaseModel):
     """Create a new dedicated coding question paper."""
     name: str = Field(..., min_length=1, description="Name of the coding paper")
     description: Optional[str] = Field(None, description="Optional description")
-    team_id: Optional[int] = Field(None, description="Team to associate this paper with")
 
 
 class CodingPaperUpdate(BaseModel):

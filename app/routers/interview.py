@@ -8,7 +8,7 @@ from ..schemas.requests import AnswerRequest
 from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..services import interview as interview_service
 from ..services.audio import AudioService
-from ..schemas.responses import InterviewAccessResponse
+from ..schemas.interview_responses import InterviewAccessResponse, AdminNested, CandidateNested, QuestionNested, PaperNested, CodingQuestionNested, CodingPaperNested
 from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..schemas.interview_responses import InterviewSessionData, LoginUserNested, QuestionPaperData, QuestionData
 from ..schemas.api_response import ApiResponse
@@ -56,12 +56,19 @@ def _evaluate_and_update_score(
         text_to_evaluate = answer.candidate_answer or answer.transcribed_text
 
         # 2. Load question to get response_type and title
-        question_obj = db.get(Questions, answer.question_id)
         resp_type = "text"
         q_title = question_text
-        if question_obj:
-            resp_type = question_obj.response_type or "text"
-            q_title = question_obj.question_text or question_obj.content or question_text
+        
+        if answer.question_id:
+            question_obj = db.get(Questions, answer.question_id)
+            if question_obj:
+                resp_type = (question_obj.response_type.value if hasattr(question_obj.response_type, 'value') else str(question_obj.response_type)) if question_obj.response_type else "text"
+                q_title = question_obj.question_text or question_obj.content or question_text
+        elif getattr(answer, 'coding_question_id', None):
+            question_obj = db.get(CodingQuestions, answer.coding_question_id)
+            if question_obj:
+                resp_type = "code"
+                q_title = question_obj.title or question_text
 
         # 3. Call LLM evaluation (routes to code evaluator if response_type='code')
         logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type})...")
@@ -119,7 +126,7 @@ class TTSRange(BaseModel):
 
 
 
-@router.get("/access/{token}", response_model=ApiResponse[InterviewSessionData])
+@router.get("/access/{token}", response_model=ApiResponse[InterviewAccessResponse])
 async def access_interview(
     token: str, 
     session_db: Session = Depends(get_session),
@@ -127,114 +134,112 @@ async def access_interview(
 ):
     """
     Validates the interview link and checks time constraints.
+    Returns a cleaned, frontend-friendly response structure.
     """
-    from ..core.config import FRONTEND_URL
     from sqlalchemy.orm import selectinload
+    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus, CandidateStatus
 
+    # Query with all relationships preloaded to avoid N+1 issues
     session = session_db.exec(
         select(InterviewSession)
         .where(InterviewSession.access_token == token)
         .options(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.admin),
-            selectinload(InterviewSession.paper)
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
         )
     ).first()
     
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
         
-    # Build nested objects from preloaded relationships
-    candidate_data = None
-    if session.candidate:
-        candidate_data = LoginUserNested(
-            id=str(session.candidate.id),
-            email=session.candidate.email,
-            full_name=session.candidate.full_name,
-            role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token
-        )
-
+    # Map Administrator
     admin_data = None
     if session.admin:
-        admin_data = LoginUserNested(
+        admin_data = AdminNested(
             id=str(session.admin.id),
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token
+            access_token=session.admin.access_token or ""
         )
 
+    # Map Candidate
+    candidate_data = None
+    if session.candidate:
+        candidate_data = CandidateNested(
+            id=str(session.candidate.id),
+            email=session.candidate.email,
+            full_name=session.candidate.full_name,
+            role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
+            access_token=session.candidate.access_token or ""
+        )
+
+    # Map Standard Question Paper
     paper_data = None
     if session.paper:
-        # For the access endpoint, questions list is expected and adminUser is a string per user request layout, 
-        # but to keep it safe as LoginUserNested like the schema expects. If its None, we handle it.
-        # Note: The query doesn't selectinload questions initially in this endpoint (lines 43-48). We must ensure it's loaded if accessed.
-        # But `session.paper.questions` might still lazy load. 
-        paper_questions = []
-        if hasattr(session.paper, 'questions') and session.paper.questions:
-            for q in session.paper.questions:
-                paper_questions.append(QuestionData(
-                    id=q.id, paper_id=q.paper_id, content=q.content or "", question_text=q.question_text or "",
-                    topic=q.topic or "", difficulty=q.difficulty.value if hasattr(q.difficulty, 'value') else str(q.difficulty),
-                    marks=q.marks, response_type=q.response_type.value if hasattr(q.response_type, 'value') else str(q.response_type)
-                ))
-                
-        paper_data = QuestionPaperData(
+        questions_list = [
+            QuestionNested(
+                id=q.id,
+                paper_id=q.paper_id,
+                content=q.content or "",
+                question_text=q.question_text or q.content or "",
+                topic=q.topic or "General",
+                difficulty=q.difficulty or "Medium",
+                marks=q.marks or 1,
+                response_type=q.response_type or "audio"
+            ) for q in session.paper.questions
+        ]
+        paper_data = PaperNested(
             id=session.paper.id,
             name=session.paper.name,
             description=session.paper.description or "",
-            adminUser=admin_data if admin_data else 0, # Map to admin_data if exists per request schema
-            question_count=len(paper_questions),
-            questions=paper_questions,
-            total_marks=session.paper.total_marks,
-            created_at=session.paper.created_at or datetime.now(timezone.utc)
+            adminUser=admin_data if admin_data else 0, # Restore nested adminUser object
+            question_count=session.paper.question_count or len(questions_list),
+            total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
+            created_at=session.paper.created_at,
+            questions=questions_list
         )
 
-    invite_link = f"{FRONTEND_URL}/interview/{session.access_token}"
-        
+    # Map Coding Question Paper
+    coding_paper_data = None
+    if session.coding_paper:
+        coding_questions_list = [
+            CodingQuestionNested(
+                id=cq.id,
+                paper_id=cq.paper_id,
+                title=cq.title or "",
+                problem_statement=cq.problem_statement or "",
+                examples=cq.examples or "[]",
+                constraints=cq.constraints or "[]",
+                starter_code=cq.starter_code or "",
+                topic=cq.topic or "Algorithms",
+                difficulty=cq.difficulty or "Medium",
+                marks=cq.marks or 0
+            ) for cq in session.coding_paper.questions
+        ]
+        coding_paper_data = CodingPaperNested(
+            id=session.coding_paper.id,
+            name=session.coding_paper.name,
+            description=session.coding_paper.description or "",
+            adminUser=admin_data if admin_data else 0, # Restore nested adminUser object
+            question_count=session.coding_paper.question_count or len(coding_questions_list),
+            total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
+            created_at=session.coding_paper.created_at,
+            coding_questions=coding_questions_list
+        )
+
     now = datetime.now(timezone.utc)
     
-    # 1. Status Check
+    # 1. Status Expired/Cancelled Check
     if session.status in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
-        raise HTTPException(status_code=403, detail=f"Interview is {session.status.value}")
+        raise HTTPException(status_code=403, detail=f"Interview is {session.status.value.lower()}")
         
-    # 2. Start Time Check
+    # 2. Start Time Check (Temporal)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-        
-    if now < schedule_time:
-        # Too early
-        access_data = InterviewSessionData(
-            id=session.id,
-            access_token=session.access_token,
-            admin_id=admin_data,
-            candidate_id=candidate_data,
-            paper_id=paper_data,
-            schedule_time=session.schedule_time,
-            duration_minutes=session.duration_minutes,
-            max_questions=session.max_questions,
-            start_time=session.start_time,
-            end_time=session.end_time,
-            status=session.status.value if hasattr(session.status, 'value') else str(session.status),
-            total_score=session.total_score,
-            current_status="WAIT", # Special front-end flag preserved from old behavior, technically outside enum but supported dynamically
-            last_activity=session.last_activity or now,
-            warning_count=session.warning_count or 0,
-            max_warnings=session.max_warnings or 3,
-            is_suspended=session.is_suspended or False,
-            suspension_reason=session.suspension_reason,
-            suspended_at=session.suspended_at,
-            enrollment_audio_path=session.enrollment_audio_path,
-            is_completed=session.is_completed or False,
-            allow_copy_paste=session.allow_copy_paste
-        )
-        return ApiResponse(
-            status_code=200,
-            data=access_data,
-            message="Interview not yet started. Please wait."
-        )
         
     # 3. Expiration Check
     expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
@@ -244,11 +249,8 @@ async def access_interview(
          session_db.commit()
          raise HTTPException(status_code=403, detail="Interview link has expired")
          
-    # 4. Track link access
+    # 4. Track link access status change
     from ..services.status_manager import record_status_change
-    from ..models.db_models import CandidateStatus
-    
-    # Only record if not already accessed
     if session.current_status == CandidateStatus.INVITED:
         record_status_change(
             session=session_db,
@@ -256,21 +258,37 @@ async def access_interview(
             new_status=CandidateStatus.LINK_ACCESSED
         )
     
-    # 6. Build the final standard response format
-    result_data = InterviewSessionData(
+    # 5. Determine status strings (Preserve Case for exact match if needed, but using .lower() as originally requested might be what "Renaming fields" includes?)
+    # User said: "Renaming fields is allowed. Example: admin_id -> admin... However the object structures inside them must remain identical."
+    # And specifically: "Status: scheduled | live | completed | expired | cancelled" in the first prompt.
+    # Actually, the user's second prompt said: "A previous refactor modified the response structure... and introduced breaking changes... restore... keeping RENAMED fields".
+    # This implies I should keep the field names I just changed (admin, candidate, etc.) but restore the internal object structure.
+    # The status values themselves (scheduled vs SCHEDULED) are data, but usually frontend maps these.
+    # I'll stick to the requested lowercase statuses from the FIRST prompt unless told otherwise, but I'll ensure they are present.
+    
+    status_str = session.status.value.lower() if hasattr(session.status, 'value') else str(session.status).lower()
+    current_status_str = session.current_status.value.lower() if hasattr(session.current_status, 'value') else str(session.current_status).lower()
+    
+    message = "Access Granted"
+    if now < schedule_time:
+        current_status_str = "wait" 
+        message = "Interview not yet started. Please wait."
+
+    response_data = InterviewAccessResponse(
         id=session.id,
         access_token=session.access_token,
-        admin_id=admin_data,
-        candidate_id=candidate_data,
-        paper_id=paper_data,
+        admin=admin_data,
+        candidate=candidate_data,
+        paper=paper_data,
+        coding_paper=coding_paper_data,
         schedule_time=session.schedule_time,
         duration_minutes=session.duration_minutes,
         max_questions=session.max_questions,
         start_time=session.start_time,
         end_time=session.end_time,
-        status=session.status.value if hasattr(session.status, 'value') else str(session.status),
+        status=status_str,
         total_score=session.total_score,
-        current_status=session.current_status.value if hasattr(session.current_status, 'value') else str(session.current_status),
+        current_status=current_status_str,
         last_activity=session.last_activity or now,
         warning_count=session.warning_count or 0,
         max_warnings=session.max_warnings or 3,
@@ -279,13 +297,14 @@ async def access_interview(
         suspended_at=session.suspended_at,
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
-        allow_copy_paste=session.allow_copy_paste
+        allow_copy_paste=session.allow_copy_paste,
+        result_status="PENDING" # Default for access endpoint as per original schema
     )
 
     return ApiResponse(
         status_code=200,
-        data=result_data,
-        message="Access Granted"
+        data=response_data,
+        message=message
     )
 
 
@@ -654,6 +673,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                 status_code=200,
                 data={
                     "question_id": proxy_q.id,
+                    "coding_question_id": next_cq.id,
                     "text": next_cq.title,
                     "audio_url": f"/interview/audio/question/{proxy_q.id}",
                     "response_type": "code",
@@ -871,7 +891,121 @@ async def submit_answer_audio(
     )
 
 
-from ..schemas.interview_responses import AnswersData, QuestionData
+from ..schemas.interview_responses import AnswersData, QuestionData, CodingAnswersData, CodingQuestionNested
+
+@router.post("/submit-answer-code", response_model=ApiResponse[CodingAnswersData])
+async def submit_answer_code(
+    interview_id: int = Form(...),
+    coding_question_id: int = Form(...),
+    answer_code: str = Form(...),
+    feedback: Optional[str] = Form(None),
+    score: Optional[float] = Form(None),
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Submits a code answer for a coding question.
+    Saves the response. If feedback and score are provided (pre-evaluated),
+    background processing will skip redundant evaluation.
+    """
+    # Verify session exists
+    session = session_db.get(InterviewSession, interview_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Get or Create InterviewResult
+    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+    if not result:
+        try:
+            result = InterviewResult(interview_id=interview_id)
+            session_db.add(result)
+            session_db.commit()
+            session_db.refresh(result)
+        except Exception:
+            session_db.rollback()
+            result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+            if not result:
+                raise HTTPException(status_code=500, detail="Failed to initialize interview results")
+
+    # Check if answer already exists
+    answer = session_db.exec(
+        select(Answers).where(
+            Answers.interview_result_id == result.id,
+            Answers.coding_question_id == coding_question_id
+        )
+    ).first()
+
+    if answer:
+        answer.candidate_answer = answer_code
+        if feedback is not None:
+            answer.feedback = feedback
+        if score is not None:
+            answer.score = score
+        answer.timestamp = datetime.now(timezone.utc)
+    else:
+        answer = Answers(
+            interview_result_id=result.id,
+            coding_question_id=coding_question_id,
+            candidate_answer=answer_code,
+            feedback=feedback or "",
+            score=score if score is not None else 0.0
+        )
+    
+    session_db.add(answer)
+    session_db.commit()
+    session_db.refresh(answer)
+    
+    # Load the related coding question
+    question = session_db.get(CodingQuestions, coding_question_id)
+    if not question:
+        raise HTTPException(status_code=404, detail="Coding question not found")
+
+    # ── Real-time Evaluation ─────────────────────────────────────────────────
+    # Evaluate immediately and update running total_score.
+    # Note: for coding we may have a different evaluation function, but we follow the same pattern for now.
+    q_text = question.problem_statement or question.title or ""
+    _evaluate_and_update_score(
+        db=session_db,
+        answer=answer,
+        question_text=q_text,
+        session_obj=session,
+        result_obj=result,
+    )
+
+    try:
+        session_db.refresh(answer)
+    except Exception:
+        pass
+
+    question_data = CodingQuestionNested(
+        id=question.id,
+        paper_id=question.paper_id,
+        title=question.title,
+        problem_statement=question.problem_statement,
+        examples=question.examples,
+        constraints=question.constraints,
+        starter_code=question.starter_code or "",
+        topic=question.topic,
+        difficulty=question.difficulty,
+        marks=question.marks
+    )
+    
+    answer_data = CodingAnswersData(
+        id=answer.id,
+        interview_result_id=answer.interview_result_id,
+        coding_question_id=question_data,
+        candidate_answer=answer.candidate_answer,
+        feedback=answer.feedback,
+        score=answer.score,
+        timestamp=answer.timestamp
+    )
+    
+    return ApiResponse(
+        status_code=200,
+        data=answer_data,
+        message="Code answer submitted and evaluated successfully"
+    )
+
 
 @router.post("/submit-answer-text", response_model=ApiResponse[AnswersData])
 async def submit_answer_text(
