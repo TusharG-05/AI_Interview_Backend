@@ -721,7 +721,11 @@ async def schedule_interview(
     if not candidate or candidate.role != UserRole.CANDIDATE:
          raise HTTPException(status_code=400, detail="Invalid Candidate ID")
 
-    # Inherit team from candidate (used logic only, not stored in session)
+    # Use team from request, and ensure candidate is associated
+    team_id = schedule_data.team_id
+    if not candidate.team_id:
+        candidate.team_id = team_id
+        session.add(candidate)
 
     # Validate Standard Paper (optional)
     paper = None
@@ -1454,7 +1458,8 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             admin_obj = UserNested(
                 id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
                 role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-                profile_image=s.admin.profile_image
+                profile_image=s.admin.profile_image,
+                team_id=s.admin.team_id
             )
         # admin was deleted, no fallback needed
              
@@ -1462,9 +1467,9 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         candidate_obj = None
         if s.candidate:
             candidate_obj = UserNested(
-                id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
                 role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
-                 profile_image=s.candidate.profile_image
+                 profile_image=s.candidate.profile_image,
+                 team_id=s.candidate.team_id
             )
             
         # 3. Paper
@@ -1528,7 +1533,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All results retrieved successfully"
     )
 
-from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, UserNested, QuestionPaperData
+from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, QuestionPaperData, CodingAnswersData, CodingQuestionBasic
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
 async def get_result(
@@ -1546,6 +1551,7 @@ async def get_result(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers).selectinload(CodingAnswers.coding_question),
             selectinload(InterviewSession.admin),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
         )
@@ -1572,16 +1578,18 @@ async def get_result(
         admin_obj = UserNested(
             id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-            access_token=s.admin.access_token
+            access_token=s.admin.access_token,
+            team_id=s.admin.team_id
         )
          
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
-        candidate_obj = UserNested(
+        candidate_obj = LoginUserNested(
             id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
             role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
-            access_token=s.candidate.access_token
+            access_token=s.candidate.access_token,
+            team_id=s.candidate.team_id
         )
         
     # 3. Paper
@@ -1669,11 +1677,48 @@ async def get_result(
             transcribed_text=ans.transcribed_text, timestamp=ans.timestamp or datetime.now(timezone.utc)
         ))
         
+    # 6. Coding Answers (mapped to Coding_response)
+    coding_answers_nested = []
+    if s.result.coding_answers:
+        for cans in s.result.coding_answers:
+            cq_nested = None
+            if cans.coding_question:
+                cq_nested = CodingQuestionBasic(
+                    id=cans.coding_question.id,
+                    paper_id=cans.coding_question.paper_id,
+                    title=cans.coding_question.title or "",
+                    problem_statement=cans.coding_question.problem_statement or "",
+                    examples=cans.coding_question.examples or "[]",
+                    constraints=cans.coding_question.constraints or "[]",
+                    starter_code=cans.coding_question.starter_code,
+                    topic=cans.coding_question.topic or "Algorithms",
+                    difficulty=cans.coding_question.difficulty or "Medium",
+                    marks=cans.coding_question.marks or 0
+                )
+            else:
+                cq_nested = CodingQuestionBasic(
+                    id=cans.coding_question_id, paper_id=0, title="", problem_statement="",
+                    examples="[]", constraints="[]", starter_code="", topic="", difficulty="", marks=0
+                )
+
+            coding_answers_nested.append(CodingAnswersData(
+                id=cans.id,
+                interview_result_id=cans.interview_result_id,
+                coding_question_id=cq_nested,
+                candidate_answer=cans.candidate_answer or "",
+                feedback=cans.feedback or "",
+                score=cans.score or 0.0,
+                audio_path=cans.audio_path or "",
+                transcribed_text=cans.transcribed_text or "",
+                timestamp=cans.timestamp or datetime.now(timezone.utc)
+            ))
+
     # 7. Top Level Result
     result_detail = AdminResultData(
         id=s.result.id,
         interview_data=session_nested,
         interview_responses=answers_nested,
+        coding_responses=coding_answers_nested,
         total_score=s.result.total_score or 0.0,
         result_status=s.result.result_status or "PENDING",
         created_at=s.result.created_at or datetime.now(timezone.utc)
