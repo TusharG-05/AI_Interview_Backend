@@ -1,9 +1,10 @@
+ 
 from langchain_core.prompts import ChatPromptTemplate
 
 code_evaluation_prompt = ChatPromptTemplate.from_messages([
     ("system",
-     "You are a senior software engineer conducting a technical coding interview. "
-     "Evaluate the candidate's code submission against the given problem. "
+     "You are a senior software engineer conducting a technical code review. "
+     "Evaluate your own code submission against the given problem. "
      "You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no surrounding text."),
     ("user",
      """Problem Title: {title}
@@ -11,10 +12,10 @@ code_evaluation_prompt = ChatPromptTemplate.from_messages([
 Problem Statement:
 {problem_statement}
 
-Candidate's Code Submission:
+Your Code Submission:
 {code}
 
-Evaluate the code submission and return a JSON object with exactly these keys:
+Evaluate your code submission and return a JSON object with exactly these keys:
 - "feedback": detailed feedback string (what was done well, what was wrong, how to improve)
 - "score": float between 0 and 10
 - "correctness": one of "correct", "partially_correct", "incorrect"

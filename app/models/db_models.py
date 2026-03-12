@@ -123,16 +123,10 @@ class CodingQuestionPaper(SQLModel, table=True):
     question_count: int = Field(default=0)
     total_marks: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    team_id: Optional[int] = Field(
-        sa_column=Column(Integer, ForeignKey("team.id", ondelete="SET NULL"), nullable=True)
-    )
 
     # Relationships
     admin: Optional["User"] = Relationship(
         sa_relationship_kwargs={"foreign_keys": "CodingQuestionPaper.adminUser", "primaryjoin": "CodingQuestionPaper.adminUser == User.id"}
-    )
-    team: Optional["Team"] = Relationship(
-        sa_relationship_kwargs={"primaryjoin": "CodingQuestionPaper.team_id == Team.id"}
     )
     questions: List["CodingQuestions"] = Relationship(
         back_populates="paper",
@@ -301,7 +295,8 @@ class Answers(SQLModel, table=True):
     interview_result_id: int = Field(
         sa_column=Column(Integer, ForeignKey("interviewresult.id", ondelete="CASCADE"))
     )
-    question_id: int = Field(foreign_key="questions.id")
+    question_id: Optional[int] = Field(default=None, foreign_key="questions.id")
+    coding_question_id: Optional[int] = Field(default=None, foreign_key="codingquestions.id")
 
     # Kept nullable: audio answers have no text initially; text answers have no audio
     candidate_answer: str = Field(default="")
@@ -314,7 +309,8 @@ class Answers(SQLModel, table=True):
 
     # Relationships
     interview_result: InterviewResult = Relationship(back_populates="answers")
-    question: Questions = Relationship(back_populates="answers")
+    question: Optional[Questions] = Relationship(back_populates="answers")
+    coding_question: Optional[CodingQuestions] = Relationship()
 
 
 # Rebuild models

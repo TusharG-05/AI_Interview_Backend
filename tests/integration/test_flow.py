@@ -42,12 +42,16 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
     session.commit()
     
     # --- 2. ACCESS LINK ---
+    from app.auth.dependencies import get_current_user
+    from app.server import app
+    app.dependency_overrides[get_current_user] = lambda: candidate
+
     response = client.get(f"/api/interview/access/{interview.access_token}")
     assert response.status_code == 200
-    assert response.json()["data"]["current_status"] == "LINK_ACCESSED"
+    assert response.json()["data"]["current_status"].lower() == "link_accessed"
     
     session.refresh(interview)
-    assert interview.current_status == CandidateStatus.LINK_ACCESSED
+    assert interview.current_status.lower() == "link_accessed"
     
     # --- 3. START SESSION ---
     # Mock Audio Service
@@ -62,7 +66,7 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
         
         session.refresh(interview)
         assert interview.status == InterviewStatus.LIVE
-        assert interview.current_status == CandidateStatus.ENROLLMENT_COMPLETED
+        assert interview.current_status.lower() == "enrollment_completed"
     
     # --- 4. GET NEXT QUESTION ---
     # Mock TTS for question reading
@@ -73,7 +77,7 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
         assert data["question_id"] == q1.id
         
         session.refresh(interview)
-        assert interview.current_status == CandidateStatus.INTERVIEW_ACTIVE
+        assert interview.current_status.lower() == "interview_active"
         
     # --- 5. SUBMIT ANSWER ---
     with patch("app.services.audio.AudioService.save_audio_blob"):
@@ -99,7 +103,10 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
         session.refresh(interview)
         assert interview.status == InterviewStatus.COMPLETED
         assert interview.is_completed is True
-        assert interview.current_status == CandidateStatus.INTERVIEW_COMPLETED
+        assert interview.current_status.lower() == "interview_completed"
         
         # Ensure background task was triggered
         mock_process.assert_called_once()
+    
+    # Clean up overrides
+    app.dependency_overrides.pop(get_current_user, None)

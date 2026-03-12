@@ -111,7 +111,6 @@ class CodingPaperRead(BaseModel):
     total_marks: int = 0
     questions: List[CodingQuestionRead] = []
     created_at: str
-    team_id: Optional[int] = None
 
 
 # --- Dedicated Coding Question Paper (new table) response schemas ---
@@ -157,7 +156,7 @@ class CodingPaperFull(BaseModel):
     total_marks: int = 0
     questions: List[CodingQuestionFull] = []
     created_at: str
-    team_id: Optional[int] = None
+    created_by: Optional["UserRead"] = None
 
 
 

@@ -525,7 +525,6 @@ async def generate_coding_paper(
         ],
         created_at=paper.created_at.isoformat(),
         created_by=serialize_user(current_user),
-        team_id=paper.team_id,
     )
 
     return ApiResponse(
@@ -718,7 +717,6 @@ async def schedule_interview(
          raise HTTPException(status_code=400, detail="Invalid Candidate ID")
 
     # Inherit team from candidate (used logic only, not stored in session)
-    team_id = candidate.team_id
 
     # Validate Standard Paper (optional)
     paper = None
@@ -863,7 +861,6 @@ async def schedule_interview(
         candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
         coding_paper_id=new_session.coding_paper_id,
-        team_id=candidate.team_id,
         interview_round=new_session.interview_round.value if new_session.interview_round else None,
         schedule_time=format_iso_datetime(new_session.schedule_time),
         duration_minutes=new_session.duration_minutes,
