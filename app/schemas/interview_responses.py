@@ -51,12 +51,26 @@ class CodingQuestionNested(BaseModel):
     paper_id: int
     title: str
     problem_statement: str
-    examples: str
-    constraints: str
+    examples: List[Any] = []
+    constraints: List[str] = []
     starter_code: str
     topic: str
     difficulty: str
     marks: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_json_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = dict(data)
+            for field in ("examples", "constraints"):
+                raw = data.get(field)
+                if isinstance(raw, str):
+                    try:
+                        data[field] = _json.loads(raw)
+                    except:
+                        data[field] = []
+        return data
 
 class CodingPaperNested(BaseModel):
     id: int
@@ -66,7 +80,7 @@ class CodingPaperNested(BaseModel):
     question_count: int
     total_marks: int
     created_at: datetime
-    coding_questions: List[CodingQuestionNested]
+    coding_questions: List[CodingQuestionNested] = []
 
 class InterviewAccessResponse(BaseModel):
     id: int

@@ -1,4 +1,5 @@
 from typing import List, Optional
+import json as _json
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -1043,7 +1044,8 @@ async def get_interview(
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
             selectinload(InterviewSession.proctoring_events),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.admin),
-            selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions)
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
         )
     ).first()
     
@@ -1088,6 +1090,54 @@ async def get_interview(
             "total_marks": interview_session.paper.total_marks,
             "created_at": interview_session.paper.created_at.isoformat() if interview_session.paper.created_at else ""
         }
+
+    # Serialize coding paper
+    coding_paper_dict = None
+    if interview_session.coding_paper:
+        coding_questions = []
+        for q in getattr(interview_session.coding_paper, "questions", []):
+            # Parse examples
+            examples = []
+            if isinstance(q.examples, str):
+                try:
+                    examples = _json.loads(q.examples)
+                except:
+                    examples = []
+            elif isinstance(q.examples, list):
+                examples = q.examples
+            
+            # Parse constraints
+            constraints = []
+            if isinstance(q.constraints, str):
+                try:
+                    constraints = _json.loads(q.constraints)
+                except:
+                    constraints = []
+            elif isinstance(q.constraints, list):
+                constraints = q.constraints
+
+            coding_questions.append({
+                "id": q.id,
+                "title": q.title,
+                "problem_statement": q.problem_statement,
+                "examples": examples or [],
+                "constraints": constraints or [],
+                "starter_code": q.starter_code,
+                "topic": q.topic,
+                "difficulty": q.difficulty,
+                "marks": q.marks
+            })
+        
+        coding_paper_dict = {
+            "id": interview_session.coding_paper.id,
+            "name": interview_session.coding_paper.name,
+            "description": interview_session.coding_paper.description,
+            "adminUser": None,
+            "question_count": interview_session.coding_paper.question_count,
+            "questions": coding_questions,
+            "total_marks": interview_session.coding_paper.total_marks,
+            "created_at": interview_session.coding_paper.created_at.isoformat() if interview_session.coding_paper.created_at else ""
+        }
     
     # Build detailed response
     detail_read = InterviewSessionExpanded(
@@ -1096,6 +1146,7 @@ async def get_interview(
         admin_id=admin_dict,
         candidate_id=candidate_dict,
         paper_id=paper_dict,
+        coding_paper_id=coding_paper_dict,
         interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
         schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
         duration_minutes=interview_session.duration_minutes,

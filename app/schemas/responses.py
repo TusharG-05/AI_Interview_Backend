@@ -269,12 +269,34 @@ class QuestionPaperExpanded(BaseModel):
     total_marks: int = 0
     created_at: str = ""
 
+class CodingQuestionExpanded(BaseModel):
+    id: int
+    title: str
+    problem_statement: str
+    examples: List[Any] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+    topic: str
+    difficulty: str
+    marks: int
+
+class CodingPaperExpanded(BaseModel):
+    id: int = 0
+    name: str = ""
+    description: str = ""
+    adminUser: Optional[UserNested] = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
+    question_count: int = 0
+    questions: List[CodingQuestionExpanded] = Field(default_factory=list)
+    total_marks: int = 0
+    created_at: str = ""
+
 class InterviewSessionExpanded(BaseModel):
     id: int
     access_token: str
-    admin_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
-    candidate_id: UserNested = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
-    paper_id: QuestionPaperExpanded = Field(default_factory=lambda: QuestionPaperExpanded())
+    admin_id: Optional[UserNested] = None
+    candidate_id: Optional[UserNested] = None
+    paper_id: Optional[QuestionPaperExpanded] = None
+    coding_paper_id: Optional[CodingPaperExpanded] = None
     interview_round: Optional[str] = None
     schedule_time: str
     duration_minutes: int
