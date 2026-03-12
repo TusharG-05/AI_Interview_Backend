@@ -1059,116 +1059,120 @@ async def get_interview(
             detail="Not authorized to access this interview session"
         )
     
-    # Serialize users with role-based keys, handling NULL users
-    admin_dict = serialize_user(interview_session.admin, fallback_role="admin") if interview_session.admin else None
-    candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate") if interview_session.candidate else None
-    
-    # Serialize paper with related data
-    paper_dict = None
-    if interview_session.paper:
-        paper_admin_dict = serialize_user(interview_session.paper.admin, fallback_role="admin") if interview_session.paper.admin else None
-        paper_questions = [
-            {
-                "id": q.id,
-                "content": q.content,
-                "question_text": q.question_text,
-                "topic": q.topic,
-                "difficulty": q.difficulty,
-                "marks": q.marks,
-                "response_type": q.response_type
-            }
-            for q in getattr(interview_session.paper, "questions", [])
-        ]
+    try:
+        # Serialize users with role-based keys, handling NULL users
+        admin_dict = serialize_user(interview_session.admin, fallback_role="admin") if interview_session.admin else None
+        candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate") if interview_session.candidate else None
         
-        paper_dict = {
-            "id": interview_session.paper.id,
-            "name": interview_session.paper.name,
-            "description": interview_session.paper.description,
-            "adminUser": paper_admin_dict,
-            "question_count": interview_session.paper.question_count,
-            "questions": paper_questions,
-            "total_marks": interview_session.paper.total_marks,
-            "created_at": interview_session.paper.created_at.isoformat() if interview_session.paper.created_at else ""
-        }
-
-    # Serialize coding paper
-    coding_paper_dict = None
-    if interview_session.coding_paper:
-        coding_questions = []
-        for q in getattr(interview_session.coding_paper, "questions", []):
-            # Parse examples
-            examples = []
-            if isinstance(q.examples, str):
-                try:
-                    examples = _json.loads(q.examples)
-                except:
-                    examples = []
-            elif isinstance(q.examples, list):
-                examples = q.examples
+        # Serialize paper with related data
+        paper_dict = None
+        if interview_session.paper:
+            paper_admin_dict = serialize_user(interview_session.paper.admin, fallback_role="admin") if interview_session.paper.admin else None
+            paper_questions = [
+                {
+                    "id": q.id,
+                    "content": q.content,
+                    "question_text": q.question_text,
+                    "topic": q.topic,
+                    "difficulty": q.difficulty,
+                    "marks": q.marks,
+                    "response_type": q.response_type
+                }
+                for q in getattr(interview_session.paper, "questions", [])
+            ]
             
-            # Parse constraints
-            constraints = []
-            if isinstance(q.constraints, str):
-                try:
-                    constraints = _json.loads(q.constraints)
-                except:
-                    constraints = []
-            elif isinstance(q.constraints, list):
-                constraints = q.constraints
+            paper_dict = {
+                "id": interview_session.paper.id,
+                "name": interview_session.paper.name,
+                "description": interview_session.paper.description,
+                "adminUser": paper_admin_dict,
+                "question_count": interview_session.paper.question_count,
+                "questions": paper_questions,
+                "total_marks": interview_session.paper.total_marks,
+                "created_at": interview_session.paper.created_at.isoformat() if interview_session.paper.created_at else ""
+            }
 
-            coding_questions.append({
-                "id": q.id,
-                "title": q.title,
-                "problem_statement": q.problem_statement,
-                "examples": examples or [],
-                "constraints": constraints or [],
-                "starter_code": q.starter_code,
-                "topic": q.topic,
-                "difficulty": q.difficulty,
-                "marks": q.marks
-            })
+        # Serialize coding paper
+        coding_paper_dict = None
+        if interview_session.coding_paper:
+            coding_questions = []
+            for q in getattr(interview_session.coding_paper, "questions", []):
+                # Parse examples
+                examples = []
+                if isinstance(q.examples, str):
+                    try:
+                        examples = _json.loads(q.examples)
+                    except:
+                        examples = []
+                elif isinstance(q.examples, list):
+                    examples = q.examples
+                
+                # Parse constraints
+                constraints = []
+                if isinstance(q.constraints, str):
+                    try:
+                        constraints = _json.loads(q.constraints)
+                    except:
+                        constraints = []
+                elif isinstance(q.constraints, list):
+                    constraints = q.constraints
+
+                coding_questions.append({
+                    "id": q.id,
+                    "title": q.title,
+                    "problem_statement": q.problem_statement,
+                    "examples": examples or [],
+                    "constraints": constraints or [],
+                    "starter_code": q.starter_code,
+                    "topic": q.topic,
+                    "difficulty": q.difficulty,
+                    "marks": q.marks
+                })
+            
+            coding_paper_dict = {
+                "id": interview_session.coding_paper.id,
+                "name": interview_session.coding_paper.name,
+                "description": interview_session.coding_paper.description,
+                "adminUser": None,
+                "question_count": interview_session.coding_paper.question_count,
+                "questions": coding_questions,
+                "total_marks": interview_session.coding_paper.total_marks,
+                "created_at": interview_session.coding_paper.created_at.isoformat() if interview_session.coding_paper.created_at else ""
+            }
         
-        coding_paper_dict = {
-            "id": interview_session.coding_paper.id,
-            "name": interview_session.coding_paper.name,
-            "description": interview_session.coding_paper.description,
-            "adminUser": None,
-            "question_count": interview_session.coding_paper.question_count,
-            "questions": coding_questions,
-            "total_marks": interview_session.coding_paper.total_marks,
-            "created_at": interview_session.coding_paper.created_at.isoformat() if interview_session.coding_paper.created_at else ""
-        }
-    
-    # Build detailed response
-    detail_read = InterviewSessionExpanded(
-        id=interview_session.id,
-        access_token=interview_session.access_token,
-        admin_id=admin_dict,
-        candidate_id=candidate_dict,
-        paper_id=paper_dict,
-        coding_paper_id=coding_paper_dict,
-        interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
-        schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
-        duration_minutes=interview_session.duration_minutes,
-        max_questions=getattr(interview_session, "max_questions", 0) or 0,
-        status=interview_session.status.value if getattr(interview_session, "status", None) else "SCHEDULED",
-        total_score=interview_session.total_score,
-        current_status=getattr(interview_session, "current_status", ""),
-        last_activity=interview_session.last_activity.isoformat() if getattr(interview_session, "last_activity", None) else "",
-        start_time=interview_session.start_time.isoformat() if getattr(interview_session, "start_time", None) else None,
-        end_time=interview_session.end_time.isoformat() if getattr(interview_session, "end_time", None) else None,
-        warning_count=getattr(interview_session, "warning_count", 0) or 0,
-        max_warnings=getattr(interview_session, "max_warnings", 3) or 3,
-        is_suspended=getattr(interview_session, "is_suspended", False) or False,
-        suspension_reason=getattr(interview_session, "suspension_reason", None),
-        suspended_at=interview_session.suspended_at.isoformat() if getattr(interview_session, "suspended_at", None) else None,
-        enrollment_audio_path=getattr(interview_session, "enrollment_audio_path", None),
-        is_completed=getattr(interview_session, "is_completed", False) or False,
-        allow_copy_paste=getattr(interview_session, "allow_copy_paste", False),
-        response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
-        proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
-        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None
-    )
+        # Build detailed response
+        detail_read = InterviewSessionExpanded(
+            id=interview_session.id,
+            access_token=interview_session.access_token,
+            admin_id=admin_dict,
+            candidate_id=candidate_dict,
+            paper_id=paper_dict,
+            coding_paper_id=coding_paper_dict,
+            interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
+            schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
+            duration_minutes=getattr(interview_session, "duration_minutes", 0) or 0,
+            max_questions=getattr(interview_session, "max_questions", 0) or 0,
+            status=interview_session.status.value if getattr(interview_session, "status", None) else "SCHEDULED",
+            total_score=interview_session.total_score,
+            current_status=getattr(interview_session, "current_status", ""),
+            last_activity=interview_session.last_activity.isoformat() if getattr(interview_session, "last_activity", None) else "",
+            start_time=interview_session.start_time.isoformat() if getattr(interview_session, "start_time", None) else None,
+            end_time=interview_session.end_time.isoformat() if getattr(interview_session, "end_time", None) else None,
+            warning_count=getattr(interview_session, "warning_count", 0) or 0,
+            max_warnings=getattr(interview_session, "max_warnings", 3) or 3,
+            is_suspended=getattr(interview_session, "is_suspended", False) or False,
+            suspension_reason=getattr(interview_session, "suspension_reason", None),
+            suspended_at=interview_session.suspended_at.isoformat() if getattr(interview_session, "suspended_at", None) else None,
+            enrollment_audio_path=getattr(interview_session, "enrollment_audio_path", None),
+            is_completed=getattr(interview_session, "is_completed", False) or False,
+            allow_copy_paste=getattr(interview_session, "allow_copy_paste", False),
+            response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
+            proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
+            enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None
+        )
+    except Exception as e:
+        logger.error(f"Serialization error in get_interview: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Serialization failure: {str(e)}")
     
     return ApiResponse(
         status_code=200,
