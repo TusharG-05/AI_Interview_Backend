@@ -4,7 +4,7 @@ from datetime import datetime
 import json as _json
 
 class LoginUserNested(BaseModel):
-    id: str
+    id: int
     email: str
     full_name: str
     role: str
@@ -13,14 +13,14 @@ class LoginUserNested(BaseModel):
 # --- New Flattened Schemas for Interview Access API ---
 
 class AdminNested(BaseModel):
-    id: str
+    id: int
     email: str
     full_name: str
     role: str
     access_token: Optional[str] = None
 
 class CandidateNested(BaseModel):
-    id: str
+    id: int
     email: str
     full_name: str
     role: str

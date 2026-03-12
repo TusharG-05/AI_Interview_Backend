@@ -298,10 +298,10 @@ class InterviewSessionExpanded(BaseModel):
     paper_id: Optional[QuestionPaperExpanded] = None
     coding_paper_id: Optional[CodingPaperExpanded] = None
     interview_round: Optional[str] = None
-    schedule_time: str
-    duration_minutes: int
+    schedule_time: Optional[str] = ""
+    duration_minutes: int = 0
     max_questions: int = 0
-    status: str
+    status: Optional[str] = "SCHEDULED"
     total_score: Optional[float] = None
     current_status: str = ""
     last_activity: str = ""
@@ -315,8 +315,8 @@ class InterviewSessionExpanded(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     allow_copy_paste: bool = False
-    response_count: int
-    proctoring_event_count: int
+    response_count: int = 0
+    proctoring_event_count: int = 0
     enrollment_audio_url: Optional[str] = None
 
 class UserDetailRead(BaseModel):
