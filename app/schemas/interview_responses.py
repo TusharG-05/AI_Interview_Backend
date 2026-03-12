@@ -61,7 +61,7 @@ class CodingPaperNested(BaseModel):
     coding_questions: List[CodingQuestionNested] = []
 
 class LoginUserNested(BaseModel):
-    id: str
+    id: int
     email: str
     full_name: str
     role: str
