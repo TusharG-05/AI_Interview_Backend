@@ -30,7 +30,8 @@ from ..schemas.responses import (
     TeamReadBasic
 )
 from ..schemas.interview_result import (
-    InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested
+    InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested,
+    CodingPaperNested, CodingQuestionNested
 )
 from ..schemas.api_response import ApiResponse
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
@@ -436,13 +437,16 @@ async def generate_coding_paper(
             detail=f"Invalid difficulty_mix '{difficulty_mix}'. Must be one of: {sorted(valid_mixes)}"
         )
 
-    # Fetch and validate the existing CodingQuestionPaper
-    paper = session.get(CodingQuestionPaper, request_data.coding_paper_id)
-    if not paper or paper.adminUser != current_user.id:
-        raise HTTPException(
-            status_code=404,
-            detail="Coding question paper not found or you do not have permission to modify it"
-        )
+    # Always auto-create new paper
+    paper_name = request_data.paper_name or f"AI {request_data.ai_prompt[:20]}..."
+    paper = CodingQuestionPaper(
+        name=paper_name,
+        description=f"AI Generated coding paper for: {request_data.ai_prompt[:100]}",
+        adminUser=current_user.id
+    )
+    session.add(paper)
+    session.commit()
+    session.refresh(paper)
 
     # Generate problems via LLM
     try:
@@ -1377,9 +1381,10 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         .where(InterviewSession.admin_id == current_user.id)
         .options(
             selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.paper),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
-            selectinload(InterviewSession.admin)
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.coding_paper)
         )
     ).all()
     
@@ -1415,6 +1420,15 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
                 admin_id=s.paper.adminUser, created_at=s.paper.created_at
             )
             
+        # 3.1 Coding Paper
+        coding_paper_obj = None
+        if s.coding_paper:
+            coding_paper_obj = CodingPaperNested(
+                id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description,
+                adminUser=s.coding_paper.adminUser, created_at=s.coding_paper.created_at,
+                question_count=s.coding_paper.question_count, total_marks=s.coding_paper.total_marks
+            )
+            
         # 4. Session Nested
         session_nested = InterviewSessionNested(
             id=s.id,
@@ -1423,6 +1437,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             admin_user=admin_obj,
             candidate_user=candidate_obj,
             question_paper=paper_obj,
+            coding_paper=coding_paper_obj,
             schedule_time=s.schedule_time,
             duration_minutes=s.duration_minutes or 1440,
             max_questions=s.max_questions,
@@ -1474,9 +1489,10 @@ async def get_result(
         .where(InterviewSession.id == interview_id)
         .options(
             selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.paper),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
-            selectinload(InterviewSession.admin)
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
         )
     ).first()
     
@@ -1524,10 +1540,30 @@ async def get_result(
             total_marks=s.paper.total_marks
         )
         
+    # 3.1 Coding Paper
+    coding_paper_obj = None
+    if s.coding_paper:
+        coding_paper_obj = CodingPaperNested(
+            id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
+            adminUser=s.coding_paper.adminUser if s.coding_paper.adminUser is not None else 0,
+            question_count=s.coding_paper.question_count,
+            total_marks=s.coding_paper.total_marks,
+            created_at=s.coding_paper.created_at,
+            coding_questions=[
+                CodingQuestionNested(
+                    id=q.id, paper_id=q.paper_id, title=q.title,
+                    problem_statement=q.problem_statement, examples=q.examples,
+                    constraints=q.constraints, starter_code=q.starter_code or "",
+                    topic=q.topic, difficulty=q.difficulty, marks=q.marks
+                ) for q in s.coding_paper.questions
+            ] if hasattr(s.coding_paper, 'questions') else []
+        )
+        
     # 4. Session Nested (mapped to interviewData)
     session_nested = InterviewSessionData(
         id=s.id, access_token=s.access_token,
-        admin_id=admin_obj, candidate_id=candidate_obj, paper_id=paper_obj,
+        admin_id=admin_obj, candidate_id=candidate_obj, 
+        paper_id=paper_obj, coding_paper_id=coding_paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
         status=s.status.value if hasattr(s.status, 'value') else str(s.status),
@@ -1555,13 +1591,24 @@ async def get_result(
                 marks=ans.question.marks,
                 response_type=ans.question.response_type.value if hasattr(ans.question.response_type, 'value') else str(ans.question.response_type)
             )
-        else:
-             # Fallback if question misses
-             q_nested = QuestionData(id=ans.question_id, paper_id=0, content="", question_text="", topic="", difficulty="", marks=0, response_type="")
+        
+        cq_nested = None
+        if ans.coding_question:
+            cq_nested = CodingQuestionNested(
+                id=ans.coding_question.id, paper_id=ans.coding_question.paper_id,
+                title=ans.coding_question.title, problem_statement=ans.coding_question.problem_statement,
+                examples=ans.coding_question.examples, constraints=ans.coding_question.constraints,
+                starter_code=ans.coding_question.starter_code or "", topic=ans.coding_question.topic or "",
+                difficulty=ans.coding_question.difficulty, marks=ans.coding_question.marks
+            )
+        elif not ans.question and not ans.coding_question:
+             # Fallback if both miss
+             q_nested = QuestionData(id=ans.question_id or 0, paper_id=0, content="", question_text="", topic="", difficulty="", marks=0, response_type="")
         
         answers_nested.append(AnswersDataAdmin(
             id=ans.id, interview_result_id=ans.interview_result_id,
             question_id=q_nested, # lowercase q per request
+            coding_question_id=cq_nested,
             candidate_answer=ans.candidate_answer or "", feedback=ans.feedback or "",
             score=ans.score or 0.0, audio_path=ans.audio_path,
             transcribed_text=ans.transcribed_text, timestamp=ans.timestamp or datetime.now(timezone.utc)

@@ -68,10 +68,24 @@ def process_session_results(interview_id: int, db: Session = None):
                 needs_eval = not pre_evaluated
 
                 if needs_eval:
-                    q = db.get(Questions, resp.question_id)
-                    q_text = q.question_text or q.content or "General Question"
-                    resp_type = q.response_type if q else "text"
-                    q_title = q.question_text or q.content or "" if q else ""
+                    from ..models.db_models import CodingQuestions
+                    
+                    q_text = "General Question"
+                    resp_type = "text"
+                    q_title = ""
+                    
+                    if resp.question_id:
+                        q = db.get(Questions, resp.question_id)
+                        if q:
+                            q_text = q.question_text or q.content or "General Question"
+                            resp_type = q.response_type
+                            q_title = q.question_text or q.content or ""
+                    elif resp.coding_question_id:
+                        cq = db.get(CodingQuestions, resp.coding_question_id)
+                        if cq:
+                            q_text = cq.problem_statement or cq.title or "Coding Problem"
+                            resp_type = "code"
+                            q_title = cq.title or ""
 
                     logger.info(f"  Answer {resp.id}: evaluating (type={resp_type})...")
                     evaluation = interview_service.evaluate_answer_content(

@@ -151,7 +151,8 @@ class CodingAnswersData(BaseModel):
 class AnswersDataAdmin(BaseModel):
     id: int
     interview_result_id: int
-    question_id: QuestionData  # Lowercase q specifically requested for admin results
+    question_id: Optional[QuestionData] = None  # Lowercase q specifically requested for admin results
+    coding_question_id: Optional[CodingQuestionNested] = None
     candidate_answer: str
     feedback: str
     score: float
@@ -165,6 +166,7 @@ class InterviewSessionData(BaseModel):
     admin_id: Optional[LoginUserNested] = None
     candidate_id: Optional[LoginUserNested] = None
     paper_id: Optional[QuestionPaperData] = None
+    coding_paper_id: Optional[CodingPaperNested] = None
     schedule_time: datetime
     duration_minutes: int
     max_questions: int
