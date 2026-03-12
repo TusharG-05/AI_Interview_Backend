@@ -160,7 +160,6 @@ class CodingPaperFull(BaseModel):
     questions: List[CodingQuestionFull] = []
     created_at: str
     created_by: Optional[dict] = None
-    team_id: Optional[int] = None
 
 
 

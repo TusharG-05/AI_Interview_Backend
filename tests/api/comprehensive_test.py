@@ -77,13 +77,12 @@ def test_api():
     print("\n[6] Testing Paper Creation (Linked to Team)...")
     paper_res = requests.post(f"{BASE_URL}/admin/papers", headers=admin_headers, json={
         "name": f"Test Paper {uuid.uuid4().hex[:6]}",
-        "description": "Verification paper",
-        "team_id": team_id
+        "description": "Verification paper"
     })
     assert paper_res.status_code == 201, f"Paper Creation failed: {paper_res.status_code} - {paper_res.text}"
     paper_id = paper_res.json()["data"]["id"]
-    assert paper_res.json()["data"]["team_id"] == team_id, f"Paper team_id mismatch: expected {team_id}, got {paper_res.json()['data']['team_id']}"
-    print(f" Paper Created: ID {paper_id}, Team ID {paper_res.json()['data']['team_id']}")
+    paper_id = paper_res.json()["data"]["id"]
+    print(f" Paper Created: ID {paper_id}")
 
     # 6.5 ADMIN: Generate Paper (AI)
     print("\n[6.5] Testing AI Paper Generation (Linked to Team)...")
@@ -91,14 +90,13 @@ def test_api():
         "ai_prompt": "Python and FastAPI basics",
         "years_of_experience": 2,
         "num_questions": 3,
-        "team_id": team_id,
         "paper_name": f"AI Paper {uuid.uuid4().hex[:6]}"
     })
     # This might fail if LLM is not configured, so we'll just log and continue if it's not a 201
     if gen_res.status_code == 201:
         gen_paper_id = gen_res.json()["data"]["id"]
-        assert gen_res.json()["data"]["team_id"] == team_id, f"AI Paper team_id mismatch: expected {team_id}, got {gen_res.json()['data']['team_id']}"
-        print(f" AI Paper Generated: ID {gen_paper_id}, Team ID {gen_res.json()['data']['team_id']}")
+        gen_paper_id = gen_res.json()["data"]["id"]
+        print(f" AI Paper Generated: ID {gen_paper_id}")
     else:
         print(f" AI Paper Generation skipped/failed (Check LLM config/Ollama): {gen_res.status_code} - {gen_res.text}")
 
@@ -110,8 +108,7 @@ def test_api():
     # Create paper
     c_paper_res = requests.post(f"{BASE_URL}/admin/coding-papers/", headers=admin_headers, json={
         "name": f"Coding Assessment {uuid.uuid4().hex[:6]}",
-        "description": "Tech screen coding",
-        "team_id": team_id
+        "description": "Tech screen coding"
     })
     assert c_paper_res.status_code == 201, f"Coding Paper Creation failed: {c_paper_res.status_code}"
     dedicated_coding_paper_id = c_paper_res.json()["data"]["id"]
@@ -148,8 +145,7 @@ def test_api():
         print(f"  AI Coding Paper Generation skipped/failed: {coding_gen_res.status_code} - {coding_gen_res.text}")
     cp_create_res = requests.post(f"{BASE_URL}/admin/coding-papers/", headers=admin_headers, json={
         "name": f"Dedicated Coding Paper {uuid.uuid4().hex[:6]}",
-        "description": "Test coding paper with structured CRUD",
-        "team_id": team_id,
+        "description": "Test coding paper with structured CRUD"
     })
     assert cp_create_res.status_code == 201, f"Create coding paper failed: {cp_create_res.status_code} - {cp_create_res.text}"
     cp_data = cp_create_res.json()["data"]
@@ -271,7 +267,7 @@ def test_api():
 
 
     # 9. ADMIN: Schedule Interview (New Team & Round)
-    print("\n[9] Testing Interview Scheduling (Team + Round)...")
+    print(f"\n[9] Testing Interview Scheduling (Team + Round)... (paper_id: {paper_id}, candidate_id: {candidate_id}, team_id: {team_id})")
     sched_res = requests.post(f"{BASE_URL}/admin/interviews/schedule", headers=admin_headers, json={
         "candidate_id": candidate_id,
         "paper_id": paper_id,
@@ -370,6 +366,24 @@ def test_api():
             print(f" Score: {sub_data.get('score')} | Time Complexity: {sub_data.get('time_complexity', 'unknown')}")
         else:
             print(" Session already finished, no coding question available.")
+
+        # 12.2 ADMIN: Verify Coding Results
+        print("\n[12.2] Testing Admin Coding Results API...")
+        res_res = requests.get(f"{BASE_URL}/admin/results/{coding_interview_id}", headers=admin_headers)
+        assert res_res.status_code == 200, f"Failed to get coding results: {res_res.text}"
+        res_data = res_res.json()["data"]
+        
+        # Verify that Coding_response is present and populated
+        assert "Coding_response" in res_data, "Coding_response missing from AdminResultData"
+        assert len(res_data["Coding_response"]) >= 1, "Expected at least 1 coding answer in result"
+        
+        ca = res_data["Coding_response"][0]
+        assert "coding_question_id" in ca, "coding_question_id missing from CodingAnswersData"
+        assert ca["coding_question_id"]["title"] == "Two Sum", f"Expected title 'Two Sum', got {ca['coding_question_id'].get('title')}"
+        assert isinstance(ca["coding_question_id"]["examples"], list), "examples should be a parsed list"
+        
+        print(f" Admin Coding Results verified: {len(res_data['Coding_response'])} coding answer(s) found.")
+        print(f" First question title: '{ca['coding_question_id']['title']}'")
     # 13. SYSTEM: Status
     print("\n[13] Testing System Status...")
     status_res = requests.get(f"{BASE_URL}/status/", params={"interview_id": interview_id})

@@ -129,7 +129,6 @@ class CodingPaperCreate(BaseModel):
     """Create a new dedicated coding question paper."""
     name: str = Field(..., min_length=1, description="Name of the coding paper")
     description: Optional[str] = Field(None, description="Optional description")
-    team_id: Optional[int] = Field(None, description="Team to associate this paper with")
 
 
 class CodingPaperUpdate(BaseModel):
@@ -166,3 +165,11 @@ class CodingQuestionUpdate(BaseModel):
     topic: Optional[str] = None
     difficulty: Optional[str] = None
     marks: Optional[int] = None
+
+class CodingAnswerRequest(BaseModel):
+    """Request schema for submitting a coding answer."""
+    interview_id: int
+    question_id: int
+    answer_code: str
+    feedback: Optional[str] = None
+    score: Optional[float] = None

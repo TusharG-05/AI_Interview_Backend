@@ -525,7 +525,6 @@ async def generate_coding_paper(
         ],
         created_at=paper.created_at.isoformat(),
         created_by=serialize_user(current_user),
-        team_id=paper.team_id,
     )
 
     return ApiResponse(
@@ -717,11 +716,11 @@ async def schedule_interview(
     if not candidate or candidate.role != UserRole.CANDIDATE:
          raise HTTPException(status_code=400, detail="Invalid Candidate ID")
 
-    # Inherit team from candidate
-    team_id = candidate.team_id
-    if not team_id:
-        # Fallback to "Other" or throw error if business requires team
-        raise HTTPException(status_code=400, detail="Candidate must be assigned to a team before scheduling an interview.")
+    # Use team from request, and ensure candidate is associated
+    team_id = schedule_data.team_id
+    if not candidate.team_id:
+        candidate.team_id = team_id
+        session.add(candidate)
 
     # Validate Standard Paper (optional)
     paper = None
@@ -1486,6 +1485,7 @@ async def get_result(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.paper),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers).selectinload(CodingAnswers.coding_question),
             selectinload(InterviewSession.admin)
         )
     ).first()
@@ -1577,11 +1577,48 @@ async def get_result(
             transcribed_text=ans.transcribed_text, timestamp=ans.timestamp or datetime.now(timezone.utc)
         ))
         
+    # 6. Coding Answers (mapped to Coding_response)
+    coding_answers_nested = []
+    if s.result.coding_answers:
+        for cans in s.result.coding_answers:
+            cq_nested = None
+            if cans.coding_question:
+                cq_nested = CodingQuestionBasic(
+                    id=cans.coding_question.id,
+                    paper_id=cans.coding_question.paper_id,
+                    title=cans.coding_question.title or "",
+                    problem_statement=cans.coding_question.problem_statement or "",
+                    examples=cans.coding_question.examples or "[]",
+                    constraints=cans.coding_question.constraints or "[]",
+                    starter_code=cans.coding_question.starter_code,
+                    topic=cans.coding_question.topic or "Algorithms",
+                    difficulty=cans.coding_question.difficulty or "Medium",
+                    marks=cans.coding_question.marks or 0
+                )
+            else:
+                cq_nested = CodingQuestionBasic(
+                    id=cans.coding_question_id, paper_id=0, title="", problem_statement="",
+                    examples="[]", constraints="[]", starter_code="", topic="", difficulty="", marks=0
+                )
+
+            coding_answers_nested.append(CodingAnswersData(
+                id=cans.id,
+                interview_result_id=cans.interview_result_id,
+                coding_question_id=cq_nested,
+                candidate_answer=cans.candidate_answer or "",
+                feedback=cans.feedback or "",
+                score=cans.score or 0.0,
+                audio_path=cans.audio_path or "",
+                transcribed_text=cans.transcribed_text or "",
+                timestamp=cans.timestamp or datetime.now(timezone.utc)
+            ))
+
     # 7. Top Level Result
     result_detail = AdminResultData(
         id=s.result.id,
         interviewData=session_nested,
         Interview_response=answers_nested,
+        Coding_response=coding_answers_nested,
         total_score=s.result.total_score or 0.0,
         result_status=s.result.result_status or "PENDING",
         created_at=s.result.created_at or datetime.now(timezone.utc)
