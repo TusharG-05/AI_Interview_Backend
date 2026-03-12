@@ -11,6 +11,7 @@ class UserNested(BaseModel):
     resume_text: Optional[str] = None
     profile_image: Optional[str] = None
     face_embedding: Optional[str] = None
+    team_id: Optional[int] = None
 
 class QuestionPaperNested(BaseModel):
     id: int

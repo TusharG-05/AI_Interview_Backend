@@ -16,6 +16,7 @@ class UserPublic(BaseModel):
     full_name: str
     role: str
     profile_image: Optional[str] = None
+    team_id: Optional[int] = None
     
     class Config:
         from_attributes = True
@@ -42,7 +43,8 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
             "email": "deleted@user.com",
             "full_name": fallback_name or "Deleted User",
             "role": fallback_role,
-            "profile_image": None
+            "profile_image": None,
+            "team_id": None
         }
     
     role_key = user.role.value if isinstance(user.role, UserRole) else str(user.role)
@@ -63,7 +65,8 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "team": team_data
+        "team": team_data,
+        "team_id": user.team_id
     }
 
 
@@ -94,5 +97,6 @@ def serialize_user_flat(user: User) -> Dict[str, Any]:
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "team": team_data
+        "team": team_data,
+        "team_id": user.team_id
     }

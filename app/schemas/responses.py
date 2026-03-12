@@ -187,6 +187,7 @@ class UserRead(BaseModel):
     full_name: str
     role: str
     team: Optional[TeamReadBasic] = None
+    team_id: Optional[int] = None
 
 class UserMeResponse(BaseModel):
     """Complete user profile response for /auth/me endpoint"""
@@ -199,6 +200,7 @@ class UserMeResponse(BaseModel):
     has_face_embedding: bool = False
     resume_text: Optional[str] = None
     team: Optional[TeamReadBasic] = None
+    team_id: Optional[int] = None
 
 class Token(BaseModel):
     access_token: str
@@ -209,6 +211,7 @@ class Token(BaseModel):
     role: str
     expires_at: str
     team: Optional[TeamReadBasic] = None
+    team_id: Optional[int] = None
 
 class InterviewSessionDetail(BaseModel):
     id: int

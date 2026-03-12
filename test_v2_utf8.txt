@@ -1,0 +1,336 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\Sameer\OneDrive\Desktop\AI_Interview_Backend\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\Sameer\OneDrive\Desktop\AI_Interview_Backend
+configfile: pytest.ini
+plugins: anyio-4.12.1, langsmith-0.6.6, asyncio-1.3.0
+asyncio: mode=Mode.AUTO, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 1 item
+
+tests/unit/test_team_id_v2.py::test_team_id_in_responses FAILED          [100%]
+tests/unit/test_team_id_v2.py::test_team_id_in_responses ERROR           [100%]
+
+=================================== ERRORS ====================================
+_______________ ERROR at teardown of test_team_id_in_responses ________________
+
+self = <sqlalchemy.engine.base.Connection object at 0x000001C9B05D2210>
+dialect = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x000001C9B099BC90>
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000001C9B40F9210>
+statement = <sqlalchemy.dialects.sqlite.base.SQLiteDDLCompiler object at 0x000001C9B40F9610>
+parameters = [()]
+
+    def _exec_single_context(
+        self,
+        dialect: Dialect,
+        context: ExecutionContext,
+        statement: Union[str, Compiled],
+        parameters: Optional[_AnyMultiExecuteParams],
+    ) -> CursorResult[Any]:
+        """continue the _execute_context() method for a single DBAPI
+        cursor.execute() or cursor.executemany() call.
+    
+        """
+        if dialect.bind_typing is BindTyping.SETINPUTSIZES:
+            generic_setinputsizes = context._prepare_set_input_sizes()
+    
+            if generic_setinputsizes:
+                try:
+                    dialect.do_set_input_sizes(
+                        context.cursor, generic_setinputsizes, context
+                    )
+                except BaseException as e:
+                    self._handle_dbapi_exception(
+                        e, str(statement), parameters, None, context
+                    )
+    
+        cursor, str_statement, parameters = (
+            context.cursor,
+            context.statement,
+            context.parameters,
+        )
+    
+        effective_parameters: Optional[_AnyExecuteParams]
+    
+        if not context.executemany:
+            effective_parameters = parameters[0]
+        else:
+            effective_parameters = parameters
+    
+        if self._has_events or self.engine._has_events:
+            for fn in self.dispatch.before_cursor_execute:
+                str_statement, effective_parameters = fn(
+                    self,
+                    cursor,
+                    str_statement,
+                    effective_parameters,
+                    context,
+                    context.executemany,
+                )
+    
+        if self._echo:
+            self._log_info(str_statement)
+    
+            stats = context._get_cache_stats()
+    
+            if not self.engine.hide_parameters:
+                self._log_info(
+                    "[%s] %r",
+                    stats,
+                    sql_util._repr_params(
+                        effective_parameters,
+                        batches=10,
+                        ismulti=context.executemany,
+                    ),
+                )
+            else:
+                self._log_info(
+                    "[%s] [SQL parameters hidden due to hide_parameters=True]",
+                    stats,
+                )
+    
+        evt_handled: bool = False
+        try:
+            if context.execute_style is ExecuteStyle.EXECUTEMANY:
+                effective_parameters = cast(
+                    "_CoreMultiExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_executemany:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_executemany(
+                        cursor,
+                        str_statement,
+                        effective_parameters,
+                        context,
+                    )
+            elif not effective_parameters and context.no_parameters:
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute_no_params:
+                        if fn(cursor, str_statement, context):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+                    self.dialect.do_execute_no_params(
+                        cursor, str_statement, context
+                    )
+            else:
+                effective_parameters = cast(
+                    "_CoreSingleExecuteParams", effective_parameters
+                )
+                if self.dialect._has_events:
+                    for fn in self.dialect.dispatch.do_execute:
+                        if fn(
+                            cursor,
+                            str_statement,
+                            effective_parameters,
+                            context,
+                        ):
+                            evt_handled = True
+                            break
+                if not evt_handled:
+>                   self.dialect.do_execute(
+                        cursor, str_statement, effective_parameters, context
+                    )
+
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x000001C9B099BC90>
+cursor = <sqlite3.Cursor object at 0x000001C9B3F866C0>
+statement = '\nDROP TABLE user', parameters = ()
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000001C9B40F9210>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlite3.IntegrityError: FOREIGN KEY constraint failed
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+
+The above exception was the direct cause of the following exception:
+
+    @pytest.fixture(name="session", scope="function")
+    def mock_db_session():
+        """
+        Creates an in-memory SQLite database for the session.
+        """
+        from app.models.db_models import User, UserRole
+        from app.auth.security import get_password_hash
+    
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool
+        )
+    
+        # Enable SQLite foreign key enforcement
+        from sqlalchemy import event
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+    
+        SQLModel.metadata.create_all(engine)
+        with Session(engine) as session:
+            yield session
+>       SQLModel.metadata.drop_all(engine)
+
+tests\conftest.py:74: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+.venv\Lib\site-packages\sqlalchemy\sql\schema.py:5956: in drop_all
+    bind._run_ddl_visitor(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:3260: in _run_ddl_visitor
+    conn._run_ddl_visitor(visitorcallable, element, **kwargs)
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2467: in _run_ddl_visitor
+    ).traverse_single(element)
+      ^^^^^^^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\sql\visitors.py:661: in traverse_single
+    return meth(obj, **kw)
+           ^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:1142: in visit_metadata
+    self.traverse_single(
+.venv\Lib\site-packages\sqlalchemy\sql\visitors.py:661: in traverse_single
+    return meth(obj, **kw)
+           ^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:1209: in visit_table
+    DropTable(table)._invoke_with(self.connection)
+.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:321: in _invoke_with
+    return bind.execute(self)
+           ^^^^^^^^^^^^^^^^^^
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1419: in execute
+    return meth(
+.venv\Lib\site-packages\sqlalchemy\sql\ddl.py:187: in _execute_on_connection
+    return connection._execute_ddl(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1530: in _execute_ddl
+    ret = self._execute_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1846: in _execute_context
+    return self._exec_single_context(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1986: in _exec_single_context
+    self._handle_dbapi_exception(
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:2363: in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+.venv\Lib\site-packages\sqlalchemy\engine\base.py:1967: in _exec_single_context
+    self.dialect.do_execute(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <sqlalchemy.dialects.sqlite.pysqlite.SQLiteDialect_pysqlite object at 0x000001C9B099BC90>
+cursor = <sqlite3.Cursor object at 0x000001C9B3F866C0>
+statement = '\nDROP TABLE user', parameters = ()
+context = <sqlalchemy.dialects.sqlite.base.SQLiteExecutionContext object at 0x000001C9B40F9210>
+
+    def do_execute(self, cursor, statement, parameters, context=None):
+>       cursor.execute(statement, parameters)
+E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) FOREIGN KEY constraint failed
+E       [SQL: 
+E       DROP TABLE user]
+E       (Background on this error at: https://sqlalche.me/e/20/gkpj)
+
+.venv\Lib\site-packages\sqlalchemy\engine\default.py:952: IntegrityError
+---------------------------- Captured stdout call -----------------------------
+\u2713 /auth/me has team_id
+================================== FAILURES ===================================
+__________________________ test_team_id_in_responses __________________________
+
+session = <sqlmodel.orm.session.Session object at 0x000001C9B0862790>
+client = <starlette.testclient.TestClient object at 0x000001C9B3A66290>
+
+    def test_team_id_in_responses(session, client):
+        # 1. Setup Data
+        # Create a real Team first to satisfy foreign key constraints
+        test_team = Team(name="Test Team", description="Verification Team")
+        session.add(test_team)
+        session.commit()
+        session.refresh(test_team)
+    
+        TEST_TEAM_ID = test_team.id
+    
+        # Admin
+        admin = User(
+            email="admin_team@test.com",
+            full_name="Admin Team",
+            password_hash=get_password_hash("test"),
+            role=UserRole.ADMIN,
+            team_id=TEST_TEAM_ID
+        )
+        session.add(admin)
+        session.commit()
+        session.refresh(admin)
+    
+        admin_token = create_access_token(data={"sub": admin.email})
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    
+        # Candidate
+        candidate = User(
+            email="cand_team@test.com",
+            full_name="Candidate Team",
+            password_hash=get_password_hash("test"),
+            role=UserRole.CANDIDATE,
+            team_id=TEST_TEAM_ID
+        )
+        session.add(candidate)
+        session.commit()
+        session.refresh(candidate)
+    
+        cand_token = create_access_token(data={"sub": candidate.email})
+        cand_headers = {"Authorization": f"Bearer {cand_token}"}
+    
+        # Paper
+        paper = QuestionPaper(name="Team Paper", adminUser=admin.id)
+        session.add(paper)
+        session.commit()
+        session.refresh(paper)
+    
+        # Interview
+        interview = InterviewSession(
+            admin_id=admin.id,
+            candidate_id=candidate.id,
+            paper_id=paper.id,
+            schedule_time=datetime.now(timezone.utc),
+            duration_minutes=60,
+            status=InterviewStatus.SCHEDULED,
+            access_token="test-token-123",
+            team_id=TEST_TEAM_ID
+        )
+        session.add(interview)
+        session.commit()
+        session.refresh(interview)
+    
+        # Result
+        result = InterviewResult(interview_id=interview.id)
+        session.add(result)
+        session.commit()
+    
+        # 2. Test /auth/me
+        response = client.get("/api/auth/me", headers=admin_headers)
+        assert response.status_code == 200
+        r_data = response.json()["data"]
+        assert r_data["team_id"] == TEST_TEAM_ID
+        print("\u2713 /auth/me has team_id")
+    
+        # 3. Test /interview/access/{token}
+        response = client.get(f"/api/interview/access/{interview.access_token}")
+>       assert response.status_code == 200
+E       assert 401 == 200
+E        +  where 401 = <Response [401 Unauthorized]>.status_code
+
+tests\unit\test_team_id_v2.py:81: AssertionError
+---------------------------- Captured stdout call -----------------------------
+\u2713 /auth/me has team_id
+============================== warnings summary ===============================
+tests/unit/test_team_id_v2.py::test_team_id_in_responses
+  C:\Users\Sameer\OneDrive\Desktop\AI_Interview_Backend\tests\conftest.py:74: SAWarning: Can't sort tables for DROP; an unresolvable foreign key dependency exists between tables: team, user; and backend does not support ALTER.  To restore at least a partial sort, apply use_alter=True to ForeignKey and ForeignKeyConstraint objects involved in the cycle to mark these as known cycles that will be ignored.
+    SQLModel.metadata.drop_all(engine)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/unit/test_team_id_v2.py::test_team_id_in_responses - assert 401 ...
+ERROR tests/unit/test_team_id_v2.py::test_team_id_in_responses - sqlalchemy.e...
+==================== 1 failed, 1 warning, 1 error in 2.31s ====================

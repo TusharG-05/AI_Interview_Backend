@@ -9,6 +9,7 @@ class LoginUserNested(BaseModel):
     full_name: str
     role: str
     access_token: Optional[str] = None
+    team_id: Optional[int] = None
 
 class QuestionData(BaseModel):
     id: int

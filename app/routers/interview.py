@@ -152,7 +152,8 @@ async def access_interview(
             email=session.candidate.email,
             full_name=session.candidate.full_name,
             role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token
+            access_token=session.candidate.access_token,
+            team_id=session.candidate.team_id
         )
 
     admin_data = None
@@ -162,7 +163,8 @@ async def access_interview(
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token
+            access_token=session.admin.access_token,
+            team_id=session.admin.team_id
         )
 
     paper_data = None
