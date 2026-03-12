@@ -60,6 +60,14 @@ class CodingPaperNested(BaseModel):
     created_at: datetime
     coding_questions: List[CodingQuestionNested] = []
 
+class LoginUserNested(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    role: str
+    access_token: Optional[str] = None
+    team_id: Optional[int] = None
+
 class InterviewAccessResponse(BaseModel):
     id: int
     access_token: str
@@ -110,6 +118,7 @@ class QuestionData(BaseModel):
             except (_json.JSONDecodeError, TypeError):
                 pass
         return self
+
 class QuestionPaperData(BaseModel):
     id: int
     name: str
@@ -178,10 +187,50 @@ class InterviewSessionData(BaseModel):
     allow_copy_paste: bool = False
     result_status: Optional[str] = "PENDING"
 
+class CodingQuestionBasic(BaseModel):
+    id: int
+    paper_id: int
+    title: str
+    problem_statement: str
+    examples: List[dict] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+    topic: str
+    difficulty: str
+    marks: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_json_fields(cls, data: Any) -> Any:
+        """Parse JSON-encoded examples and constraints strings into Python lists."""
+        if isinstance(data, dict):
+            # Already a dict, handle potential string fields within it
+            data = dict(data)
+            for field in ("examples", "constraints"):
+                raw = data.get(field)
+                if isinstance(raw, str):
+                    try:
+                        data[field] = _json.loads(raw)
+                    except (_json.JSONDecodeError, TypeError):
+                        data[field] = []
+        return data
+
+class CodingAnswersData(BaseModel):
+    id: int
+    interview_result_id: int
+    coding_question_id: CodingQuestionBasic
+    candidate_answer: str
+    feedback: str
+    score: float
+    audio_path: str
+    transcribed_text: str
+    timestamp: datetime
+
 class AdminResultData(BaseModel):
     id: int
     interview_data: InterviewSessionData
     interview_responses: List[AnswersDataAdmin] = []
+    coding_responses: List[CodingAnswersData] = []
     total_score: float
     result_status: Optional[str] = "PENDING"
     created_at: datetime

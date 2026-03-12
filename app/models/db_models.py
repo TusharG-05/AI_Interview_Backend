@@ -286,6 +286,10 @@ class InterviewResult(SQLModel, table=True):
         back_populates="interview_result",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
     )
+    coding_answers: List["CodingAnswers"] = Relationship(
+        back_populates="interview_result",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 class Answers(SQLModel, table=True):
     """Formerly named 'InterviewResponse'"""
@@ -313,6 +317,31 @@ class Answers(SQLModel, table=True):
     coding_question: Optional[CodingQuestions] = Relationship()
 
 
+class CodingAnswers(SQLModel, table=True):
+    """Answers specifically for coding questions."""
+    __tablename__ = "codinganswers"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    interview_result_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewresult.id", ondelete="CASCADE"))
+    )
+    coding_question_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("codingquestions.id", ondelete="CASCADE"))
+    )
+
+    candidate_answer: str = Field(default="")
+    feedback: str = Field(default="")
+    score: float = Field(default=0.0)
+    audio_path: str = Field(default="")
+    transcribed_text: str = Field(default="")
+
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    # Relationships
+    interview_result: InterviewResult = Relationship(back_populates="coding_answers")
+    coding_question: CodingQuestions = Relationship()
+
+
 # Rebuild models
 User.model_rebuild()
 Team.model_rebuild()
@@ -326,3 +355,4 @@ InterviewResult.model_rebuild()
 Answers.model_rebuild()
 ProctoringEvent.model_rebuild()
 StatusTimeline.model_rebuild()
+CodingAnswers.model_rebuild()

@@ -163,3 +163,11 @@ class CodingQuestionUpdate(BaseModel):
     topic: Optional[str] = None
     difficulty: Optional[str] = None
     marks: Optional[int] = None
+
+class CodingAnswerRequest(BaseModel):
+    """Request schema for submitting a coding answer."""
+    interview_id: int
+    question_id: int
+    answer_code: str
+    feedback: Optional[str] = None
+    score: Optional[float] = None
