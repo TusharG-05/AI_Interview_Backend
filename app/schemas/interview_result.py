@@ -2,34 +2,13 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 
-class UserNested(BaseModel):
-    id: int
-    email: str
-    full_name: str
-    role: str
-    access_token: Optional[str] = None
-    resume_text: Optional[str] = None
-    profile_image: Optional[str] = None
-    face_embedding: Optional[str] = None
-
-class QuestionPaperNested(BaseModel):
-    id: int
-    name: str
-    description: str = ""
-    adminUser: Optional[int] = None
-    question_count: int = 0
-    total_marks: int = 0
-    created_at: datetime
-
-class QuestionNested(BaseModel):
-    id: int
-    paper_id: Optional[int] = None
-    content: Optional[str] = None
-    question_text: Optional[str] = None
-    topic: Optional[str] = None
-    difficulty: str
-    marks: int
-    response_type: str
+from .interview_responses import (
+    LoginUserNested as UserNested,
+    QuestionPaperData as QuestionPaperNested,
+    QuestionNested,
+    CodingQuestionNested,
+    CodingPaperNested
+)
 
 class InterviewSessionNested(BaseModel):
     id: int
@@ -38,6 +17,7 @@ class InterviewSessionNested(BaseModel):
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
     question_paper: Optional[QuestionPaperNested] = None
+    coding_paper: Optional[CodingPaperNested] = None
     schedule_time: Optional[datetime] = None
     duration_minutes: int = 1440
     max_questions: Optional[int] = None
@@ -59,6 +39,7 @@ class AnswersNested(BaseModel):
     id: int
     interview_result_id: int
     question: Optional[QuestionNested] = None
+    coding_question: Optional[CodingQuestionNested] = None
     
     candidate_answer: Optional[str] = None
     feedback: Optional[str] = None
