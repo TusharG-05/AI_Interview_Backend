@@ -57,7 +57,6 @@ def _build_paper_full(
         questions=[_build_question_full(q) for q in questions],
         created_at=paper.created_at.isoformat(),
         created_by=serialize_user(admin_user) if admin_user else None,
-        team_id=paper.team_id,
     )
 
 
@@ -72,17 +71,10 @@ async def create_coding_paper(
     session: Session = Depends(get_session),
 ) -> ApiResponse[CodingPaperFull]:
     """Create a new coding question paper."""
-    # Validate team if provided
-    if paper_data.team_id is not None:
-        team = session.get(Team, paper_data.team_id)
-        if not team:
-            raise HTTPException(status_code=404, detail=f"Team with id {paper_data.team_id} not found")
-
     paper = CodingQuestionPaper(
         name=paper_data.name,
         description=paper_data.description or "",
         adminUser=current_user.id,
-        team_id=paper_data.team_id,
     )
     session.add(paper)
     try:
@@ -101,14 +93,11 @@ async def create_coding_paper(
 
 @router.get("/", response_model=ApiResponse[List[CodingPaperFull]])
 async def list_coding_papers(
-    team_id: Optional[int] = None,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session),
 ) -> ApiResponse[List[CodingPaperFull]]:
-    """List all coding papers owned by the current admin, optionally filtered by team."""
+    """List all coding papers owned by the current admin."""
     stmt = select(CodingQuestionPaper).where(CodingQuestionPaper.adminUser == current_user.id)
-    if team_id is not None:
-        stmt = stmt.where(CodingQuestionPaper.team_id == team_id)
     papers = session.exec(stmt).all()
 
     result = []

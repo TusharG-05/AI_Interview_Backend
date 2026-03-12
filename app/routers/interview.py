@@ -3,14 +3,14 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions
-from ..schemas.requests import AnswerRequest
+from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers
+from ..schemas.requests import AnswerRequest, CodingAnswerRequest
 from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..services import interview as interview_service
 from ..services.audio import AudioService
 from ..schemas.responses import InterviewAccessResponse
 from ..schemas.interview_result import UserNested, QuestionPaperNested
-from ..schemas.interview_responses import InterviewSessionData, LoginUserNested, QuestionPaperData, QuestionData
+from ..schemas.interview_responses import InterviewSessionData, LoginUserNested, QuestionPaperData, QuestionData, CodingAnswersData, CodingQuestionBasic
 from ..schemas.api_response import ApiResponse
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
@@ -979,6 +979,159 @@ async def submit_answer_text(
         status_code=200,
         data=answer_data,
         message="Text answer submitted and evaluated successfully"
+    )
+
+@router.post("/submit-answer-code", response_model=ApiResponse[CodingAnswersData])
+async def submit_answer_code(
+    request: CodingAnswerRequest,
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Submits a coding answer for a problem.
+    Saves the response to the dedicated CodingAnswers table.
+    """
+    interview_id = request.interview_id
+    question_id = request.question_id
+    answer_text = request.answer_code
+
+    # Verify session exists
+    session = session_db.get(InterviewSession, interview_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Get or Create InterviewResult
+    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+    if not result:
+        try:
+            result = InterviewResult(interview_id=interview_id)
+            session_db.add(result)
+            session_db.commit()
+            session_db.refresh(result)
+        except Exception:
+            session_db.rollback()
+            result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+            if not result:
+                raise HTTPException(status_code=500, detail="Failed to initialize interview results")
+
+    # Handle proxy question ID logic
+    # Candidates might submit against the proxy Questions ID or the real CodingQuestions ID
+    real_coding_q_id = None
+    proxy_q = session_db.get(Questions, question_id)
+    
+    if proxy_q and proxy_q.question_text.startswith("__coding__"):
+        try:
+            real_coding_q_id = int(proxy_q.question_text.split("__coding__")[1])
+        except (ValueError, IndexError):
+            raise HTTPException(status_code=400, detail="Invalid coding question proxy ID")
+    else:
+        # Check if it's already a real CodingQuestions ID
+        coding_q = session_db.get(CodingQuestions, question_id)
+        if coding_q:
+            real_coding_q_id = coding_q.id
+        else:
+            raise HTTPException(status_code=404, detail="Coding question not found")
+
+    coding_q = session_db.get(CodingQuestions, real_coding_q_id)
+    if not coding_q:
+        raise HTTPException(status_code=404, detail="Real coding question not found")
+
+    # Check if answer already exists
+    answer = session_db.exec(
+        select(CodingAnswers).where(
+            CodingAnswers.interview_result_id == result.id,
+            CodingAnswers.coding_question_id == real_coding_q_id
+        )
+    ).first()
+
+    if answer:
+        answer.candidate_answer = answer_text
+        if request.feedback is not None:
+            answer.feedback = request.feedback
+        if request.score is not None:
+            answer.score = request.score
+        answer.timestamp = datetime.now(timezone.utc)
+    else:
+        answer = CodingAnswers(
+            interview_result_id=result.id,
+            coding_question_id=real_coding_q_id,
+            candidate_answer=answer_text,
+            feedback=request.feedback or "",
+            score=request.score if request.score is not None else 0.0
+        )
+    
+    session_db.add(answer)
+    session_db.commit()
+    session_db.refresh(answer)
+
+    # ── Evaluation ───────────────────────────────────────────────────────────
+    # We use a similar logic to _evaluate_and_update_score but adapted for coding
+    try:
+        logger.info(f"Coding Answer {answer.id}: running evaluation...")
+        evaluation = interview_service.evaluate_code_submission(
+            problem_title=coding_q.title,
+            problem_statement=coding_q.problem_statement,
+            code=answer_text
+        )
+        
+        answer.feedback = evaluation.get("feedback", "")
+        answer.score = float(evaluation.get("score") or 0.0)
+        session_db.add(answer)
+        
+        # Recompute running total_score
+        # Sum both standard answers and coding answers
+        std_answers = session_db.exec(
+            select(Answers).where(Answers.interview_result_id == result.id)
+        ).all()
+        cod_answers = session_db.exec(
+            select(CodingAnswers).where(CodingAnswers.interview_result_id == result.id)
+        ).all()
+        
+        all_scores = [a.score for a in std_answers if a.score is not None]
+        all_scores += [a.score for a in cod_answers if a.score is not None]
+        
+        new_total = calculate_total_score(all_scores)
+        result.total_score = new_total
+        session.total_score = new_total
+        
+        session_db.add(result)
+        session_db.add(session)
+        session_db.commit()
+        session_db.refresh(answer)
+    except Exception as e:
+        logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
+        session_db.rollback()
+
+    import json as _json
+    q_data = CodingQuestionBasic(
+        id=coding_q.id,
+        paper_id=coding_q.paper_id,
+        title=coding_q.title,
+        problem_statement=coding_q.problem_statement,
+        examples=_json.loads(coding_q.examples) if isinstance(coding_q.examples, str) else coding_q.examples,
+        constraints=_json.loads(coding_q.constraints) if isinstance(coding_q.constraints, str) else coding_q.constraints,
+        starter_code=coding_q.starter_code,
+        topic=coding_q.topic,
+        difficulty=coding_q.difficulty,
+        marks=coding_q.marks
+    )
+
+    answer_data = CodingAnswersData(
+        id=answer.id,
+        interview_result_id=answer.interview_result_id,
+        coding_question_id=q_data,
+        candidate_answer=answer.candidate_answer,
+        feedback=answer.feedback,
+        score=answer.score,
+        audio_path=answer.audio_path,
+        transcribed_text=answer.transcribed_text,
+        timestamp=answer.timestamp
+    )
+
+    return ApiResponse(
+        status_code=200,
+        data=answer_data,
+        message="Coding answer submitted and evaluated successfully"
     )
 
 
