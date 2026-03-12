@@ -1467,7 +1467,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All results retrieved successfully"
     )
 
-from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, QuestionPaperData
+from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, QuestionPaperData, CodingAnswersData, CodingQuestionBasic
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
 async def get_result(
