@@ -32,6 +32,7 @@ class QuestionData(BaseModel):
             except (_json.JSONDecodeError, TypeError):
                 pass
         return self
+
 class QuestionPaperData(BaseModel):
     id: int
     name: str
@@ -89,15 +90,6 @@ class InterviewSessionData(BaseModel):
     allow_copy_paste: bool = False
     result_status: Optional[str] = "PENDING"
 
-class AdminResultData(BaseModel):
-    id: int
-    interviewData: InterviewSessionData
-    Interview_response: List[AnswersDataAdmin] = []
-    Coding_response: List[CodingAnswersData] = []
-    total_score: float
-    result_status: Optional[str] = "PENDING"
-    created_at: datetime
-
 class CodingQuestionBasic(BaseModel):
     id: int
     paper_id: int
@@ -136,3 +128,12 @@ class CodingAnswersData(BaseModel):
     audio_path: str
     transcribed_text: str
     timestamp: datetime
+
+class AdminResultData(BaseModel):
+    id: int
+    interviewData: InterviewSessionData
+    Interview_response: List[AnswersDataAdmin] = []
+    Coding_response: List[CodingAnswersData] = []
+    total_score: float
+    result_status: Optional[str] = "PENDING"
+    created_at: datetime
