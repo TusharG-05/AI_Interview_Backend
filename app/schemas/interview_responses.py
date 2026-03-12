@@ -2,29 +2,7 @@ from typing import List, Optional, Union, Any
 from pydantic import BaseModel, Field, model_validator
 from datetime import datetime
 import json as _json
-
-class LoginUserNested(BaseModel):
-    id: int
-    email: str
-    full_name: str
-    role: str
-    access_token: Optional[str] = None
-
-# --- New Flattened Schemas for Interview Access API ---
-
-class AdminNested(BaseModel):
-    id: int
-    email: str
-    full_name: str
-    role: str
-    access_token: Optional[str] = None
-
-class CandidateNested(BaseModel):
-    id: int
-    email: str
-    full_name: str
-    role: str
-    access_token: Optional[str] = None
+from .user_schemas import UserNested
 
 class QuestionNested(BaseModel):
     id: int
@@ -40,7 +18,7 @@ class PaperNested(BaseModel):
     id: int
     name: str
     description: str
-    adminUser: Union[AdminNested, int]  # Restore nested adminUser
+    admin_user: UserNested  # Always use UserNested object for consistency
     question_count: int
     total_marks: int
     created_at: datetime
@@ -76,7 +54,7 @@ class CodingPaperNested(BaseModel):
     id: int
     name: str
     description: str
-    adminUser: Union[AdminNested, int] # Restore nested adminUser
+    admin_user: UserNested  # Always use UserNested object for consistency
     question_count: int
     total_marks: int
     created_at: datetime
@@ -85,10 +63,10 @@ class CodingPaperNested(BaseModel):
 class InterviewAccessResponse(BaseModel):
     id: int
     access_token: str
-    admin: Optional[AdminNested] = None
-    candidate: Optional[CandidateNested] = None
-    paper: Optional[PaperNested] = None
-    coding_paper: Optional[CodingPaperNested] = None
+    admin_user: Optional[UserNested] = None  # Consistent UserNested type
+    candidate_user: Optional[UserNested] = None
+    paper_id: Optional[PaperNested] = None
+    coding_paper_id: Optional[CodingPaperNested] = None
     schedule_time: datetime
     duration_minutes: int
     max_questions: int
@@ -136,7 +114,7 @@ class QuestionPaperData(BaseModel):
     id: int
     name: str
     description: str
-    adminUser: Union[LoginUserNested, int]  # Handles object or FK int depending on endpoint
+    admin_user: Union[UserNested, int]  # Handles object or FK int depending on endpoint
     question_count: Optional[int] = None
     questions: Optional[List[QuestionData]] = None
     total_marks: Optional[int] = None
@@ -145,7 +123,7 @@ class QuestionPaperData(BaseModel):
 class AnswersData(BaseModel):
     id: int
     interview_result_id: int
-    Question_id: QuestionData  # Uppercase Q specifically requested for submit-answer
+    question_id: QuestionData
     candidate_answer: str
     feedback: str
     score: float
@@ -177,8 +155,8 @@ class AnswersDataAdmin(BaseModel):
 class InterviewSessionData(BaseModel):
     id: int
     access_token: str
-    admin_id: Optional[LoginUserNested] = None
-    candidate_id: Optional[LoginUserNested] = None
+    admin_user: Optional[UserNested] = None
+    candidate_user: Optional[UserNested] = None
     paper_id: Optional[QuestionPaperData] = None
     coding_paper_id: Optional[CodingPaperNested] = None
     schedule_time: datetime
@@ -202,8 +180,8 @@ class InterviewSessionData(BaseModel):
 
 class AdminResultData(BaseModel):
     id: int
-    interviewData: InterviewSessionData
-    Interview_response: List[AnswersDataAdmin] = []
+    interview_data: InterviewSessionData
+    interview_responses: List[AnswersDataAdmin] = []
     total_score: float
     result_status: Optional[str] = "PENDING"
     created_at: datetime

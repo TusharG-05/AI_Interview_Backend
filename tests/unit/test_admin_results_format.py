@@ -22,7 +22,7 @@ def test_print_admin_results_format(session, client):
     headers = {"Authorization": f"Bearer {token}"}
     
     # 2. Setup Paper & Question
-    paper = QuestionPaper(name="Format Paper", adminUser=admin.id)
+    paper = QuestionPaper(name="Format Paper", admin_user=admin.id)
     session.add(paper)
     session.commit()
     session.refresh(paper)
@@ -91,7 +91,7 @@ def test_print_admin_results_format(session, client):
     
     # Simple assertions to verify top-level requested keys exist
     data = response.json()["data"]
-    assert "interviewData" in data
-    assert "Interview_response" in data
-    assert len(data["Interview_response"]) > 0
-    assert "question_id" in data["Interview_response"][0]
+    assert "interview_data" in data
+    assert "interview_response" in data
+    assert len(data["interview_response"]) > 0
+    assert "question_id" in data["interview_response"][0]

@@ -74,7 +74,7 @@ async def create_coding_paper(
     paper = CodingQuestionPaper(
         name=paper_data.name,
         description=paper_data.description or "",
-        adminUser=current_user.id,
+        admin_user=current_user.id,
     )
     session.add(paper)
     try:
@@ -97,7 +97,7 @@ async def list_coding_papers(
     session: Session = Depends(get_session),
 ) -> ApiResponse[List[CodingPaperFull]]:
     """List all coding papers owned by the current admin."""
-    stmt = select(CodingQuestionPaper).where(CodingQuestionPaper.adminUser == current_user.id)
+    stmt = select(CodingQuestionPaper).where(CodingQuestionPaper.admin_user == current_user.id)
     papers = session.exec(stmt).all()
 
     result = []
@@ -122,7 +122,7 @@ async def get_coding_paper(
 ) -> ApiResponse[CodingPaperFull]:
     """Get a single coding paper with all its questions."""
     paper = session.get(CodingQuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Coding paper not found")
 
     questions = session.exec(
@@ -145,7 +145,7 @@ async def update_coding_paper(
 ) -> ApiResponse[CodingPaperFull]:
     """Update a coding paper's name or description."""
     paper = session.get(CodingQuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Coding paper not found")
 
     changes = update_data.model_dump(exclude_unset=True)
@@ -182,7 +182,7 @@ async def delete_coding_paper(
     Fails if the paper is linked to any scheduled or live interview.
     """
     paper = session.get(CodingQuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Coding paper not found")
 
     in_use = session.exec(
@@ -221,7 +221,7 @@ async def add_coding_question(
 ) -> ApiResponse[CodingQuestionFull]:
     """Add a new coding problem to an existing coding paper."""
     paper = session.get(CodingQuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Coding paper not found")
 
     question = CodingQuestions(
@@ -264,7 +264,7 @@ async def list_coding_questions(
 ) -> ApiResponse[List[CodingQuestionFull]]:
     """List all questions belonging to a specific coding paper."""
     paper = session.get(CodingQuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Coding paper not found")
 
     questions = session.exec(
@@ -292,7 +292,7 @@ async def update_coding_question(
 
     # Verify ownership via parent paper
     paper = session.get(CodingQuestionPaper, question.paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorised to update this question")
 
     old_marks = question.marks
@@ -339,7 +339,7 @@ async def delete_coding_question(
         raise HTTPException(status_code=404, detail="Coding question not found")
 
     paper = session.get(CodingQuestionPaper, question.paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorised to delete this question")
 
     # Update paper counters

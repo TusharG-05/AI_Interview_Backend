@@ -3,7 +3,7 @@ import requests
 import json
 import time
 
-BASE_URL = "https://ichigo253-ai-interview-backend.hf.space"
+BASE_URL = "https://localhost:8001"
 # Credentials for testing
 ADMIN_EMAIL = "admin@test.com"
 ADMIN_PASSWORD = "admin123" 
@@ -15,6 +15,7 @@ class APITester:
     def __init__(self, base_url):
         self.base_url = base_url
         self.session = requests.Session()
+        self.session.verify = False # Disable verification for self-signed certs
         self.results = []
         self.token = PROVIDED_TOKEN
         if self.token:

@@ -29,7 +29,7 @@ def test_coding_interview_flow(client, session, auth_headers, test_users):
     coding_paper = CodingQuestionPaper(
         name="Advanced Python Coding",
         description="Test your Python skills",
-        adminUser=admin.id
+        admin_user=admin.id
     )
     session.add(coding_paper)
     session.commit()

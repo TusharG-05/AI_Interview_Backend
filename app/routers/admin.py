@@ -75,7 +75,7 @@ async def list_papers(
     session: Session = Depends(get_session)
 ):
     """List all question papers created by the admin."""
-    stmt = select(QuestionPaper).where(QuestionPaper.adminUser == current_user.id)
+    stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
     papers = session.exec(stmt).all()
     papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
@@ -112,7 +112,7 @@ async def create_paper(
     new_paper = QuestionPaper(
         name=paper_data.name,
         description=paper_data.description or "",
-        adminUser=current_user.id
+        admin_user=current_user.id
     )
     session.add(new_paper)
     try:
@@ -140,7 +140,7 @@ async def get_paper(
 ):
     """Get details of a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
@@ -168,7 +168,7 @@ async def update_paper(
 ):
     """Update a question paper's name or description."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     
     update_data = paper_update.model_dump(exclude_unset=True)
@@ -209,7 +209,7 @@ async def delete_paper(
 ):
     """Delete a question paper and all its associated questions."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     
     # Check for existing sessions using this paper
@@ -242,7 +242,7 @@ async def add_question_to_paper(
 ):
     """API for manually adding a new interview question to a paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
         
     new_q = Questions(
@@ -275,7 +275,7 @@ async def list_paper_questions(
 ):
     """List all questions belonging to a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.adminUser != current_user.id:
+    if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
     questions = session.exec(select(Questions).where(Questions.paper_id == paper_id)).all()
     return ApiResponse(
@@ -335,7 +335,7 @@ async def generate_paper(
             f"Experience: {request_data.years_of_experience} years. "
             f"Questions: {request_data.num_questions}."
         ),
-        adminUser=current_user.id
+        admin_user=current_user.id
     )
     session.add(new_paper)
     try:
@@ -443,7 +443,7 @@ async def generate_coding_paper(
     paper = CodingQuestionPaper(
         name=paper_name,
         description=f"AI Generated coding paper for: {request_data.ai_prompt[:100]}",
-        adminUser=current_user.id
+        admin_user=current_user.id
     )
     session.add(paper)
     session.commit()
@@ -549,7 +549,7 @@ async def upload_document(
     # Verify paper belongs to admin if provided
     if paper_id:
         paper = session.get(QuestionPaper, paper_id)
-        if not paper or paper.adminUser != current_user.id:
+        if not paper or paper.admin_user != current_user.id:
             raise HTTPException(status_code=404, detail="Paper not found")
 
     # 1. Validation (DoS Prevention)
@@ -632,7 +632,7 @@ async def list_all_questions(
     stmt = (
         select(Questions)
         .join(QuestionPaper, isouter=True)
-        .where((QuestionPaper.adminUser == current_user.id) | (Questions.paper_id == None))
+        .where((QuestionPaper.admin_user == current_user.id) | (Questions.paper_id == None))
     )
     questions = session.exec(stmt).all()
     return ApiResponse(
@@ -652,7 +652,7 @@ async def get_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.adminUser != current_user.id:
+    if q.paper and q.paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
     return ApiResponse(
         status_code=200,
@@ -672,7 +672,7 @@ async def update_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.adminUser != current_user.id:
+    if q.paper and q.paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this question")
     
     update_data = q_update.model_dump(exclude_unset=True)
@@ -727,14 +727,14 @@ async def schedule_interview(
     paper = None
     if schedule_data.paper_id is not None:
         paper = session.get(QuestionPaper, schedule_data.paper_id)
-        if not paper or paper.adminUser != current_user.id:
+        if not paper or paper.admin_user != current_user.id:
             raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
 
     # Validate Coding Paper (optional)
     coding_paper = None
     if schedule_data.coding_paper_id is not None:
         coding_paper = session.get(CodingQuestionPaper, schedule_data.coding_paper_id)
-        if not coding_paper or coding_paper.adminUser != current_user.id:
+        if not coding_paper or coding_paper.admin_user != current_user.id:
             raise HTTPException(status_code=400, detail="Invalid Coding Paper ID — paper not found or you do not own it")
 
     # Access fields before any commits to prevent DetachedInstanceError in background tasks
@@ -887,9 +887,9 @@ async def schedule_interview(
     )
 
     link_response = InterviewLinkResponse(
-        interview=interview_detail,
-        admin=admin_dict,
-        candidate=candidate_dict,
+        interview_data=interview_detail,
+        admin_user=admin_dict,
+        candidate_user=candidate_dict,
         access_token=new_session.access_token,
         link=link,
         scheduled_at=format_iso_datetime(new_session.schedule_time),
@@ -925,8 +925,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
         
         results.append(SessionRead(
             id=s.id,
-            admin=admin_dict,
-            candidate=candidate_dict,
+            admin_user=admin_dict,
+            candidate_user=candidate_dict,
             status=s.status.value,
             scheduled_at=format_iso_datetime(s.schedule_time),
             score=s.total_score,
@@ -1010,8 +1010,8 @@ async def get_live_status_dashboard(
         }
         
         results.append(LiveStatusItem(
-            interview=interview_dict,
-            candidate=candidate_dict,
+            interview_data=interview_dict,
+            candidate_user=candidate_dict,
             current_status=interview_session.current_status or None,
             warning_count=interview_session.warning_count or 0,
             warnings_remaining=max(0, (interview_session.max_warnings or 3) - (interview_session.warning_count or 0)),
@@ -1085,7 +1085,7 @@ async def get_interview(
                 "id": interview_session.paper.id,
                 "name": interview_session.paper.name,
                 "description": interview_session.paper.description,
-                "adminUser": paper_admin_dict,
+                "admin_user": paper_admin_dict,
                 "question_count": interview_session.paper.question_count,
                 "questions": paper_questions,
                 "total_marks": interview_session.paper.total_marks,
@@ -1133,7 +1133,7 @@ async def get_interview(
                 "id": interview_session.coding_paper.id,
                 "name": interview_session.coding_paper.name,
                 "description": interview_session.coding_paper.description,
-                "adminUser": None,
+                "admin_user": None,
                 "question_count": interview_session.coding_paper.question_count,
                 "questions": coding_questions,
                 "total_marks": interview_session.coding_paper.total_marks,
@@ -1144,8 +1144,8 @@ async def get_interview(
         detail_read = InterviewSessionExpanded(
             id=interview_session.id,
             access_token=interview_session.access_token,
-            admin_id=admin_dict,
-            candidate_id=candidate_dict,
+            admin_user=admin_dict,
+            candidate_user=candidate_dict,
             paper_id=paper_dict,
             coding_paper_id=coding_paper_dict,
             interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
@@ -1214,7 +1214,7 @@ async def update_interview(
     # Validate paper_id if provided
     if "paper_id" in update_dict:
         paper = session.get(QuestionPaper, update_dict["paper_id"])
-        if not paper or paper.adminUser != current_user.id:
+        if not paper or paper.admin_user != current_user.id:
             raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
     
     # Validate and convert schedule_time if provided
@@ -1300,8 +1300,8 @@ async def update_interview(
     
     detail_read = InterviewDetailRead(
         id=interview_session.id,
-        admin=admin_dict,
-        candidate=candidate_dict,
+        admin_user=admin_dict,
+        candidate_user=candidate_dict,
         paper_id=interview_session.paper_id,
         paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
         schedule_time=interview_session.schedule_time.isoformat(),
@@ -1472,7 +1472,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         if s.paper:
             paper_obj = QuestionPaperNested(
                 id=s.paper.id, name=s.paper.name, description=s.paper.description, 
-                admin_id=s.paper.adminUser, created_at=s.paper.created_at
+                admin_user=s.paper.admin_user, created_at=s.paper.created_at
             )
             
         # 3.1 Coding Paper
@@ -1480,7 +1480,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         if s.coding_paper:
             coding_paper_obj = CodingPaperNested(
                 id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description,
-                adminUser=s.coding_paper.adminUser, created_at=s.coding_paper.created_at,
+                admin_user=s.coding_paper.admin_user, created_at=s.coding_paper.created_at,
                 question_count=s.coding_paper.question_count, total_marks=s.coding_paper.total_marks
             )
             
@@ -1528,7 +1528,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All results retrieved successfully"
     )
 
-from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, QuestionPaperData
+from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, UserNested, QuestionPaperData
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
 async def get_result(
@@ -1569,8 +1569,8 @@ async def get_result(
     # 1. Admin
     admin_obj = None
     if s.admin:
-        admin_obj = LoginUserNested(
-            id=str(s.admin.id), email=s.admin.email, full_name=s.admin.full_name, 
+        admin_obj = UserNested(
+            id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
             access_token=s.admin.access_token
         )
@@ -1578,8 +1578,8 @@ async def get_result(
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
-        candidate_obj = LoginUserNested(
-            id=str(s.candidate.id), email=s.candidate.email, full_name=s.candidate.full_name, 
+        candidate_obj = UserNested(
+            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
             role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
             access_token=s.candidate.access_token
         )
@@ -1587,10 +1587,10 @@ async def get_result(
     # 3. Paper
     paper_obj = None
     if s.paper:
-        # For this endpoint, adminUser is expected to be an int (FK) per user specs
+        # For this endpoint, admin_user is expected to be a UserNested object per schema standardization
         paper_obj = QuestionPaperData(
             id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
-            adminUser=s.paper.adminUser if s.paper.adminUser is not None else 0, created_at=s.paper.created_at,
+            admin_user=serialize_user(p.admin), created_at=s.paper.created_at,  # ← Always UserNested
             question_count=len(s.paper.questions) if hasattr(s.paper, 'questions') else 0,
             total_marks=s.paper.total_marks
         )
@@ -1600,7 +1600,7 @@ async def get_result(
     if s.coding_paper:
         coding_paper_obj = CodingPaperNested(
             id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
-            adminUser=s.coding_paper.adminUser if s.coding_paper.adminUser is not None else 0,
+            admin_user=serialize_user(s.coding_paper.admin_user),  # ← Always UserNested
             question_count=s.coding_paper.question_count,
             total_marks=s.coding_paper.total_marks,
             created_at=s.coding_paper.created_at,
@@ -1617,7 +1617,7 @@ async def get_result(
     # 4. Session Nested (mapped to interviewData)
     session_nested = InterviewSessionData(
         id=s.id, access_token=s.access_token,
-        admin_id=admin_obj, candidate_id=candidate_obj, 
+        admin_user=admin_obj, candidate_user=candidate_obj, 
         paper_id=paper_obj, coding_paper_id=coding_paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
@@ -1672,8 +1672,8 @@ async def get_result(
     # 7. Top Level Result
     result_detail = AdminResultData(
         id=s.result.id,
-        interviewData=session_nested,
-        Interview_response=answers_nested,
+        interview_data=session_nested,
+        interview_responses=answers_nested,
         total_score=s.result.total_score or 0.0,
         result_status=s.result.result_status or "PENDING",
         created_at=s.result.created_at or datetime.now(timezone.utc)
@@ -2154,7 +2154,7 @@ async def check_delete_user(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
     ).all())
     question_papers = len(session.exec(
-        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
+        select(QuestionPaper).where(QuestionPaper.admin_user == user_id)
     ).all())
 
     has_related_data = (interviews_as_admin + interviews_as_candidate + question_papers) > 0
@@ -2219,7 +2219,7 @@ async def delete_user(
     ).all())
     
     papers_count = len(session.exec(
-        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
+        select(QuestionPaper).where(QuestionPaper.admin_user == user_id)
     ).all())
     
     # Store info for response
@@ -2228,7 +2228,7 @@ async def delete_user(
     
     # Delete question papers owned by this user (cascade deletes their questions)
     papers = session.exec(
-        select(QuestionPaper).where(QuestionPaper.adminUser == user_id)
+        select(QuestionPaper).where(QuestionPaper.admin_user == user_id)
     ).all()
     for paper in papers:
         session.delete(paper)

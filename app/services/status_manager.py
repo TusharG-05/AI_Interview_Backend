@@ -327,7 +327,7 @@ def get_status_summary(
     candidate_dict = serialize_user(interview_session.candidate)
     
     return {
-        "interview": {
+        "interview_data": {
             "id": interview_session.id,
             "access_token": interview_session.access_token,
             "admin_id": interview_session.admin_id,
@@ -352,7 +352,7 @@ def get_status_summary(
             "admin_name": interview_session.admin.full_name if interview_session.admin else None,
             "is_completed": interview_session.is_completed or False
         },
-        "candidate": candidate_dict,
+        "candidate_user": candidate_dict,
         "current_status": interview_session.current_status,
         "timeline": [
             {

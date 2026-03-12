@@ -21,6 +21,16 @@ class UserPublic(BaseModel):
         from_attributes = True
 
 
+class UserNested(BaseModel):
+    """Unified nested user representation for consistent API responses."""
+    id: int
+    email: str
+    full_name: str
+    role: str
+    access_token: Optional[str] = None
+    profile_image: Optional[str] = None
+
+
 def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fallback_role: str = "candidate") -> Dict[str, Any]:
     """
     Serialize a User object to a clean flat dict.

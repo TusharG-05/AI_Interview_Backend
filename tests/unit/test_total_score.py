@@ -135,7 +135,7 @@ class TestTotalScoreInResultDetail:
         session.commit()
         session.refresh(candidate)
 
-        paper = QuestionPaper(name="No Score Paper", adminUser=admin.id)
+        paper = QuestionPaper(name="No Score Paper", admin_user=admin.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)
@@ -186,7 +186,7 @@ class TestTotalScoreInResultDetail:
         token2 = create_access_token(data={"sub": admin2.email})
         headers2 = {"Authorization": f"Bearer {token2}"}
 
-        paper = QuestionPaper(name="Nested Score Paper", adminUser=admin2.id)
+        paper = QuestionPaper(name="Nested Score Paper", admin_user=admin2.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)
@@ -225,8 +225,8 @@ class TestTotalScoreInResultDetail:
 
         # Verify both top-level and nested total_score
         assert data["total_score"] == 6.0
-        assert data["interviewData"]["total_score"] == 6.0, (
-            f"Nested interviewData.total_score should be 6.0, got {data['interviewData']['total_score']}"
+        assert data["interview_data"]["total_score"] == 6.0, (
+            f"Nested interview_data.total_score should be 6.0, got {data['interview_data']['total_score']}"
         )
 
 
