@@ -76,7 +76,7 @@ class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: str = Field(default="")
-    adminUser: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
+    admin_user: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
     question_count: int = Field(default=0)
     total_marks: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -119,14 +119,14 @@ class CodingQuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: str = Field(default="")
-    adminUser: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
+    admin_user: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
     question_count: int = Field(default=0)
     total_marks: int = Field(default=0)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     # Relationships
     admin: Optional["User"] = Relationship(
-        sa_relationship_kwargs={"foreign_keys": "CodingQuestionPaper.adminUser", "primaryjoin": "CodingQuestionPaper.adminUser == User.id"}
+        sa_relationship_kwargs={"foreign_keys": "CodingQuestionPaper.admin_user", "primaryjoin": "CodingQuestionPaper.admin_user == User.id"}
     )
     questions: List["CodingQuestions"] = Relationship(
         back_populates="paper",

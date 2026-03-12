@@ -8,9 +8,12 @@ from ..schemas.requests import AnswerRequest
 from ..schemas.interview_result import UserNested, QuestionPaperNested
 from ..services import interview as interview_service
 from ..services.audio import AudioService
-from ..schemas.interview_responses import InterviewAccessResponse, AdminNested, CandidateNested, QuestionNested, PaperNested, CodingQuestionNested, CodingPaperNested
-from ..schemas.interview_result import UserNested, QuestionPaperNested
-from ..schemas.interview_responses import InterviewSessionData, LoginUserNested, QuestionPaperData, QuestionData
+from ..schemas.interview_responses import (
+    InterviewAccessResponse, QuestionNested, PaperNested, 
+    CodingQuestionNested, CodingPaperNested, InterviewSessionData, 
+    QuestionPaperData, QuestionData, AnswersData, CodingAnswersData
+)
+from ..schemas.user_schemas import UserNested
 from ..schemas.api_response import ApiResponse
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
@@ -157,8 +160,8 @@ async def access_interview(
     # Map Administrator
     admin_data = None
     if session.admin:
-        admin_data = AdminNested(
-            id=str(session.admin.id),
+        admin_data = UserNested(
+            id=session.admin.id,
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
@@ -168,8 +171,8 @@ async def access_interview(
     # Map Candidate
     candidate_data = None
     if session.candidate:
-        candidate_data = CandidateNested(
-            id=str(session.candidate.id),
+        candidate_data = UserNested(
+            id=session.candidate.id,
             email=session.candidate.email,
             full_name=session.candidate.full_name,
             role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
@@ -195,7 +198,7 @@ async def access_interview(
             id=session.paper.id,
             name=session.paper.name,
             description=session.paper.description or "",
-            adminUser=admin_data if admin_data else 0, # Restore nested adminUser object
+            admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
             question_count=session.paper.question_count or len(questions_list),
             total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
             created_at=session.paper.created_at,
@@ -223,7 +226,7 @@ async def access_interview(
             id=session.coding_paper.id,
             name=session.coding_paper.name,
             description=session.coding_paper.description or "",
-            adminUser=admin_data if admin_data else 0, # Restore nested adminUser object
+            admin_user=serialize_user(session.coding_paper.admin),  # ← Always UserNested
             question_count=session.coding_paper.question_count or len(coding_questions_list),
             total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session.coding_paper.created_at,
@@ -277,10 +280,10 @@ async def access_interview(
     response_data = InterviewAccessResponse(
         id=session.id,
         access_token=session.access_token,
-        admin=admin_data,
-        candidate=candidate_data,
-        paper=paper_data,
-        coding_paper=coding_paper_data,
+        admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
+        candidate_user=candidate_data,
+        paper_id=paper_data,
+        coding_paper_id=coding_paper_data,
         schedule_time=session.schedule_time,
         duration_minutes=session.duration_minutes,
         max_questions=session.max_questions,
@@ -1106,7 +1109,7 @@ async def submit_answer_text(
     answer_data = AnswersData(
         id=answer.id,
         interview_result_id=answer.interview_result_id,
-        Question_id=question_data,
+        question_id=question_data,
         candidate_answer=answer.candidate_answer,
         feedback=answer.feedback,
         score=answer.score,
@@ -1238,8 +1241,8 @@ async def log_tab_switch(
     # Build InterviewSessionData for consistent response
     candidate_data = None
     if session_obj.candidate:
-        candidate_data = LoginUserNested(
-            id=str(session_obj.candidate.id),
+        candidate_data = UserNested(
+            id=session_obj.candidate.id,
             email=session_obj.candidate.email,
             full_name=session_obj.candidate.full_name,
             role=session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else str(session_obj.candidate.role),
@@ -1248,8 +1251,8 @@ async def log_tab_switch(
 
     admin_data = None
     if session_obj.admin:
-        admin_data = LoginUserNested(
-            id=str(session_obj.admin.id),
+        admin_data = UserNested(
+            id=session_obj.admin.id,
             email=session_obj.admin.email,
             full_name=session_obj.admin.full_name,
             role=session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else str(session_obj.admin.role),
@@ -1270,7 +1273,7 @@ async def log_tab_switch(
             id=session_obj.paper.id,
             name=session_obj.paper.name,
             description=session_obj.paper.description or "",
-            adminUser=admin_data if admin_data else 0,
+            admin_user=admin_data if admin_data else 0,
             question_count=len(paper_questions),
             questions=paper_questions,
             total_marks=session_obj.paper.total_marks,
@@ -1280,8 +1283,8 @@ async def log_tab_switch(
     result_data = InterviewSessionData(
         id=session_obj.id,
         access_token=session_obj.access_token,
-        admin_id=admin_data,
-        candidate_id=candidate_data,
+        admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
+        candidate_user=candidate_data,
         paper_id=paper_data,
         schedule_time=session_obj.schedule_time,
         duration_minutes=session_obj.duration_minutes,

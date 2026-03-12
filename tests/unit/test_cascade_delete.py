@@ -67,7 +67,7 @@ class TestCheckDeleteEndpoint:
         admin, headers = _create_admin_and_get_token(session, client)
         candidate = _create_candidate(session)
 
-        paper = QuestionPaper(name="Check Paper", adminUser=admin.id)
+        paper = QuestionPaper(name="Check Paper", admin_user=admin.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)
@@ -107,7 +107,7 @@ class TestCascadeDelete:
         admin, headers = _create_admin_and_get_token(session, client)
         candidate = _create_candidate(session)
 
-        paper = QuestionPaper(name="Cascade Paper", adminUser=admin.id)
+        paper = QuestionPaper(name="Cascade Paper", admin_user=admin.id)
         session.add(paper)
         session.commit()
         session.refresh(paper)

@@ -2,8 +2,8 @@ from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 
+from .user_schemas import UserNested
 from .interview_responses import (
-    LoginUserNested as UserNested,
     QuestionPaperData as QuestionPaperNested,
     QuestionNested,
     CodingQuestionNested,
@@ -51,7 +51,7 @@ class AnswersNested(BaseModel):
 class InterviewResultDetail(BaseModel):
     id: int
     interview: InterviewSessionNested
-    interview_response: List[AnswersNested] = []
+    interview_responses: List[AnswersNested] = []
     result_status: str
     total_score: Optional[float] = None
     created_at: datetime

@@ -59,7 +59,7 @@ def test_get_history(client, session, candidate_setup):
     app.dependency_overrides[get_current_user] = lambda: candidate
     
     # Create paper
-    paper = QuestionPaper(name="History Paper", adminUser=admin.id)
+    paper = QuestionPaper(name="History Paper", admin_user=admin.id)
     session.add(paper)
     session.commit()
     session.refresh(paper)

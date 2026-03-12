@@ -8,7 +8,7 @@ def test_create_interview_session(session, test_users):
 
     from app.models.db_models import QuestionPaper, InterviewSession, InterviewStatus
 
-    paper = QuestionPaper(name="Test Paper", adminUser=admin.id)
+    paper = QuestionPaper(name="Test Paper", admin_user=admin.id)
     session.add(paper)
     session.commit()
 

@@ -34,12 +34,12 @@ def test_coding_paper_auto_creation_and_aggregation(client, session, auth_header
         # Verify in DB
         paper = session.get(CodingQuestionPaper, new_paper_id)
         assert paper is not None
-        assert paper.adminUser == admin.id
+        assert paper.admin_user == admin.id
         assert paper.question_count == 2
 
     # --- 2. COMBINED SCORE AGGREGATION ---
     # Setup standard paper
-    std_paper = QuestionPaper(name="Std Paper", adminUser=admin.id)
+    std_paper = QuestionPaper(name="Std Paper", admin_user=admin.id)
     session.add(std_paper)
     session.commit()
     q_std = Questions(paper_id=std_paper.id, content="What is Python?", question_text="What is Python?", marks=5)

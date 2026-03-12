@@ -1,6 +1,7 @@
 from typing import Optional, List, Any
 from pydantic import BaseModel, Field, model_validator
-from .interview_result import UserNested, QuestionPaperNested
+from .user_schemas import UserNested
+from .interview_result import QuestionPaperNested
 import json as _json
 
 # Team Responses
@@ -30,18 +31,7 @@ class HistoryItem(BaseModel):
     current_status: Optional[str] = None
     allow_copy_paste: bool = False
 
-class InterviewAccessResponse(BaseModel):
-    interview_id: int
-    candidate: Optional[UserNested] = None
-    admin: Optional[UserNested] = None
-    paper: Optional[QuestionPaperNested] = None
-    message: str # "START" or "WAIT"
-    schedule_time: Optional[str] = None
-    duration_minutes: Optional[int] = None
-    status: Optional[str] = None
-    max_questions: Optional[int] = None
-    invite_link: Optional[str] = None
-    allow_copy_paste: bool = False
+
 
 class QuestionRead(BaseModel):
     id: int
@@ -156,7 +146,7 @@ class CodingPaperFull(BaseModel):
     total_marks: int = 0
     questions: List[CodingQuestionFull] = []
     created_at: str
-    created_by: Optional["UserRead"] = None
+    created_by: Optional[UserNested] = None
 
 
 
@@ -170,8 +160,8 @@ class PaperRead(BaseModel):
     created_at: str
 class SessionRead(BaseModel):
     id: int
-    admin: Optional[dict] = None
-    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    admin_user: Optional[UserNested] = None
+    candidate_user: UserNested
     status: str
     scheduled_at: str
     score: Optional[float] = None
@@ -233,9 +223,9 @@ class InterviewSessionDetail(BaseModel):
     coding_paper_id: Optional[int] = None  # Linked coding question paper (if any)
 
 class InterviewLinkResponse(BaseModel):
-    interview: InterviewSessionDetail
-    admin: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
-    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    interview_data: InterviewSessionDetail
+    admin_user: UserNested
+    candidate_user: UserNested
     access_token: str
     link: str
     scheduled_at: str
@@ -243,8 +233,8 @@ class InterviewLinkResponse(BaseModel):
 
 class InterviewDetailRead(BaseModel):
     id: int
-    admin: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
-    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    admin_user: UserNested
+    candidate_user: UserNested
     paper_id: int
     paper_name: str
     schedule_time: str
@@ -263,7 +253,7 @@ class QuestionPaperExpanded(BaseModel):
     id: int = 0
     name: str = ""
     description: str = ""
-    adminUser: Optional[UserNested] = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
+    admin_user: Optional[UserNested] = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
     question_count: int = 0
     questions: List[QuestionRead] = Field(default_factory=list)
     total_marks: int = 0
@@ -284,7 +274,7 @@ class CodingPaperExpanded(BaseModel):
     id: int = 0
     name: str = ""
     description: str = ""
-    adminUser: Optional[UserNested] = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
+    admin_user: Optional[UserNested] = Field(default_factory=lambda: UserNested(id=0, email="", full_name="", role=""))
     question_count: int = 0
     questions: List[CodingQuestionExpanded] = Field(default_factory=list)
     total_marks: int = 0
@@ -293,8 +283,8 @@ class CodingPaperExpanded(BaseModel):
 class InterviewSessionExpanded(BaseModel):
     id: int
     access_token: str
-    admin_id: Optional[UserNested] = None
-    candidate_id: Optional[UserNested] = None
+    admin_user: Optional[UserNested] = None
+    candidate_user: Optional[UserNested] = None
     paper_id: Optional[QuestionPaperExpanded] = None
     coding_paper_id: Optional[CodingPaperExpanded] = None
     interview_round: Optional[str] = None
@@ -348,7 +338,7 @@ class ResponseDetail(BaseModel):
 
 class AnswerRead(BaseModel):
     id: int
-    question_id: int
+    question_id: QuestionRead
     candidate_answer: Optional[str] = None
     feedback: Optional[str] = None
     score: Optional[float] = None
@@ -360,7 +350,7 @@ class AnswerRead(BaseModel):
 
 class DetailedResult(BaseModel):
     interview: InterviewSessionDetail # Full interview details
-    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    candidate_user: UserNested
     answers: List[AnswerRead]
     date: str
     total_score: Optional[float] = None
@@ -398,8 +388,8 @@ class ProgressInfo(BaseModel):
 
 class CandidateStatusResponse(BaseModel):
     """Complete status response for a single interview"""
-    interview: InterviewSessionDetail # Replaced interview_id with full object
-    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    interview_data: InterviewSessionDetail # Replaced interview_id with full object
+    candidate_user: UserNested
     current_status: Optional[str] = None
     timeline: List[TimelineItem]
     warnings: WarningInfo
@@ -411,8 +401,8 @@ class CandidateStatusResponse(BaseModel):
 
 class LiveStatusItem(BaseModel):
     """Lightweight status item for batch live status view"""
-    interview: InterviewSessionDetail # InterviewSession data
-    candidate: dict  # {"id": ..., "email": ..., "full_name": ..., "role": ...}
+    interview_data: InterviewSessionDetail # InterviewSession data
+    candidate_user: UserNested
     current_status: Optional[str] = None
     warning_count: int
     warnings_remaining: int
