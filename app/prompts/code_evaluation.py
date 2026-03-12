@@ -2,9 +2,11 @@ from langchain_core.prompts import ChatPromptTemplate
 
 code_evaluation_prompt = ChatPromptTemplate.from_messages([
     ("system",
-     "You are a senior software engineer conducting a technical code review. "
-     "Evaluate your own code submission against the given problem. "
-     "You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no surrounding text."),
+     "You are a strict senior software engineer conducting a technical code review. "
+     "Evaluate your code submission against the given problem. "
+     "CRITICAL: If the submission is placeholder text (e.g., 'string', 'asdf', 'test'), empty, or "
+     "You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no surrounding text."
+     "contains no actual logic relevant to the problem, you MUST give a score of 0 and mark it 'incorrect'."),
     ("user",
      """Problem Title: {title}
 
@@ -14,19 +16,23 @@ Problem Statement:
 Your Code Submission:
 {code}
 
-Evaluate your code submission and return a JSON object with exactly these keys:
-- "feedback": detailed feedback string (what was done well, what was wrong, how to improve)
-- "score": float between 0 and 10
+Evaluation Instructions:
+1. **Sanity Check**: Is this actual code? If the submission is just a single word, random characters, or the starter code with no changes, it is a FAIL.
+2. **Logic Check**: Does the code implement a valid algorithm for the specific problem?
+3. **JSON Output**: Return a JSON object with exactly these keys:
+- "feedback": (string) If the code is junk, state "No valid code provided." Otherwise, provide detailed analysis.
+- "score": (float) 0 to 10.
 - "correctness": one of "correct", "partially_correct", "incorrect"
-- "time_complexity": estimated Big-O time complexity (e.g. "O(n)", "O(n log n)") or "unknown"
-- "space_complexity": estimated Big-O space complexity or "unknown"
-- "issues": list of strings describing specific bugs or problems found (empty list if none)
+- "time_complexity": Big-O or "unknown"
+- "space_complexity": Big-O or "unknown"
+- "issues": list of strings (include "Placeholder detected" or "Non-code submission" if applicable).
 
-Scoring guide:
-- 0-3: Incorrect approach, major logical errors, or empty submission
-- 4-6: Partially correct, right approach but bugs or edge cases missed
-- 7-9: Correct with minor issues (e.g. non-optimal complexity)
-- 10: Fully correct, optimal, clean code
+Scoring Guide:
+- 0: Placeholder text, empty input, or non-code strings.
+- 1-3: Syntax exists but the logic is completely wrong or unrelated.
+- 4-6: Right approach but contains bugs or fails edge cases.
+- 7-9: Logic is correct but non-optimal or minor issues.
+- 10: Fully correct, optimal, and clean.
 
 Return ONLY the JSON object now:"""),
 ])

@@ -1403,7 +1403,8 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             admin_obj = UserNested(
                 id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
                 role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-                profile_image=s.admin.profile_image
+                profile_image=s.admin.profile_image,
+                team_id=s.admin.team_id
             )
         # admin was deleted, no fallback needed
              
@@ -1411,9 +1412,9 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         candidate_obj = None
         if s.candidate:
             candidate_obj = UserNested(
-                id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
                 role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
-                 profile_image=s.candidate.profile_image
+                 profile_image=s.candidate.profile_image,
+                 team_id=s.candidate.team_id
             )
             
         # 3. Paper
@@ -1511,16 +1512,17 @@ async def get_result(
         admin_obj = LoginUserNested(
             id=str(s.admin.id), email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-            access_token=s.admin.access_token
+            access_token=s.admin.access_token,
+            team_id=s.admin.team_id
         )
          
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
         candidate_obj = LoginUserNested(
-            id=str(s.candidate.id), email=s.candidate.email, full_name=s.candidate.full_name, 
             role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
-            access_token=s.candidate.access_token
+            access_token=s.candidate.access_token,
+            team_id=s.candidate.team_id
         )
         
     # 3. Paper
