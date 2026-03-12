@@ -92,6 +92,6 @@ def test_print_admin_results_format(session, client):
     # Simple assertions to verify top-level requested keys exist
     data = response.json()["data"]
     assert "interview_data" in data
-    assert "interview_response" in data
-    assert len(data["interview_response"]) > 0
-    assert "question_id" in data["interview_response"][0]
+    assert "interview_responses" in data  # Fixed: should be plural
+    assert len(data["interview_responses"]) > 0
+    assert "question_id" in data["interview_responses"][0]

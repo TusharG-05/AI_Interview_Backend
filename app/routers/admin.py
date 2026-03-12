@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
-from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions
+from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, CodingAnswers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
@@ -1466,18 +1466,14 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         # 2. Candidate
         candidate_obj = None
         if s.candidate:
-            candidate_obj = UserNested(
-                role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
-                 profile_image=s.candidate.profile_image,
-                 team_id=s.candidate.team_id
-            )
+            candidate_obj = serialize_user(s.candidate)
             
         # 3. Paper
         paper_obj = None
         if s.paper:
             paper_obj = QuestionPaperNested(
                 id=s.paper.id, name=s.paper.name, description=s.paper.description, 
-                admin_user=s.paper.admin_user, created_at=s.paper.created_at
+                admin_user=serialize_user(s.paper.admin) if s.paper.admin else s.paper.admin_user, created_at=s.paper.created_at
             )
             
         # 3.1 Coding Paper
@@ -1485,7 +1481,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         if s.coding_paper:
             coding_paper_obj = CodingPaperNested(
                 id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description,
-                admin_user=s.coding_paper.admin_user, created_at=s.coding_paper.created_at,
+                admin_user=serialize_user(s.coding_paper.admin) if s.coding_paper.admin else s.coding_paper.admin_user, created_at=s.coding_paper.created_at,
                 question_count=s.coding_paper.question_count, total_marks=s.coding_paper.total_marks
             )
             
@@ -1585,12 +1581,7 @@ async def get_result(
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
-        candidate_obj = LoginUserNested(
-            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name, 
-            role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
-            access_token=s.candidate.access_token,
-            team_id=s.candidate.team_id
-        )
+        candidate_obj = serialize_user(s.candidate)  # Use serialize_user for consistency
         
     # 3. Paper
     paper_obj = None
@@ -1598,7 +1589,7 @@ async def get_result(
         # For this endpoint, admin_user is expected to be a UserNested object per schema standardization
         paper_obj = QuestionPaperData(
             id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
-            admin_user=serialize_user(p.admin), created_at=s.paper.created_at,  # ← Always UserNested
+            admin_user=serialize_user(s.paper.admin), created_at=s.paper.created_at,  # ← Always UserNested
             question_count=len(s.paper.questions) if hasattr(s.paper, 'questions') else 0,
             total_marks=s.paper.total_marks
         )
@@ -1608,7 +1599,7 @@ async def get_result(
     if s.coding_paper:
         coding_paper_obj = CodingPaperNested(
             id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
-            admin_user=serialize_user(s.coding_paper.admin_user),  # ← Always UserNested
+            admin_user=serialize_user(s.coding_paper.admin),  # ← Always UserNested
             question_count=s.coding_paper.question_count,
             total_marks=s.coding_paper.total_marks,
             created_at=s.coding_paper.created_at,
