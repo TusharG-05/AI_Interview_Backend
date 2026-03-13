@@ -809,13 +809,8 @@ async def schedule_interview(
         if not available_questions:
             raise HTTPException(status_code=400, detail="Standard question paper has no questions")
 
-        # Apply question limit if specified
-        if schedule_data.max_questions:
-            if schedule_data.max_questions <= 0:
-                raise HTTPException(status_code=400, detail="max_questions must be greater than 0")
-            selected_questions = random.sample(available_questions, schedule_data.max_questions)
-        else:
-            selected_questions = available_questions
+        # Use all available questions (max_questions field kept for compatibility but not used)
+        selected_questions = available_questions
 
         # Create SessionQuestion records with sort order
         for idx, question in enumerate(selected_questions):
