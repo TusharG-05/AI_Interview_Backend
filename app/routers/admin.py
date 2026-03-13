@@ -813,11 +813,6 @@ async def schedule_interview(
         if schedule_data.max_questions:
             if schedule_data.max_questions <= 0:
                 raise HTTPException(status_code=400, detail="max_questions must be greater than 0")
-            if schedule_data.max_questions > len(available_questions):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Requested {schedule_data.max_questions} questions but only {len(available_questions)} available in this paper"
-                )
             selected_questions = random.sample(available_questions, schedule_data.max_questions)
         else:
             selected_questions = available_questions
