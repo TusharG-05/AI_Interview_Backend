@@ -373,16 +373,16 @@ def test_api():
         assert res_res.status_code == 200, f"Failed to get coding results: {res_res.text}"
         res_data = res_res.json()["data"]
         
-        # Verify that Coding_response is present and populated
-        assert "Coding_response" in res_data, "Coding_response missing from AdminResultData"
-        assert len(res_data["Coding_response"]) >= 1, "Expected at least 1 coding answer in result"
+        # Verify that coding_responses is present and populated
+        assert "coding_responses" in res_data, "coding_responses missing from AdminResultData"
+        assert len(res_data["coding_responses"]) >= 1, "Expected at least 1 coding answer in result"
         
-        ca = res_data["Coding_response"][0]
+        ca = res_data["coding_responses"][0]
         assert "coding_question_id" in ca, "coding_question_id missing from CodingAnswersData"
         assert ca["coding_question_id"]["title"] == "Two Sum", f"Expected title 'Two Sum', got {ca['coding_question_id'].get('title')}"
         assert isinstance(ca["coding_question_id"]["examples"], list), "examples should be a parsed list"
         
-        print(f" Admin Coding Results verified: {len(res_data['Coding_response'])} coding answer(s) found.")
+        print(f" Admin Coding Results verified: {len(res_data['coding_responses'])} coding answer(s) found.")
         print(f" First question title: '{ca['coding_question_id']['title']}'")
     # 13. SYSTEM: Status
     print("\n[13] Testing System Status...")

@@ -140,7 +140,7 @@ async def logout(response: Response):
         message="Logged out successfully"
     )
 
-@router.post("/register", response_model=ApiResponse[Token])
+@router.post("/register", response_model=ApiResponse[Token], status_code=201)
 async def register(
     response: Response, 
     user_data: UserCreate, 

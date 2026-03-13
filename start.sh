@@ -2,7 +2,7 @@
 
 # Start Redis in the background
 echo "Starting Redis server..."
-redis-server --daemonize yes
+redis-server --daemonize yes --port 6379 --bind 127.0.0.1 --pidfile /tmp/redis.pid --dir /tmp --protected-mode no
 
 # Wait for Redis to be ready
 until redis-cli ping; do

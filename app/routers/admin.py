@@ -723,7 +723,7 @@ async def schedule_interview(
 
     # Use team from request, and ensure candidate is associated
     team_id = schedule_data.team_id
-    if not candidate.team_id:
+    if team_id is not None:
         candidate.team_id = team_id
         session.add(candidate)
 
@@ -862,12 +862,9 @@ async def schedule_interview(
     candidate_dict = serialize_user(candidate)  # {"candidate": {...}}
     
     
-    # Construct InterviewSessionDetail
     interview_detail = InterviewSessionDetail(
         id=new_session.id,
         access_token=new_session.access_token,
-        admin_id=new_session.admin_id,
-        candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
         coding_paper_id=new_session.coding_paper_id,
         interview_round=new_session.interview_round.value if new_session.interview_round else None,
@@ -887,11 +884,12 @@ async def schedule_interview(
         suspended_at=format_iso_datetime(new_session.suspended_at),
         enrollment_audio_path=new_session.enrollment_audio_path,
         is_completed=new_session.is_completed or False,
-        allow_copy_paste=new_session.allow_copy_paste
+        allow_copy_paste=new_session.allow_copy_paste,
+        team_id=candidate.team_id
     )
 
     link_response = InterviewLinkResponse(
-        interview_data=interview_detail,
+        interview=interview_detail,
         admin_user=admin_dict,
         candidate_user=candidate_dict,
         access_token=new_session.access_token,
@@ -935,7 +933,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             scheduled_at=format_iso_datetime(s.schedule_time),
             score=s.total_score,
             allow_copy_paste=s.allow_copy_paste or False,
-            interview_round=s.interview_round.value if s.interview_round else None
+            interview_round=s.interview_round.value if s.interview_round else None,
+            team_id=s.candidate.team_id if s.candidate else None
         ))
     return ApiResponse(
         status_code=200,
@@ -983,15 +982,14 @@ async def get_live_status_dashboard(
         answered_questions = len(responses)
         progress_percent = (answered_questions / total_questions * 100) if total_questions > 0 else 0
         
-        # Serialize candidate
+        # Serialize users
         candidate_dict = serialize_user(interview_session.candidate)
+        admin_dict = serialize_user(interview_session.admin) if interview_session.admin else None
         
         # Serialize interview
         interview_dict = {
             "id": interview_session.id,
             "access_token": interview_session.access_token,
-            "admin_id": interview_session.admin_id,
-            "candidate_id": interview_session.candidate_id,
             "paper_id": interview_session.paper_id,
             "schedule_time": format_iso_datetime(interview_session.schedule_time),
             "duration_minutes": interview_session.duration_minutes,
@@ -1014,7 +1012,8 @@ async def get_live_status_dashboard(
         }
         
         results.append(LiveStatusItem(
-            interview_data=interview_dict,
+            interview=interview_dict,
+            admin_user=admin_dict,
             candidate_user=candidate_dict,
             current_status=interview_session.current_status or None,
             warning_count=interview_session.warning_count or 0,
@@ -1150,8 +1149,8 @@ async def get_interview(
             access_token=interview_session.access_token,
             admin_user=admin_dict,
             candidate_user=candidate_dict,
-            paper_id=paper_dict,
-            coding_paper_id=coding_paper_dict,
+            paper=paper_dict,
+            coding_paper=coding_paper_dict,
             interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
             schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
             duration_minutes=getattr(interview_session, "duration_minutes", 0) or 0,
@@ -1172,7 +1171,8 @@ async def get_interview(
             allow_copy_paste=getattr(interview_session, "allow_copy_paste", False),
             response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
             proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
-            enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None
+            enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None,
+            team_id=interview_session.candidate.team_id if interview_session.candidate else None
         )
     except Exception as e:
         logger.error(f"Serialization error in get_interview: {e}", exc_info=True)
@@ -1617,7 +1617,7 @@ async def get_result(
     session_nested = InterviewSessionData(
         id=s.id, access_token=s.access_token,
         admin_user=admin_obj, candidate_user=candidate_obj, 
-        paper_id=paper_obj, coding_paper_id=coding_paper_obj,
+        paper=paper_obj, coding_paper=coding_paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
         status=s.status.value if hasattr(s.status, 'value') else str(s.status),
@@ -1661,8 +1661,8 @@ async def get_result(
         
         answers_nested.append(AnswersDataAdmin(
             id=ans.id, interview_result_id=ans.interview_result_id,
-            question_id=q_nested, # lowercase q per request
-            coding_question_id=cq_nested,
+            question=q_nested, # lowercase q per request
+            coding_question=cq_nested,
             candidate_answer=ans.candidate_answer or "", feedback=ans.feedback or "",
             score=ans.score or 0.0, audio_path=ans.audio_path,
             transcribed_text=ans.transcribed_text, timestamp=ans.timestamp or datetime.now(timezone.utc)
@@ -1707,7 +1707,7 @@ async def get_result(
     # 7. Top Level Result
     result_detail = AdminResultData(
         id=s.result.id,
-        interview_data=session_nested,
+        interview=session_nested,
         interview_responses=answers_nested,
         coding_responses=coding_answers_nested,
         total_score=s.result.total_score or 0.0,

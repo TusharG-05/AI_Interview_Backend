@@ -167,6 +167,7 @@ class SessionRead(BaseModel):
     score: Optional[float] = None
     allow_copy_paste: bool = False
     interview_round: Optional[str] = None
+    team_id: Optional[int] = None
 class UserRead(BaseModel):
     id: int
     email: str
@@ -221,9 +222,10 @@ class InterviewSessionDetail(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     coding_paper_id: Optional[int] = None  # Linked coding question paper (if any)
+    team_id: Optional[int] = None
 
 class InterviewLinkResponse(BaseModel):
-    interview_data: InterviewSessionDetail
+    interview: InterviewSessionDetail
     admin_user: UserNested
     candidate_user: UserNested
     access_token: str
@@ -285,8 +287,8 @@ class InterviewSessionExpanded(BaseModel):
     access_token: str
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
-    paper_id: Optional[QuestionPaperExpanded] = None
-    coding_paper_id: Optional[CodingPaperExpanded] = None
+    paper: Optional[QuestionPaperExpanded] = None
+    coding_paper: Optional[CodingPaperExpanded] = None
     interview_round: Optional[str] = None
     schedule_time: Optional[str] = ""
     duration_minutes: int = 0
@@ -308,6 +310,7 @@ class InterviewSessionExpanded(BaseModel):
     response_count: int = 0
     proctoring_event_count: int = 0
     enrollment_audio_url: Optional[str] = None
+    team_id: Optional[int] = None
 
 class UserDetailRead(BaseModel):
     id: int
@@ -338,7 +341,7 @@ class ResponseDetail(BaseModel):
 
 class AnswerRead(BaseModel):
     id: int
-    question_id: QuestionRead
+    question: QuestionRead
     candidate_answer: Optional[str] = None
     feedback: Optional[str] = None
     score: Optional[float] = None
@@ -388,7 +391,8 @@ class ProgressInfo(BaseModel):
 
 class CandidateStatusResponse(BaseModel):
     """Complete status response for a single interview"""
-    interview_data: InterviewSessionDetail # Replaced interview_id with full object
+    interview: InterviewSessionDetail # Replaced interview_id with full object
+    admin_user: Optional[UserNested] = None
     candidate_user: UserNested
     current_status: Optional[str] = None
     timeline: List[TimelineItem]
@@ -401,7 +405,8 @@ class CandidateStatusResponse(BaseModel):
 
 class LiveStatusItem(BaseModel):
     """Lightweight status item for batch live status view"""
-    interview_data: InterviewSessionDetail # InterviewSession data
+    interview: InterviewSessionDetail # InterviewSession data
+    admin_user: Optional[UserNested] = None
     candidate_user: UserNested
     current_status: Optional[str] = None
     warning_count: int

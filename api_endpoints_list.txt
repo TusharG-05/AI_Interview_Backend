@@ -1,0 +1,123 @@
+COMPLETE API ENDPOINTS LIST
+========================
+
+AUTHENTICATION (/api/auth)
+-------------------------
+POST /auth/login - User login
+POST /auth/token - OAuth2 token endpoint
+POST /auth/logout - User logout
+POST /auth/register - User registration
+GET /auth/me - Get current user profile
+
+ADMIN (/api/admin)
+------------------
+PAPERS & QUESTIONS:
+GET /admin/papers - List all question papers
+POST /admin/papers - Create new question paper
+GET /admin/papers/{paper_id} - Get specific question paper
+PATCH /admin/papers/{paper_id} - Update question paper
+DELETE /admin/papers/{paper_id} - Delete question paper
+POST /admin/papers/{paper_id}/questions - Add question to paper
+GET /admin/papers/{paper_id}/questions - List paper questions
+POST /admin/generate-paper - AI generate question paper
+POST /admin/generate-coding-paper - AI generate coding paper
+POST /admin/upload-doc - Upload document for paper generation
+DELETE /admin/questions/{q_id} - Delete question
+GET /admin/questions - List all questions
+GET /admin/questions/{q_id} - Get specific question
+PATCH /admin/questions/{q_id} - Update question
+
+INTERVIEWS:
+POST /admin/interviews/schedule - Schedule new interview
+GET /admin/interviews - List interviews
+GET /admin/interviews/live-status - Get live dashboard status
+GET /admin/interviews/{interview_id} - Get interview details
+PATCH /admin/interviews/{interview_id} - Update interview
+DELETE /admin/interviews/{interview_id} - Delete interview
+GET /admin/interviews/{interview_id}/status - Get interview status
+
+RESULTS:
+GET /admin/users/results - Get all results
+GET /admin/results/{interview_id} - Get specific result
+PATCH /admin/results/{interview_id} - Update result
+DELETE /admin/results/{interview_id} - Delete result
+GET /admin/interviews/response/{response_id} - Get response details
+GET /admin/results/audio/{response_id} - Get response audio
+GET /admin/interviews/enrollment-audio/{interview_id} - Get enrollment audio
+
+USERS:
+GET /admin/candidates - List candidates
+POST /admin/users - Create user
+GET /admin/users - List users
+GET /admin/users/{user_id} - Get user details
+PATCH /admin/users/{user_id} - Update user
+DELETE /admin/users/{user_id} - Delete user
+GET /admin/users/{user_id}/check-delete - Check if user can be deleted
+
+SYSTEM:
+POST /admin/shutdown - Shutdown server
+GET /admin/test-email - Test email
+GET /admin/test-email-sync - Test email sync
+
+CODING PAPERS (/api/coding_papers)
+----------------------------------
+CRUD:
+POST /coding_papers/ - Create coding paper
+GET /coding_papers/ - List coding papers
+GET /coding_papers/{paper_id} - Get coding paper
+PATCH /coding_papers/{paper_id} - Update coding paper
+DELETE /coding_papers/{paper_id} - Delete coding paper
+
+QUESTIONS:
+POST /coding_papers/{paper_id}/questions - Add coding question
+GET /coding_papers/{paper_id}/questions - List coding questions
+PATCH /coding_papers/questions/{q_id} - Update coding question
+DELETE /coding_papers/questions/{q_id} - Delete coding question
+
+INTERVIEW (/api/interview)
+------------------------
+ACCESS & SESSION:
+GET /interview/access/{token} - Access interview via token
+POST /interview/start-session/{interview_id} - Start interview session
+POST /interview/upload-selfie - Upload selfie for verification
+GET /interview/next-question/{interview_id} - Get next question
+
+ANSWERS:
+GET /interview/audio/question/{q_id} - Get question audio
+POST /interview/submit-answer-audio - Submit audio answer
+POST /interview/submit-answer-code - Submit code answer
+POST /interview/submit-answer-text - Submit text answer
+POST /interview/finish/{interview_id} - Finish interview
+POST /interview/evaluate-answer - Evaluate answer
+
+TOOLS:
+POST /interview/{interview_id}/tab-switch - Record tab switch
+POST /interview/tools/speech-to-text - Speech to text
+GET /interview/tts - Text to speech
+
+CANDIDATE (/api/candidate)
+--------------------------
+GET /candidate/history - Get interview history
+GET /candidate/interviews - Get candidate interviews
+POST /candidate/upload-selfie - Upload selfie
+GET /candidate/profile-image/{user_id} - Get profile image
+
+TEAMS (/api/teams)
+------------------
+POST /teams/teams - Create team
+GET /teams/teams - List teams
+GET /teams/teams/{team_id} - Get team details
+PATCH /teams/teams/{team_id} - Update team
+DELETE /teams/teams/{team_id} - Delete team
+
+VIDEO (/api/video)
+----------------
+GET /video/video_feed - Get video feed
+POST /video/offer - WebRTC offer
+POST /video/watch/{target_session_id} - Watch session (admin)
+
+SETTINGS (/api/settings)
+----------------------
+GET /settings/ - Get system status
+
+TOTAL ENDPOINTS: 67
