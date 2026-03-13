@@ -38,10 +38,29 @@ def upgrade() -> None:
                existing_type=sa.INTEGER(),
                server_default=None,
                existing_nullable=False)
-    op.drop_constraint(op.f('codingquestionpaper_team_id_fkey'), 'codingquestionpaper', type_='foreignkey')
-    op.drop_constraint(op.f('codingquestionpaper_adminUser_fkey'), 'codingquestionpaper', type_='foreignkey')
-    op.create_foreign_key(None, 'codingquestionpaper', 'user', ['adminUser'], ['id'])
-    op.drop_column('codingquestionpaper', 'team_id')
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    if 'codingquestionpaper' in inspector.get_table_names():
+        fks = inspector.get_foreign_keys('codingquestionpaper')
+        target_fks_to_drop = []
+        for fk in fks:
+            if 'team_id' in fk['constrained_columns'] or 'adminUser' in fk['constrained_columns']:
+                target_fks_to_drop.append(fk['name'])
+        
+        for fk_name in target_fks_to_drop:
+            op.drop_constraint(fk_name, 'codingquestionpaper', type_='foreignkey')
+            
+        cols = [c['name'] for c in inspector.get_columns('codingquestionpaper')]
+        if 'team_id' in cols:
+            op.drop_column('codingquestionpaper', 'team_id')
+            
+        column_to_use = 'admin_user' if 'admin_user' in cols else 'adminUser'
+        
+        # Check if FK already exists
+        fks_after = inspector.get_foreign_keys('codingquestionpaper')
+        if not any(column_to_use in fk['constrained_columns'] for fk in fks_after):
+            op.create_foreign_key(None, 'codingquestionpaper', 'user', [column_to_use], ['id'])
+            
     op.alter_column('codingquestions', 'title',
                existing_type=sa.VARCHAR(),
                server_default=None,
@@ -74,10 +93,24 @@ def upgrade() -> None:
                existing_type=sa.INTEGER(),
                server_default=None,
                existing_nullable=False)
-    op.drop_constraint(op.f('interviewsession_paper_id_fkey'), 'interviewsession', type_='foreignkey')
-    op.create_foreign_key(None, 'interviewsession', 'questionpaper', ['paper_id'], ['id'], ondelete='SET NULL')
-    op.drop_constraint(op.f('team_created_by_fkey'), 'team', type_='foreignkey')
-    op.drop_column('team', 'created_by')
+    if 'interviewsession' in inspector.get_table_names():
+        fk_names = [fk['name'] for fk in inspector.get_foreign_keys('interviewsession')]
+        if op.f('interviewsession_paper_id_fkey') in fk_names:
+            op.drop_constraint(op.f('interviewsession_paper_id_fkey'), 'interviewsession', type_='foreignkey')
+        
+        # Check if FK already exists
+        fks_after = inspector.get_foreign_keys('interviewsession')
+        if not any('paper_id' in fk['constrained_columns'] for fk in fks_after):
+            op.create_foreign_key(None, 'interviewsession', 'questionpaper', ['paper_id'], ['id'], ondelete='SET NULL')
+            
+    if 'team' in inspector.get_table_names():
+        team_fks = [fk['name'] for fk in inspector.get_foreign_keys('team')]
+        if op.f('team_created_by_fkey') in team_fks:
+            op.drop_constraint(op.f('team_created_by_fkey'), 'team', type_='foreignkey')
+            
+        team_cols = [c['name'] for c in inspector.get_columns('team')]
+        if 'created_by' in team_cols:
+            op.drop_column('team', 'created_by')
     # ### end Alembic commands ###
 
 
