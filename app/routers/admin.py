@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
-from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, CodingAnswers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions
+from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, CodingAnswers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions, CandidateStatus
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
@@ -41,7 +41,7 @@ import os
 import shutil
 import uuid
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
@@ -763,7 +763,7 @@ async def schedule_interview(
         duration_minutes=schedule_data.duration_minutes or 1440,
         max_questions=schedule_data.max_questions or 0,
         status=InterviewStatus.SCHEDULED,
-        current_status=CandidateStatus.INVITED if "CandidateStatus" in globals() else "INVITED",
+        current_status=CandidateStatus.INVITED,
         last_activity=datetime.utcnow(),
         warning_count=0,
         max_warnings=3,
@@ -1444,11 +1444,12 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         # 1. Admin
         admin_obj = None
         if s.admin:
+            from .teams import _serialize_team_basic
             admin_obj = UserNested(
                 id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
                 role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
                 profile_image=s.admin.profile_image,
-                team_id=s.admin.team_id
+                team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
             )
         # admin was deleted, no fallback needed
              
@@ -1560,11 +1561,12 @@ async def get_result(
     # 1. Admin
     admin_obj = None
     if s.admin:
+        from .teams import _serialize_team_basic
         admin_obj = UserNested(
             id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
             access_token=s.admin.access_token,
-            team_id=s.admin.team_id
+            team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
         )
          
     # 2. Candidate

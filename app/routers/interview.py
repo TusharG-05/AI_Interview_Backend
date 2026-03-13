@@ -171,23 +171,27 @@ async def access_interview(
     # Map Administrator
     admin_data = None
     if session.admin:
+        from .teams import _serialize_team_basic
         admin_data = UserNested(
             id=session.admin.id,
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token or ""
+            access_token=session.admin.access_token or "",
+            team=_serialize_team_basic(session.admin.team, session_db) if session.admin.team else None
         )
 
     # Map Candidate
     candidate_data = None
     if session.candidate:
+        from .teams import _serialize_team_basic
         candidate_data = UserNested(
             id=session.candidate.id,
             email=session.candidate.email,
             full_name=session.candidate.full_name,
             role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token or ""
+            access_token=session.candidate.access_token or "",
+            team=_serialize_team_basic(session.candidate.team, session_db) if session.candidate.team else None
         )
 
     # Map Standard Question Paper
