@@ -5,7 +5,7 @@
 # =============================================================================
 set -o pipefail
 
-BASE="http://localhost:8000/api"
+BASE="${BASE:-http://localhost:8000/api}"
 PASS=0
 FAIL=0
 FAILED_LIST=""
@@ -382,7 +382,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         
         # Verify expanded data: check for 'warning_count' and 'candidate_id' which suggests full InterviewSessionData
         V_COUNT=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin).get('data',{}); print(data.get('warning_count','0') if isinstance(data,dict) else '0')" 2>/dev/null)
-        V_CAND=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin).get('data',{}).get('candidate_id',None); print('present' if data else 'missing')" 2>/dev/null)
+        V_CAND=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin).get('data',{}); cid=data.get('candidate_id') or data.get('candidate_user',{}).get('id'); print('present' if cid else 'missing')" 2>/dev/null)
         
         if [ "$V_COUNT" = "1" ] && [ "$V_CAND" = "present" ]; then
             echo "  ✅ Tab Switch: Correct Warning Count & Full Session Data present"

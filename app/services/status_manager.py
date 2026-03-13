@@ -322,16 +322,14 @@ def get_status_summary(
                 current_question_id = sq.question_id
                 break
     
-    
-    # Serialize candidate with role-based key
+    # Serialize users
     candidate_dict = serialize_user(interview_session.candidate)
+    admin_dict = serialize_user(interview_session.admin) if interview_session.admin else None
     
     return {
-        "interview_data": {
+        "interview": {
             "id": interview_session.id,
             "access_token": interview_session.access_token,
-            "admin_id": interview_session.admin_id,
-            "candidate_id": interview_session.candidate_id,
             "paper_id": interview_session.paper_id,
             "schedule_time": interview_session.schedule_time.isoformat() if interview_session.schedule_time else None,
             "duration_minutes": interview_session.duration_minutes or 1440,
@@ -348,10 +346,9 @@ def get_status_summary(
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
             "enrollment_audio_path": interview_session.enrollment_audio_path,
-            "candidate_name": interview_session.candidate.full_name if interview_session.candidate else None,
-            "admin_name": interview_session.admin.full_name if interview_session.admin else None,
             "is_completed": interview_session.is_completed or False
         },
+        "admin_user": admin_dict,
         "candidate_user": candidate_dict,
         "current_status": interview_session.current_status,
         "timeline": [

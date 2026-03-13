@@ -105,13 +105,14 @@ def evaluate_answer_content(
             logger.info("Using Groq API for evaluation")
             system_instruction = (
                 "You are an expert technical interviewer. Evaluate the candidate's answer. "
+                "Provide feedback using 'You' and 'Your' instead of 'the candidate' and 'the candidate's'. "
                 "Return a JSON object with 'feedback' (string) and 'score' (float 0-10)."
             )
             completion = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": f"Question: {question}\n\nCandidate's Answer: {answer}"}
+                    {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}"}
                 ],
                 temperature=0.1,
                 max_completion_tokens=512,
@@ -156,12 +157,13 @@ def evaluate_answer_content(
             # Simple fallback prompt to avoid LangChain dependency issues
             system_instruction = (
                 "You are an expert technical interviewer. Evaluate the candidate's answer. "
+                "Provide feedback using 'You' and 'Your' instead of 'the candidate' and 'the candidate's'. "
                 "Return a JSON object with 'feedback' (string) and 'score' (float 0-10)."
             )
             
             messages = [
                 {"role": "system", "content": system_instruction},
-                {"role": "user", "content": f"Question: {question}\n\nCandidate's Answer: {answer}"}
+                {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}"}
             ]
             
             response = client.chat_completion(

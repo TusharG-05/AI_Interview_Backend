@@ -31,6 +31,7 @@ class InterviewScheduleCreate(BaseModel):
     duration_minutes: int = 1440
     max_questions: Optional[int] = None  # Limit questions, None = use all
     allow_copy_paste: bool = False  # Whether candidate can copy/paste during interview
+    team_id: Optional[int] = None
 
     @model_validator(mode="after")
     def at_least_one_paper(self) -> "InterviewScheduleCreate":
@@ -105,6 +106,7 @@ class GeneratePaperRequest(BaseModel):
     years_of_experience: int = Field(..., ge=0, le=40, description="Candidate's expected years of experience")
     num_questions: int = Field(..., ge=1, le=50, description="Number of questions to generate")
     paper_name: Optional[str] = Field(None, description="Optional name for the question paper")
+    team_id: Optional[int] = None
 
 
 class GenerateCodingPaperRequest(BaseModel):
@@ -121,6 +123,7 @@ class GenerateCodingPaperRequest(BaseModel):
         description="Number of coding problems to generate (max 20)"
     )
     paper_name: Optional[str] = Field(None, description="Optional name for the coding paper")
+    team_id: Optional[int] = None
 
 # --- Coding Question Paper (Dedicated Table) ---
 

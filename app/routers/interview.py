@@ -62,7 +62,7 @@ def _evaluate_and_update_score(
         resp_type = "text"
         q_title = question_text
         
-        if answer.question_id:
+        if getattr(answer, 'question_id', None):
             question_obj = db.get(Questions, answer.question_id)
             if question_obj:
                 resp_type = (question_obj.response_type.value if hasattr(question_obj.response_type, 'value') else str(question_obj.response_type)) if question_obj.response_type else "text"
@@ -92,7 +92,16 @@ def _evaluate_and_update_score(
         all_answers = db.exec(
             select(Answers).where(Answers.interview_result_id == result_obj.id)
         ).all()
+        
+        # Also naturally include CodingAnswers if they exist
+        from ..models.db_models import CodingAnswers
+        all_coding_answers = db.exec(
+            select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)
+        ).all()
+
         all_scores = [a.score for a in all_answers if a.score is not None]
+        all_scores.extend([ca.score for ca in all_coding_answers if ca.score is not None])
+        
         new_total = calculate_total_score(all_scores)
 
         result_obj.total_score = new_total
@@ -294,8 +303,8 @@ async def access_interview(
         access_token=session.access_token,
         admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
         candidate_user=candidate_data,
-        paper_id=paper_data,
-        coding_paper_id=coding_paper_data,
+        paper=paper_data,
+        coding_paper=coding_paper_data,
         schedule_time=session.schedule_time,
         duration_minutes=session.duration_minutes,
         max_questions=session.max_questions,
@@ -446,28 +455,38 @@ async def upload_selfie_session(
     # 4. Generate Embeddings (best effort — never block on failure)
     try:
         from deepface import DeepFace
+        import asyncio
         embeddings_map = {}
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(image_bytes)
             tmp_path = tmp.name
         
         try:
-            try:
-                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                if arc_objs:
-                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-            except Exception as e:
-                _logger.warning(f"ArcFace embedding failed: {e}")
+            # Use asyncio timeout for better Hugging Face compatibility
+            async def generate_embeddings():
+                try:
+                    arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False, detector_backend="skip")
+                    if arc_objs:
+                        embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                except Exception as e:
+                    _logger.warning(f"ArcFace embedding failed: {e}")
 
-            try:
-                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                if sface_objs:
-                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
-            except Exception as e:
-                _logger.warning(f"SFace embedding failed: {e}")
+                try:
+                    sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False, detector_backend="skip")
+                    if sface_objs:
+                        embeddings_map["SFace"] = sface_objs[0]["embedding"]
+                except Exception as e:
+                    _logger.warning(f"SFace embedding failed: {e}")
 
-            if embeddings_map:
-                candidate.face_embedding = json.dumps(embeddings_map)
+                if embeddings_map:
+                    candidate.face_embedding = json.dumps(embeddings_map)
+            
+            # Run with timeout
+            try:
+                await asyncio.wait_for(generate_embeddings(), timeout=10.0)
+            except asyncio.TimeoutError:
+                _logger.warning("Embedding generation timed out (non-fatal)")
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -478,17 +497,23 @@ async def upload_selfie_session(
     from ..services.cloudinary_service import CloudinaryService
     cloudinary_service = CloudinaryService()
     try:
-        cloudinary_url = cloudinary_service.upload_image(image_bytes, folder="interview_selfies")
-        candidate.profile_image = cloudinary_url
+        # Add timeout for Cloudinary upload
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(cloudinary_service.upload_image, image_bytes, folder="interview_selfies")
+            try:
+                cloudinary_url = future.result(timeout=15)  # 15 second timeout
+                candidate.profile_image = cloudinary_url
+            except concurrent.futures.TimeoutError:
+                _logger.warning("Cloudinary upload timed out (non-fatal)")
+                raise
     except Exception as e:
         _logger.error(f"Cloudinary upload failed (non-fatal): {e}")
-        # Fallback to base64 if cloudinary fails? 
-        # User explicitly asked to implement cloudinary and avoid base64.
-        # But for robustness during transition, maybe keep it?
-        # Actually, let's just use Cloudinary as requested.
+        # Fallback to base64 if cloudinary fails
         import base64
+        content_type = file.content_type or "image/jpeg"
         base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-        candidate.profile_image = f"data:{file.content_type};base64,{base64_encoded}"
+        candidate.profile_image = f"data:{content_type};base64,{base64_encoded}"
 
     session_db.add(candidate)
     
@@ -918,47 +943,32 @@ async def submit_answer_code(
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Submits a code answer for a coding question.
-    Saves the response. If feedback and score are provided (pre-evaluated),
-    background processing will skip redundant evaluation.
-    """
-    # Verify session exists
+    """Submits a code answer directly."""
     session = session_db.get(InterviewSession, interview_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Get or Create InterviewResult
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
-        try:
-            result = InterviewResult(interview_id=interview_id)
-            session_db.add(result)
-            session_db.commit()
-            session_db.refresh(result)
-        except Exception:
-            session_db.rollback()
-            result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
-            if not result:
-                raise HTTPException(status_code=500, detail="Failed to initialize interview results")
+        result = InterviewResult(interview_id=interview_id)
+        session_db.add(result)
+        session_db.commit()
+        session_db.refresh(result)
 
-    # Check if answer already exists
+    from ..models.db_models import CodingAnswers
     answer = session_db.exec(
-        select(Answers).where(
-            Answers.interview_result_id == result.id,
-            Answers.coding_question_id == coding_question_id
+        select(CodingAnswers).where(
+            CodingAnswers.interview_result_id == result.id,
+            CodingAnswers.coding_question_id == coding_question_id
         )
     ).first()
 
     if answer:
         answer.candidate_answer = answer_code
-        if feedback is not None:
-            answer.feedback = feedback
-        if score is not None:
-            answer.score = score
+        if feedback is not None: answer.feedback = feedback
+        if score is not None: answer.score = score
         answer.timestamp = datetime.now(timezone.utc)
     else:
-        answer = Answers(
+        answer = CodingAnswers(
             interview_result_id=result.id,
             coding_question_id=coding_question_id,
             candidate_answer=answer_code,
@@ -969,60 +979,33 @@ async def submit_answer_code(
     session_db.add(answer)
     session_db.commit()
     session_db.refresh(answer)
-    
-    # Load the related coding question
+
     question = session_db.get(CodingQuestions, coding_question_id)
-    if not question:
-        raise HTTPException(status_code=404, detail="Coding question not found")
+    if not question: raise HTTPException(status_code=404, detail="Coding question not found")
 
-    # ── Real-time Evaluation ─────────────────────────────────────────────────
-    # Evaluate immediately and update running total_score.
-    # Note: for coding we may have a different evaluation function, but we follow the same pattern for now.
-    q_text = question.problem_statement or question.title or ""
-    _evaluate_and_update_score(
-        db=session_db,
-        answer=answer,
-        question_text=q_text,
-        session_obj=session,
-        result_obj=result,
-    )
+    _evaluate_and_update_score(session_db, answer, question.problem_statement or question.title or "", session, result)
+    session_db.refresh(answer)
 
-    try:
-        session_db.refresh(answer)
-    except Exception:
-        pass
-
-    question_data = CodingQuestionNested(
-        id=question.id,
-        paper_id=question.paper_id,
-        title=question.title,
-        problem_statement=question.problem_statement,
-        examples=question.examples,
-        constraints=question.constraints,
-        starter_code=question.starter_code or "",
-        topic=question.topic,
-        difficulty=question.difficulty,
-        marks=question.marks
-    )
-    
-    answer_data = CodingAnswersData(
-        id=answer.id,
-        interview_result_id=answer.interview_result_id,
-        coding_question_id=question_data,
-        candidate_answer=answer.candidate_answer,
-        feedback=answer.feedback,
-        score=answer.score,
-        timestamp=answer.timestamp
-    )
-    
     return ApiResponse(
         status_code=200,
-        data=answer_data,
-        message="Code answer submitted and evaluated successfully"
+        data=CodingAnswersData(
+            id=answer.id,
+            interview_result_id=answer.interview_result_id,
+            coding_question_id=CodingQuestionNested(
+                id=question.id, paper_id=question.paper_id, title=question.title,
+                problem_statement=question.problem_statement, examples=question.examples,
+                constraints=question.constraints, starter_code=question.starter_code or "",
+                topic=question.topic, difficulty=question.difficulty, marks=question.marks
+            ),
+            candidate_answer=answer.candidate_answer,
+            feedback=answer.feedback,
+            score=answer.score,
+            timestamp=answer.timestamp
+        ),
+        message="Code submitted successfully"
     )
 
-
-@router.post("/submit-answer-text", response_model=ApiResponse[AnswersData])
+@router.post("/submit-answer-text", response_model=ApiResponse[Union[AnswersData, dict]])
 async def submit_answer_text(
     interview_id: int = Form(...),
     question_id: int = Form(...),
@@ -1032,31 +1015,81 @@ async def submit_answer_text(
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Submits a text answer for a question.
-    Saves the response. If feedback and score are provided (pre-evaluated),
-    background processing will skip redundant evaluation.
-    """
-    # Verify session exists
+    """Submits a text answer, handles both standard and proxy-coding questions."""
     session = session_db.get(InterviewSession, interview_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Get or Create InterviewResult
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
-        try:
-            result = InterviewResult(interview_id=interview_id)
-            session_db.add(result)
-            session_db.commit()
-            session_db.refresh(result)
-        except Exception:
-            session_db.rollback()
-            result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
-            if not result:
-                raise HTTPException(status_code=500, detail="Failed to initialize interview results")
+        result = InterviewResult(interview_id=interview_id)
+        session_db.add(result)
+        session_db.commit()
+        session_db.refresh(result)
 
-    # Check if answer already exists
+    # 1. Detect if it's a coding question (proxy or direct)
+    question = session_db.get(Questions, question_id)
+    coding_q = None
+    real_coding_id = None
+
+    if question and question.question_text and question.question_text.startswith("__coding__"):
+        try:
+            real_coding_id = int(question.question_text.replace("__coding__", ""))
+            coding_q = session_db.get(CodingQuestions, real_coding_id)
+        except: pass
+    elif not question:
+        coding_q = session_db.get(CodingQuestions, question_id)
+        if coding_q: real_coding_id = question_id
+
+    if coding_q and real_coding_id:
+        from ..models.db_models import CodingAnswers
+        answer = session_db.exec(
+            select(CodingAnswers).where(
+                CodingAnswers.interview_result_id == result.id,
+                CodingAnswers.coding_question_id == real_coding_id
+            )
+        ).first()
+
+        if answer:
+            answer.candidate_answer = answer_text
+            if feedback is not None: answer.feedback = feedback
+            if score is not None: answer.score = score
+            answer.timestamp = datetime.now(timezone.utc)
+        else:
+            answer = CodingAnswers(
+                interview_result_id=result.id,
+                coding_question_id=real_coding_id,
+                candidate_answer=answer_text,
+                feedback=feedback or "",
+                score=score if score is not None else 0.0
+            )
+        session_db.add(answer)
+        session_db.commit()
+        session_db.refresh(answer)
+
+        _evaluate_and_update_score(session_db, answer, coding_q.problem_statement or coding_q.title or "", session, result)
+        session_db.refresh(answer)
+
+        return ApiResponse(
+            status_code=200,
+            data={
+                "id": answer.id,
+                "interview_result_id": answer.interview_result_id,
+                "coding_question_id": {
+                    "id": coding_q.id, "title": coding_q.title, "problem_statement": coding_q.problem_statement,
+                    "examples": coding_q.examples, "constraints": coding_q.constraints, "marks": coding_q.marks
+                },
+                "candidate_answer": answer.candidate_answer,
+                "feedback": answer.feedback,
+                "score": answer.score,
+                "timestamp": answer.timestamp.isoformat()
+            },
+            message="Coding answer submitted successfully"
+        )
+    
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    # Standard flow
     answer = session_db.exec(
         select(Answers).where(
             Answers.interview_result_id == result.id,
@@ -1083,58 +1116,28 @@ async def submit_answer_text(
     session_db.add(answer)
     session_db.commit()
     session_db.refresh(answer)
-    
-    # Load the related question
-    question = session_db.get(Questions, question_id)
-    if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
 
-    # ── Real-time Evaluation ─────────────────────────────────────────────────
-    # Evaluate immediately and update running total_score.  Errors are swallowed
-    # inside the helper so a failed LLM call never blocks the response.
-    q_text = question.question_text or question.content or ""
-    _evaluate_and_update_score(
-        db=session_db,
-        answer=answer,
-        question_text=q_text,
-        session_obj=session,
-        result_obj=result,
-    )
+    _evaluate_and_update_score(session_db, answer, question.question_text or question.content or "", session, result)
+    session_db.refresh(answer)
 
-    # Refresh to pick up score/feedback written by the evaluation helper
-    try:
-        session_db.refresh(answer)
-    except Exception:
-        pass
-
-    question_data = QuestionData(
-        id=question.id,
-        paper_id=question.paper_id,
-        content=question.content or "",
-        question_text=question.question_text or "",
-        topic=question.topic or "",
-        difficulty=question.difficulty.value if hasattr(question.difficulty, 'value') else str(question.difficulty),
-        marks=question.marks,
-        response_type=question.response_type.value if hasattr(question.response_type, 'value') else str(question.response_type)
-    )
-    
-    answer_data = AnswersData(
-        id=answer.id,
-        interview_result_id=answer.interview_result_id,
-        question_id=question_data,
-        candidate_answer=answer.candidate_answer,
-        feedback=answer.feedback,
-        score=answer.score,
-        audio_path=answer.audio_path,
-        transcribed_text=answer.transcribed_text,
-        timestamp=answer.timestamp
-    )
-    
-    # Return the exact requested schema
     return ApiResponse(
         status_code=200,
-        data=answer_data,
-        message="Text answer submitted and evaluated successfully"
+        data=AnswersData(
+            id=answer.id,
+            interview_result_id=answer.interview_result_id,
+            question=QuestionData(
+                id=question.id, paper_id=question.paper_id, content=question.content or "",
+                question_text=question.question_text or "", topic=question.topic or "",
+                difficulty=str(question.difficulty), marks=question.marks, response_type=str(question.response_type)
+            ),
+            candidate_answer=answer.candidate_answer,
+            feedback=answer.feedback,
+            score=answer.score,
+            audio_path=answer.audio_path or "",
+            transcribed_text=answer.transcribed_text or "",
+            timestamp=answer.timestamp
+        ),
+        message="Answer submitted successfully"
     )
 
 
@@ -1285,7 +1288,7 @@ async def log_tab_switch(
             id=session_obj.paper.id,
             name=session_obj.paper.name,
             description=session_obj.paper.description or "",
-            admin_user=admin_data if admin_data else 0,
+            admin_user=admin_data if admin_data else None,
             question_count=len(paper_questions),
             questions=paper_questions,
             total_marks=session_obj.paper.total_marks,
@@ -1295,9 +1298,9 @@ async def log_tab_switch(
     result_data = InterviewSessionData(
         id=session_obj.id,
         access_token=session_obj.access_token,
-        admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
+        admin_user=serialize_user(session_obj.admin) if session_obj.admin else None,  # ← Always UserNested
         candidate_user=candidate_data,
-        paper_id=paper_data,
+        paper=paper_data,
         schedule_time=session_obj.schedule_time,
         duration_minutes=session_obj.duration_minutes,
         max_questions=session_obj.max_questions,
