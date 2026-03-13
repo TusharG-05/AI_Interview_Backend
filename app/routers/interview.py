@@ -256,22 +256,28 @@ async def access_interview(
 
     now = datetime.now(timezone.utc)
     
-    # 1. Status Expired/Cancelled Check
-    if session.status in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
-        raise HTTPException(status_code=403, detail=f"Interview is {session.status.value.lower()}")
-        
-    # 2. Start Time Check (Temporal)
+    # 1. Consolidated Validation Check (User Request)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-        
-    # 3. Expiration Check
     expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
-    if now > expiration_time:
-         session.status = InterviewStatus.EXPIRED
-         session_db.add(session)
-         session_db.commit()
-         raise HTTPException(status_code=403, detail="Interview link has expired")
+
+    # Check for Cancelled status first (separate case)
+    if session.status == InterviewStatus.CANCELLED:
+        raise HTTPException(status_code=403, detail="Interview is cancelled")
+
+    # Catch Expired (Calculated or Status) or Completed (Flag or Status)
+    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
+    is_finished = session.is_completed or session.status == InterviewStatus.COMPLETED
+
+    if is_expired or is_finished:
+        # If it just expired now, update status in DB for record keeping
+        if is_expired and session.status != InterviewStatus.EXPIRED:
+            session.status = InterviewStatus.EXPIRED
+            session_db.add(session)
+            session_db.commit()
+            
+        raise HTTPException(status_code=403, detail="Interview is completed.")
          
     # 4. Track link access status change
     from ..services.status_manager import record_status_change
