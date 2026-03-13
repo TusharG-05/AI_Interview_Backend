@@ -18,7 +18,7 @@ class PaperNested(BaseModel):
     id: int
     name: str
     description: str
-    admin_user: UserNested  # Always use UserNested object for consistency
+    admin_user: Optional[UserNested] = None  # Always use UserNested object for consistency
     question_count: int
     total_marks: int
     created_at: datetime
@@ -26,7 +26,7 @@ class PaperNested(BaseModel):
 
 class CodingQuestionNested(BaseModel):
     id: int
-    paper_id: int
+    paper_id: Optional[int] = None
     title: str
     problem_statement: str
     examples: List[Any] = []
@@ -54,7 +54,7 @@ class CodingPaperNested(BaseModel):
     id: int
     name: str
     description: str
-    admin_user: UserNested  # Always use UserNested object for consistency
+    admin_user: Optional[UserNested] = None  # Always use UserNested object for consistency
     question_count: int
     total_marks: int
     created_at: datetime
@@ -73,8 +73,8 @@ class InterviewAccessResponse(BaseModel):
     access_token: str
     admin_user: Optional[UserNested] = None  # Consistent UserNested type
     candidate_user: Optional[UserNested] = None
-    paper_id: Optional[PaperNested] = None
-    coding_paper_id: Optional[CodingPaperNested] = None
+    paper: Optional[PaperNested] = None
+    coding_paper: Optional[CodingPaperNested] = None
     schedule_time: datetime
     duration_minutes: int
     max_questions: int
@@ -98,7 +98,7 @@ class InterviewAccessResponse(BaseModel):
 
 class QuestionData(BaseModel):
     id: int
-    paper_id: int
+    paper_id: Optional[int] = None
     content: str
     question_text: str
     topic: str
@@ -132,7 +132,7 @@ class QuestionPaperData(BaseModel):
 class AnswersData(BaseModel):
     id: int
     interview_result_id: int
-    question_id: QuestionData
+    question: QuestionData
     candidate_answer: str
     feedback: str
     score: float
@@ -143,7 +143,7 @@ class AnswersData(BaseModel):
 class CodingAnswersData(BaseModel):
     id: int
     interview_result_id: int
-    coding_question_id: CodingQuestionNested
+    coding_question: CodingQuestionNested
     candidate_answer: str
     feedback: str
     score: float
@@ -152,8 +152,8 @@ class CodingAnswersData(BaseModel):
 class AnswersDataAdmin(BaseModel):
     id: int
     interview_result_id: int
-    question_id: Optional[QuestionData] = None  # Lowercase q specifically requested for admin results
-    coding_question_id: Optional[CodingQuestionNested] = None
+    question: Optional[QuestionData] = None  # Lowercase q specifically requested for admin results
+    coding_question: Optional[CodingQuestionNested] = None
     candidate_answer: str
     feedback: str
     score: float
@@ -166,8 +166,8 @@ class InterviewSessionData(BaseModel):
     access_token: str
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
-    paper_id: Optional[QuestionPaperData] = None
-    coding_paper_id: Optional[CodingPaperNested] = None
+    paper: Optional[QuestionPaperData] = None
+    coding_paper: Optional[CodingPaperNested] = None
     schedule_time: datetime
     duration_minutes: int
     max_questions: int
@@ -228,7 +228,7 @@ class CodingAnswersData(BaseModel):
 
 class AdminResultData(BaseModel):
     id: int
-    interview_data: InterviewSessionData
+    interview: InterviewSessionData
     interview_responses: List[AnswersDataAdmin] = []
     coding_responses: List[CodingAnswersData] = []
     total_score: float
