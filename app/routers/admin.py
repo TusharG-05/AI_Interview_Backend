@@ -1,5 +1,6 @@
 from typing import List, Optional
 import json as _json
+from sqlalchemy import func
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -1387,8 +1388,6 @@ async def list_candidates(
     session: Session = Depends(get_session)
 ):
     """List users with CANDIDATE role with pagination and search."""
-    from ..schemas.user_schemas import serialize_user
-    from sqlalchemy import func
     
     query = select(User)
     

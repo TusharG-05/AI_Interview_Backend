@@ -13,6 +13,7 @@ from ..auth.security import (
 from ..schemas.requests import UserCreate, LoginRequest
 from ..schemas.responses import Token, UserRead
 from ..schemas.api_response import ApiResponse
+from ..schemas.user_schemas import serialize_user
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
 from ..models.db_models import User, UserRole, InterviewSession, Team
@@ -224,7 +225,6 @@ async def register(
 @router.get("/me", response_model=ApiResponse[dict])
 async def read_users_me(current_user: User = Depends(get_current_user), session: Session = Depends(get_session)):
     """Get current logged in user details with complete profile information."""
-    from ..schemas.user_schemas import serialize_user
     
     # Get complete user data
     user_data = serialize_user(current_user)

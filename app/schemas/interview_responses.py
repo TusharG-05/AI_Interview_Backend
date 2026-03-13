@@ -18,7 +18,7 @@ class PaperNested(BaseModel):
     id: int
     name: str
     description: str
-    admin_user: UserNested  # Always use UserNested object for consistency
+    admin_user: Optional[UserNested] = None
     question_count: int
     total_marks: int
     created_at: datetime
@@ -54,7 +54,7 @@ class CodingPaperNested(BaseModel):
     id: int
     name: str
     description: str
-    admin_user: UserNested  # Always use UserNested object for consistency
+    admin_user: Optional[UserNested] = None
     question_count: int
     total_marks: int
     created_at: datetime

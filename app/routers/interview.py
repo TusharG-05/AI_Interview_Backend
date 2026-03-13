@@ -13,7 +13,7 @@ from ..schemas.interview_responses import (
     CodingQuestionNested, CodingPaperNested, InterviewSessionData, 
     QuestionPaperData, QuestionData, AnswersData, CodingAnswersData
 )
-from ..schemas.user_schemas import UserNested
+from ..schemas.user_schemas import UserNested, serialize_user
 from ..schemas.api_response import ApiResponse
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
@@ -150,7 +150,9 @@ async def access_interview(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.admin),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
-            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.admin),
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions),
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin)
         )
     ).first()
     
@@ -194,6 +196,11 @@ async def access_interview(
                 response_type=q.response_type or "audio"
             ) for q in session.paper.questions
         ]
+        
+        paper_admin_data = None
+        if session.paper.admin:
+            paper_admin_data = serialize_user(session.paper.admin)
+            
         paper_data = PaperNested(
             id=session.paper.id,
             name=session.paper.name,
@@ -222,11 +229,16 @@ async def access_interview(
                 marks=cq.marks or 0
             ) for cq in session.coding_paper.questions
         ]
+        
+        coding_admin_data = None
+        if session.coding_paper.admin:
+            coding_admin_data = serialize_user(session.coding_paper.admin)
+            
         coding_paper_data = CodingPaperNested(
             id=session.coding_paper.id,
             name=session.coding_paper.name,
             description=session.coding_paper.description or "",
-            admin_user=serialize_user(session.coding_paper.admin),  # ← Always UserNested
+            admin_user=coding_admin_data,
             question_count=session.coding_paper.question_count or len(coding_questions_list),
             total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session.coding_paper.created_at,
