@@ -23,6 +23,7 @@ class UserCreate(BaseModel):
 # Admin Requests
 class InterviewScheduleCreate(BaseModel):
     candidate_id: int
+    team_id: Optional[int] = None
     paper_id: Optional[int] = None         # Standard question paper (optional)
     coding_paper_id: Optional[int] = None  # Coding question paper (optional)
     interview_round: InterviewRound  # Required: e.g. ROUND_1, ROUND_2
