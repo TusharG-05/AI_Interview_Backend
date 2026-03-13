@@ -35,6 +35,10 @@ temp_uploads/
 *.log
 *.sqlite3
 Non_usable/
+backups/
+reports/
+api_tests/
+test_*.txt
 
 # Build & Test Artifacts
 tests/
@@ -45,3 +49,6 @@ pytest.ini
 frontend_demo.html
 cert.pem
 key.pem
+.env
+.env.*
+!.env.example

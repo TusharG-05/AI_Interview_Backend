@@ -30,6 +30,7 @@ class UserNested(BaseModel):
     role: str
     access_token: Optional[str] = None
     profile_image: Optional[str] = None
+    team_id: Optional[int] = None
 
 
 def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fallback_role: str = "candidate") -> Dict[str, Any]:
@@ -76,7 +77,7 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
         "role": role_key,
         "profile_image": user.profile_image,
         "team": team_data,
-        "team_id": user.team_id
+        "team_id": getattr(user, "team_id", None)
     }
 
 
@@ -108,5 +109,5 @@ def serialize_user_flat(user: User) -> Dict[str, Any]:
         "role": role_key,
         "profile_image": user.profile_image,
         "team": team_data,
-        "team_id": user.team_id
+        "team_id": getattr(user, "team_id", None)
     }
