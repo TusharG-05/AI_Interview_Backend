@@ -2,15 +2,11 @@ from typing import Optional, List, Any
 from pydantic import BaseModel, Field, model_validator
 from .user_schemas import UserNested
 from .interview_result import QuestionPaperNested
+from .team_schemas import TeamReadBasic
 import json as _json
 
 # Team Responses
-class TeamReadBasic(BaseModel):
-    id: int
-    name: str
-    description: Optional[str] = None
-    created_at: str
-    user_count: int = 0
+# TeamReadBasic moved to team_schemas.py
 
 class TeamRead(TeamReadBasic):
     users: List["UserRead"] = []  # Full nested users

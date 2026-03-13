@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, model_validator
 from datetime import datetime
 import json as _json
 from .user_schemas import UserNested
+from .team_schemas import TeamReadBasic
 
 class QuestionNested(BaseModel):
     id: int
@@ -66,7 +67,7 @@ class LoginUserNested(BaseModel):
     full_name: str
     role: str
     access_token: Optional[str] = None
-    team_id: Optional[int] = None
+    team: Optional[TeamReadBasic] = None
 
 class InterviewAccessResponse(BaseModel):
     id: int

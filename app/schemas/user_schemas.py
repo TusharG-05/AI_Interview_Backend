@@ -7,6 +7,7 @@ Provides clean user serialization excluding sensitive fields.
 from typing import Optional, Dict, Any
 from pydantic import BaseModel
 from ..models.db_models import User, UserRole
+from .team_schemas import TeamReadBasic
 
 
 class UserPublic(BaseModel):
@@ -16,7 +17,7 @@ class UserPublic(BaseModel):
     full_name: str
     role: str
     profile_image: Optional[str] = None
-    team_id: Optional[int] = None
+    team: Optional[TeamReadBasic] = None
     
     class Config:
         from_attributes = True
@@ -30,7 +31,7 @@ class UserNested(BaseModel):
     role: str
     access_token: Optional[str] = None
     profile_image: Optional[str] = None
-    team_id: Optional[int] = None
+    team: Optional[TeamReadBasic] = None
 
 
 def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fallback_role: str = "candidate") -> Dict[str, Any]:
@@ -55,7 +56,7 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
             "full_name": fallback_name or "Deleted User",
             "role": fallback_role,
             "profile_image": None,
-            "team_id": None
+            "team": None
         }
     
     role_key = user.role.value if isinstance(user.role, UserRole) else str(user.role)
@@ -76,8 +77,7 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "team": team_data,
-        "team_id": getattr(user, "team_id", None)
+        "team": team_data
     }
 
 
@@ -108,6 +108,5 @@ def serialize_user_flat(user: User) -> Dict[str, Any]:
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "team": team_data,
-        "team_id": getattr(user, "team_id", None)
+        "team": team_data
     }
