@@ -1,8 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import fs from 'fs'
-import path from 'path'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -13,9 +11,8 @@ export default defineConfig({
   server: {
     host: true, // Expose to local network
     port: 5174,
-    https: {
-      key: fs.readFileSync(path.resolve(__dirname, '../key.pem')),
-      cert: fs.readFileSync(path.resolve(__dirname, '../cert.pem')),
-    }
+  },
+  define: {
+    'process.env.VITE_API_BASE_URL': JSON.stringify('http://localhost:8000/api')
   }
 })
