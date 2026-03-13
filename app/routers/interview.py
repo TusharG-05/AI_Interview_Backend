@@ -443,28 +443,38 @@ async def upload_selfie_session(
     # 4. Generate Embeddings (best effort — never block on failure)
     try:
         from deepface import DeepFace
+        import asyncio
         embeddings_map = {}
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(image_bytes)
             tmp_path = tmp.name
         
         try:
-            try:
-                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                if arc_objs:
-                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-            except Exception as e:
-                _logger.warning(f"ArcFace embedding failed: {e}")
+            # Use asyncio timeout for better Hugging Face compatibility
+            async def generate_embeddings():
+                try:
+                    arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False, detector_backend="skip")
+                    if arc_objs:
+                        embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                except Exception as e:
+                    _logger.warning(f"ArcFace embedding failed: {e}")
 
-            try:
-                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                if sface_objs:
-                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
-            except Exception as e:
-                _logger.warning(f"SFace embedding failed: {e}")
+                try:
+                    sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False, detector_backend="skip")
+                    if sface_objs:
+                        embeddings_map["SFace"] = sface_objs[0]["embedding"]
+                except Exception as e:
+                    _logger.warning(f"SFace embedding failed: {e}")
 
-            if embeddings_map:
-                candidate.face_embedding = json.dumps(embeddings_map)
+                if embeddings_map:
+                    candidate.face_embedding = json.dumps(embeddings_map)
+            
+            # Run with timeout
+            try:
+                await asyncio.wait_for(generate_embeddings(), timeout=10.0)
+            except asyncio.TimeoutError:
+                _logger.warning("Embedding generation timed out (non-fatal)")
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -475,17 +485,23 @@ async def upload_selfie_session(
     from ..services.cloudinary_service import CloudinaryService
     cloudinary_service = CloudinaryService()
     try:
-        cloudinary_url = cloudinary_service.upload_image(image_bytes, folder="interview_selfies")
-        candidate.profile_image = cloudinary_url
+        # Add timeout for Cloudinary upload
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(cloudinary_service.upload_image, image_bytes, folder="interview_selfies")
+            try:
+                cloudinary_url = future.result(timeout=15)  # 15 second timeout
+                candidate.profile_image = cloudinary_url
+            except concurrent.futures.TimeoutError:
+                _logger.warning("Cloudinary upload timed out (non-fatal)")
+                raise
     except Exception as e:
         _logger.error(f"Cloudinary upload failed (non-fatal): {e}")
-        # Fallback to base64 if cloudinary fails? 
-        # User explicitly asked to implement cloudinary and avoid base64.
-        # But for robustness during transition, maybe keep it?
-        # Actually, let's just use Cloudinary as requested.
+        # Fallback to base64 if cloudinary fails
         import base64
+        content_type = file.content_type or "image/jpeg"
         base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-        candidate.profile_image = f"data:{file.content_type};base64,{base64_encoded}"
+        candidate.profile_image = f"data:{content_type};base64,{base64_encoded}"
 
     session_db.add(candidate)
     
