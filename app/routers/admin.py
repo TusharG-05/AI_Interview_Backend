@@ -1445,11 +1445,12 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         # 1. Admin
         admin_obj = None
         if s.admin:
+            from .teams import _serialize_team_basic
             admin_obj = UserNested(
                 id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
                 role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
                 profile_image=s.admin.profile_image,
-                team_id=s.admin.team_id
+                team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
             )
         # admin was deleted, no fallback needed
              
@@ -1561,11 +1562,12 @@ async def get_result(
     # 1. Admin
     admin_obj = None
     if s.admin:
+        from .teams import _serialize_team_basic
         admin_obj = UserNested(
             id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
             access_token=s.admin.access_token,
-            team_id=s.admin.team_id
+            team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
         )
          
     # 2. Candidate

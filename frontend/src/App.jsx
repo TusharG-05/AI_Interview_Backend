@@ -1,8 +1,8 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
-import Login from './pages/Login';
-import AdminDashboard from './pages/AdminDashboard';
+import Login from './pages/EnhancedLogin';
+import AdminDashboard from './pages/EnhancedAdminDashboard';
 import AdminSchedules from './pages/AdminSchedules';
 import AdminPapers from './pages/AdminPapers';
 import AdminPaperDetails from './pages/AdminPaperDetails';
@@ -10,7 +10,7 @@ import AdminCandidates from './pages/AdminCandidates';
 import AdminGhostMode from './pages/AdminGhostMode';
 import CandidateDashboard from './pages/CandidateDashboard';
 import CandidateHistory from './pages/CandidateHistory';
-import InterviewSession from './pages/InterviewSession';
+import InterviewSession from './pages/EnhancedInterviewSession';
 import InterviewResults from './pages/InterviewResults';
 import './index.css';
 
@@ -19,6 +19,7 @@ const App = () => {
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/enhanced-login" element={<Login />} />
         <Route path="/interview/:token" element={<InterviewSession />} />
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/login" replace />} />
