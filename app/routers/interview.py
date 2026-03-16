@@ -367,9 +367,6 @@ async def start_session_logic(
     Called when candidate actually enters the interview session (uploads selfie/audio).
     Sets status to LIVE.
     """
-    from ..services.status_manager import record_status_change
-    from ..models.db_models import CandidateStatus
-    
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404)
     
