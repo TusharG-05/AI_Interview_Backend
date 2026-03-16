@@ -16,7 +16,7 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
     # --- 1. SETUP DATA ---
     from app.models.db_models import QuestionPaper, InterviewSession, InterviewStatus, Questions, CandidateStatus
 
-    admin, candidate = test_users
+    admin, candidate, super_admin = test_users
 
     # Create Paper
     paper = QuestionPaper(name="Integration Paper")

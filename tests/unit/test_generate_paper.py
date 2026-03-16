@@ -181,7 +181,7 @@ def test_generate_paper_llm_failure(client, auth_headers):
         )
 
     assert response.status_code == 503
-    assert "AI service unavailable" in response.json().get("message", "")
+    assert "AI service is currently unavailable" in response.json().get("message", "")
 
 
 def test_generate_paper_requires_admin(client, session):

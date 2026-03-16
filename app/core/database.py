@@ -36,7 +36,7 @@ def init_db():
             # Force Database URL from environment for migrations
             alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
             
-            logger.info("Database: Running migrations (alembic upgrade head)...")
+            logger.info(f"Database: Running migrations (alembic upgrade head) on URL: {DATABASE_URL[:20]}...")
             command.upgrade(alembic_cfg, "head")
             logger.info("Database: Migrations complete.")
         except Exception as migration_e:

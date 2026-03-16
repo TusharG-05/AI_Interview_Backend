@@ -72,6 +72,7 @@ class Team(SQLModel, table=True):
         sa_relationship_kwargs={"foreign_keys": "User.team_id"}
     )
 
+
 class QuestionPaper(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
