@@ -10,7 +10,6 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     full_name: Optional[str] = None
     role: Optional[str] = None  # String, will be converted to UserRole
-    resume_text: Optional[str] = None
     team_id: Optional[int] = None
 
 class UserCreate(BaseModel):
