@@ -12,6 +12,7 @@ from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
+from ..services.status_manager import record_status_change
 from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
@@ -781,8 +782,6 @@ async def schedule_interview(
         raise HTTPException(status_code=500, detail=f"Failed to schedule interview: {str(e)}")
     
     # Track initial status - INVITED
-    from ..services.status_manager import record_status_change
-    from ..models.db_models import CandidateStatus
     
     record_status_change(
         session=session,
@@ -947,7 +946,6 @@ async def get_live_status_dashboard(
     Returns:
         List of active interviews with basic status, warnings, and progress
     """
-    from ..models.db_models import CandidateStatus
     
     # Get all active interviews for this admin
     # Active = not completed/cancelled/suspended permanently
