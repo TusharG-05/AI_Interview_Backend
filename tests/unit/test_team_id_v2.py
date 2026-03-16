@@ -44,7 +44,7 @@ def test_team_id_in_responses(session, client):
     cand_headers = {"Authorization": f"Bearer {cand_token}"}
     
     # Paper
-    paper = QuestionPaper(name="Team Paper", adminUser=admin.id)
+    paper = QuestionPaper(name="Team Paper", admin_user=admin.id)
     session.add(paper)
     session.commit()
     session.refresh(paper)
@@ -73,31 +73,31 @@ def test_team_id_in_responses(session, client):
     response = client.get("/api/auth/me", headers=admin_headers)
     assert response.status_code == 200
     r_data = response.json()["data"]
-    assert r_data["team_id"] == TEST_TEAM_ID
-    print("✓ /auth/me has team_id")
+    assert r_data["team"]["id"] == TEST_TEAM_ID
+    print("✓ /auth/me has team info")
     
     # 3. Test /interview/access/{token}
     # Provide candidate headers because the endpoint requires login
     response = client.get(f"/api/interview/access/{interview.access_token}", headers=cand_headers)
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["candidate_id"]["team_id"] == TEST_TEAM_ID
-    assert data["admin_id"]["team_id"] == TEST_TEAM_ID
-    print("✓ /interview/access has team_id in candidate and admin objects")
+    assert data["candidate_user"]["team"]["id"] == TEST_TEAM_ID
+    assert data["admin_user"]["team"]["id"] == TEST_TEAM_ID
+    print("✓ /interview/access has team info")
     
     # 4. Test /admin/results/{interview_id}
     response = client.get(f"/api/admin/results/{interview.id}", headers=admin_headers)
     assert response.status_code == 200
     data = response.json()["data"]
-    # Check if team_id is in candidate_id nested inside interviewData
-    assert data["interviewData"]["candidate_id"]["team_id"] == TEST_TEAM_ID
-    assert data["interviewData"]["admin_id"]["team_id"] == TEST_TEAM_ID
-    print("✓ /admin/results has team_id in candidate and admin objects")
+    # Check if team is in candidate_user nested inside interview
+    assert data["interview"]["candidate_user"]["team"]["id"] == TEST_TEAM_ID
+    assert data["interview"]["admin_user"]["team"]["id"] == TEST_TEAM_ID
+    print("✓ /admin/results has team info")
 
     # 5. Test /admin/interviews/{interview_id}
     response = client.get(f"/api/admin/interviews/{interview.id}", headers=admin_headers)
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["candidate_id"]["team_id"] == TEST_TEAM_ID
-    assert data["admin_id"]["team_id"] == TEST_TEAM_ID
-    print("✓ /admin/interviews/{id} has team_id in candidate and admin objects")
+    assert data["candidate_user"]["team"]["id"] == TEST_TEAM_ID
+    assert data["admin_user"]["team"]["id"] == TEST_TEAM_ID
+    print("✓ /admin/interviews/{id} has team info")

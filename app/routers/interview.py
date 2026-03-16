@@ -5,15 +5,25 @@ from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions
 from ..schemas.requests import AnswerRequest
-from ..schemas.interview_result import UserNested, QuestionPaperNested
+from ..schemas.interview_result import QuestionPaperNested
 from ..services import interview as interview_service
 from ..services.audio import AudioService
 from ..schemas.interview_responses import (
-    InterviewAccessResponse, QuestionNested, PaperNested, 
-    CodingQuestionNested, CodingPaperNested, InterviewSessionData, 
-    QuestionPaperData, QuestionData, AnswersData, CodingAnswersData
+    InterviewSessionData, 
+    InterviewAccessResponse, 
+    TabSwitchRequest,
+    UserNested, 
+    PaperNested, 
+    QuestionNested, 
+    CodingPaperNested, 
+    CodingQuestionNested,
+    AnswersData,
+    QuestionData,
+    CodingAnswersData,
+    QuestionPaperData,
+    CodingAnswersData
 )
-from ..schemas.user_schemas import UserNested, serialize_user
+from ..schemas.user_schemas import serialize_user
 from ..schemas.api_response import ApiResponse
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
@@ -30,7 +40,8 @@ from ..tasks.interview_tasks import process_session_results_task
 logger = logging.getLogger(__name__)
 audio_service = AudioService()
 
-from ..services.status_manager import add_violation
+from ..services.status_manager import add_violation, record_status_change
+from ..models.db_models import CandidateStatus
 
 
 def _evaluate_and_update_score(
@@ -283,6 +294,9 @@ async def access_interview(
             
         raise HTTPException(status_code=403, detail="Interview is completed.")
          
+    # Check for tab-switch timeout
+    enforce_tab_timeout(session_db, session)
+
     # 4. Track link access status change
     from ..services.status_manager import record_status_change
     if session.current_status == CandidateStatus.INVITED:
@@ -363,7 +377,7 @@ async def start_session_logic(
     if session.is_suspended:
         raise HTTPException(
             status_code=403, 
-            detail=f"Interview suspended: {session.suspension_reason}"
+            detail=f"Interview terminated: {session.suspension_reason}"
         )
     
     # Track enrollment start
@@ -571,8 +585,11 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     if session_obj.is_suspended:
         raise HTTPException(
             status_code=403,
-            detail=f"Interview suspended: {session_obj.suspension_reason}"
+            detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
+    
+    # Check for tab-switch timeout
+    enforce_tab_timeout(session_db, session_obj)
     
     # Track interview active status (on first question fetch)
     if session_obj.current_status == CandidateStatus.ENROLLMENT_COMPLETED:
@@ -819,8 +836,11 @@ async def submit_answer_audio(
     if session_obj.is_suspended:
         raise HTTPException(
             status_code=403,
-            detail=f"Interview suspended: {session_obj.suspension_reason}"
+            detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
+    
+    # Check for tab-switch timeout
+    enforce_tab_timeout(session_db, session_obj)
     
     os.makedirs("app/assets/audio/responses", exist_ok=True)
     audio_path = f"app/assets/audio/responses/resp_{interview_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
@@ -957,6 +977,9 @@ async def submit_answer_code(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
+    # Check for tab-switch timeout
+    enforce_tab_timeout(session_db, session)
+
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
         result = InterviewResult(interview_id=interview_id)
@@ -1028,6 +1051,9 @@ async def submit_answer_text(
     """Submits a text answer, handles both standard and proxy-coding questions."""
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
+
+    # Check for tab-switch timeout
+    enforce_tab_timeout(session_db, session)
 
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
@@ -1210,6 +1236,7 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
 @router.post("/{interview_id}/tab-switch", response_model=ApiResponse[InterviewSessionData])
 async def log_tab_switch(
     interview_id: int,
+    request: TabSwitchRequest,
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ) -> ApiResponse[InterviewSessionData]:
@@ -1237,31 +1264,99 @@ async def log_tab_switch(
         raise HTTPException(status_code=400, detail="Interview is already completed")
         
     if session_obj.is_suspended:
-        return ApiResponse(
+        raise HTTPException(
             status_code=403,
-            data={"is_suspended": True, "reason": session_obj.suspension_reason},
-            message="Interview is currently suspended"
+            detail={
+                "is_suspended": True, 
+                "reason": session_obj.suspension_reason,
+                "message": "Interview is currently suspended"
+            }
         )
 
-    # Use status_manager to log the violation
-    # We use force_severity="warning" to ensure it logs a warning even if default is different
-    # NOTE: add_violation normally suspends if max_warnings exceeded.
-    # To follow 'will do termination later', we can check if we should override that logic.
-    # However, 'warning' severity naturally increments warning_count.
+    # Logic for TAB_SWITCH and TAB_RETURN
+    now = datetime.now(timezone.utc)
+    event_type = request.event_type.upper()
     
-    event = add_violation(
-        session=session_db,
-        interview_session=session_obj,
-        event_type="tab_switch",
-        details="Candidate switched browser tab",
-        force_severity="warning"
-    )
-    
-    # Determine the return message
-    if session_obj.is_suspended:
-        return_msg = f"Interview suspended: Maximum tab switches exceeded ({session_obj.warning_count}/{session_obj.max_warnings})."
+    return_msg = ""
+    if event_type == "TAB_SWITCH":
+        # Increment counts
+        session_obj.tab_switch_count += 1
+        session_obj.tab_switch_timestamp = now
+        session_obj.tab_warning_active = True
+        
+        # Log via status_manager for historical record
+        add_violation(
+            session=session_db,
+            interview_session=session_obj,
+            event_type="tab_switch",
+            details=f"Tab switch detected (Attempt {session_obj.tab_switch_count})",
+            force_severity="warning"
+        )
+        
+        if session_obj.tab_switch_count >= 3:
+            # Immediate termination
+            session_obj.is_suspended = True
+            session_obj.suspension_reason = "EXCESSIVE_TAB_SWITCH"
+            session_obj.suspended_at = now
+            session_obj.tab_warning_active = False # Deactivate warning as it's now a termination
+            
+            record_status_change(
+                session=session_db,
+                interview_session=session_obj,
+                new_status=CandidateStatus.SUSPENDED,
+                metadata={"reason": "EXCESSIVE_TAB_SWITCH", "count": session_obj.tab_switch_count}
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "is_suspended": True,
+                    "reason": "EXCESSIVE_TAB_SWITCH",
+                    "message": "Interview terminated due to excessive tab switching."
+                }
+            )
+        else:
+            return_msg = "Tab switch detected. Please return to the interview tab within 30 seconds."
+            
+    elif event_type == "TAB_RETURN":
+        if not session_obj.tab_warning_active or not session_obj.tab_switch_timestamp:
+            return_msg = "Tab return recorded."
+        else:
+            ts = session_obj.tab_switch_timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            elapsed = (now - ts).total_seconds()
+            
+            if elapsed > 30:
+                # Terminate
+                session_obj.is_suspended = True
+                session_obj.suspension_reason = "TAB_TIMEOUT"
+                session_obj.suspended_at = now
+                session_obj.tab_warning_active = False
+                
+                record_status_change(
+                    session=session_db,
+                    interview_session=session_obj,
+                    new_status=CandidateStatus.SUSPENDED,
+                    metadata={"reason": "TAB_TIMEOUT", "elapsed_seconds": elapsed}
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "is_suspended": True,
+                        "reason": "TAB_TIMEOUT",
+                        "message": "Interview terminated due to tab-switch timeout."
+                    }
+                )
+            else:
+                # Valid return
+                session_obj.tab_warning_active = False
+                return_msg = "Tab return within time limit."
     else:
-        return_msg = f"Warning: Tab switch detected. Please stay on the interview screen. (Warning {session_obj.warning_count} of {session_obj.max_warnings})"
+        raise HTTPException(status_code=400, detail=f"Invalid event_type: {event_type}")
+
+    session_db.add(session_obj)
+    session_db.commit()
+    session_db.refresh(session_obj)
 
     # Build InterviewSessionData for consistent response
     candidate_data = None
@@ -1327,7 +1422,10 @@ async def log_tab_switch(
         suspended_at=session_obj.suspended_at,
         enrollment_audio_path=session_obj.enrollment_audio_path,
         is_completed=session_obj.is_completed or False,
-        allow_copy_paste=session_obj.allow_copy_paste
+        allow_copy_paste=session_obj.allow_copy_paste,
+        tab_switch_count=session_obj.tab_switch_count,
+        tab_switch_timestamp=session_obj.tab_switch_timestamp,
+        tab_warning_active=session_obj.tab_warning_active
     )
 
     return ApiResponse(
@@ -1335,6 +1433,47 @@ async def log_tab_switch(
         data=result_data,
         message=return_msg
     )
+
+
+def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
+    """
+    Checks if there is an active tab-switch warning that has exceeded 30 seconds.
+    If so, terminates the interview immediately.
+    """
+    if session_obj.tab_warning_active and session_obj.tab_switch_timestamp:
+        now = datetime.now(timezone.utc)
+        ts = session_obj.tab_switch_timestamp
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        elapsed = (now - ts).total_seconds()
+        
+        if elapsed > 30:
+            logger.warning(f"Session {session_obj.id}: Proactive termination due to tab-switch timeout ({elapsed}s)")
+            session_obj.is_suspended = True
+            session_obj.suspension_reason = "TAB_TIMEOUT"
+            session_obj.suspended_at = now
+            session_obj.tab_warning_active = False
+            
+            # Record status change
+            record_status_change(
+                session=db,
+                interview_session=session_obj,
+                new_status=CandidateStatus.SUSPENDED,
+                metadata={"reason": "TAB_TIMEOUT", "proactive": True, "elapsed_seconds": elapsed}
+            )
+            db.add(session_obj)
+            db.commit()
+            db.refresh(session_obj)
+            
+    if session_obj.is_suspended:
+        raise HTTPException(
+            status_code=403, 
+            detail={
+                "message": "Interview session is terminated.",
+                "reason": session_obj.suspension_reason or "Session suspended",
+                "is_suspended": True
+            }
+        )
 
 
 # --- Standalone Tools ---

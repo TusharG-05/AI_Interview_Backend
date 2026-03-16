@@ -120,7 +120,7 @@ def test_submit_answer_text(session, client, test_users, auth_headers):
     }
     response = client.post("/api/interview/submit-answer-text", data=payload, headers=auth_headers)
     assert response.status_code == 200
-    assert response.json()["data"]["Question_id"]["id"] == question.id
+    assert response.json()["data"]["question"]["id"] == question.id
 
     from app.models.db_models import Answers
     assert session.query(Answers).count() == 1

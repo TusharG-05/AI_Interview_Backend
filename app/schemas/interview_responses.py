@@ -92,10 +92,13 @@ class InterviewAccessResponse(BaseModel):
     suspended_at: Optional[datetime] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool
-    allow_copy_paste: bool = False
+    tab_warning_active: bool = False
     result_status: Optional[str] = "PENDING"
 
 # --- End New Schemas ---
+
+class TabSwitchRequest(BaseModel):
+    event_type: str  # "TAB_SWITCH" or "TAB_RETURN"
 
 class QuestionData(BaseModel):
     id: int
@@ -186,6 +189,9 @@ class InterviewSessionData(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool
     allow_copy_paste: bool = False
+    tab_switch_count: int = 0
+    tab_switch_timestamp: Optional[datetime] = None
+    tab_warning_active: bool = False
     result_status: Optional[str] = "PENDING"
 
 class CodingQuestionBasic(BaseModel):
