@@ -31,8 +31,17 @@ async def get_resume(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    if not user.resume_path or not os.path.exists(user.resume_path):
+    if not user.resume_path:
         raise HTTPException(status_code=404, detail="Resume not found")
+
+    # Handle Cloudinary URL (Redirect)
+    if user.resume_path.startswith("http"):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=user.resume_path)
+
+    # Legacy: Handle Local File Path
+    if not os.path.exists(user.resume_path):
+        raise HTTPException(status_code=404, detail="Local resume file not found")
 
     return FileResponse(
         user.resume_path,
