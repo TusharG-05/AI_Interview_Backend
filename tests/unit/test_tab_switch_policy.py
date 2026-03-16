@@ -4,7 +4,7 @@ from unittest.mock import patch
 from app.models.db_models import InterviewSession, QuestionPaper, InterviewStatus, CandidateStatus
 
 def test_tab_switch_policy_scenarios(session, client, test_users, auth_headers):
-    admin, candidate = test_users
+    admin, candidate, super_admin = test_users
     
     # 1. Setup
     paper = QuestionPaper(name="Test Paper")
@@ -76,7 +76,7 @@ def test_tab_switch_policy_scenarios(session, client, test_users, auth_headers):
     assert "terminated" in response.json()["message"]
 
 def test_third_tab_switch_immediate_termination(session, client, test_users, auth_headers):
-    admin, candidate = test_users
+    admin, candidate, super_admin = test_users
     
     # 1. Setup
     paper = QuestionPaper(name="Test Paper")
@@ -110,7 +110,7 @@ def test_third_tab_switch_immediate_termination(session, client, test_users, aut
     assert data["is_suspended"] is True
 
 def test_proactive_timeout_on_api_call(session, client, test_users, auth_headers):
-    admin, candidate = test_users
+    admin, candidate, super_admin = test_users
     
     # 1. Setup
     paper = QuestionPaper(name="Test Paper")

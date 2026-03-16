@@ -8,7 +8,7 @@ from app.models.db_models import (
     InterviewSession, 
     InterviewStatus, 
     CandidateStatus,
-    Answers,
+    CodingAnswers,
     InterviewResult
 )
 
@@ -22,7 +22,7 @@ def test_coding_interview_flow(client, session, auth_headers, test_users):
     5. Submit coding answer
     6. Finish session
     """
-    admin, candidate = test_users
+    admin, candidate, super_admin = test_users
 
     # --- 1. SETUP DATA ---
     # Create Coding Paper
@@ -118,7 +118,7 @@ def test_coding_interview_flow(client, session, auth_headers, test_users):
         assert response.json()["data"]["score"] == 10.0
         
         # Verify Answer and Result in DB
-        answer = session.query(Answers).filter(Answers.coding_question_id == cq_id).first()
+        answer = session.query(CodingAnswers).filter(CodingAnswers.coding_question_id == cq_id).first()
         assert answer is not None
         assert answer.score == 10.0
         

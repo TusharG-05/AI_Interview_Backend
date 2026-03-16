@@ -2,8 +2,14 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ..services.camera import CameraService
 from ..core.config import local_llm
 from ..schemas.api_response import ApiResponse
+from ..core.database import engine
+from sqlmodel import text
 import os
 import asyncio
+from ..core.logger import get_logger
+import logging
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/status", tags=["System"])
 camera_service = CameraService()
@@ -66,7 +72,8 @@ async def get_system_status(interview_id: int):
                 from ..services.interview import _modal_lookup_error
                 modal_status = f"error ({_modal_lookup_error or 'evaluator ref not obtained'})"
         except Exception as e:
-            modal_status = f"error ({str(e)})"
+            logger.error(f"Modal evaluator lookup failed: {e}", exc_info=True)
+            modal_status = "error (internal connection failure)"
         llm_status = modal_status # Modal is the primary LLM
     else:
         # Check Groq First (Primary Fallback)
@@ -82,6 +89,18 @@ async def get_system_status(interview_id: int):
                     llm_status = "healthy (HF Inference API fallback)"
                 else:
                     llm_status = "disconnected (local Ollama not found & no fallback keys)"
+    
+    # Check Database Status
+    db_status = "unknown"
+    db_detail = ""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            db_status = "healthy"
+    except Exception as e:
+        db_status = "unhealthy"
+        db_detail = str(e)
+        logger.error(f"Database health check failed: {e}")
 
     hw_status = "idle"
     if camera_service.running:
@@ -109,6 +128,10 @@ async def get_system_status(interview_id: int):
             "status": "online",
             "services": {
                 "llm": llm_status,
+                "database": {
+                    "status": db_status,
+                    "detail": db_detail if db_status == "unhealthy" else "Connected"
+                },
                 "modal_enabled": USE_MODAL,
                 "modal_status": modal_status,
                 "proctoring_engine": proctoring_status,

@@ -27,3 +27,20 @@ class CloudinaryService:
         except Exception as e:
             logger.error(f"Cloudinary upload failed: {e}")
             raise e
+    
+    def upload_pdf(self, file_content: bytes, folder: str = "resumes", filename: str = None) -> str:
+        """
+        Uploads PDF as raw file to Cloudinary and returns the secure URL.
+        Note: Cloudinary free tier has limitations on raw files.
+        """
+        try:
+            upload_result = cloudinary.uploader.upload(
+                file_content,
+                folder=folder,
+                resource_type="raw",  # Required for PDFs
+                public_id=filename.replace(".pdf", "") if filename else None
+            )
+            return upload_result.get("secure_url")
+        except Exception as e:
+            logger.error(f"Cloudinary PDF upload failed: {e}")
+            raise e

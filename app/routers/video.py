@@ -173,7 +173,7 @@ async def watch(target_session_id: int, params: Offer):
         pcs.discard(pc)
         return ApiResponse(
             status_code=500,
-            data={"error": str(e)},
+            data={"error": "Track Error"},
             message="Failed to add video track"
         )
 

@@ -18,6 +18,9 @@ from ..schemas.api_response import ApiResponse
 from ..schemas.requests import CodingPaperCreate, CodingPaperUpdate, CodingQuestionCreate, CodingQuestionUpdate
 from ..schemas.responses import CodingPaperFull, CodingQuestionFull
 from ..schemas.user_schemas import serialize_user
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/admin/coding-papers", tags=["Coding Papers"])
 
@@ -82,7 +85,8 @@ async def create_coding_paper(
         session.refresh(paper)
     except Exception as exc:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create coding paper: {exc}")
+        logger.error(f"Failed to create coding paper: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create coding paper. Please try again.")
 
     return ApiResponse(
         status_code=201,
@@ -158,7 +162,8 @@ async def update_coding_paper(
         session.refresh(paper)
     except Exception as exc:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update coding paper: {exc}")
+        logger.error(f"Failed to update coding paper {paper_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update coding paper. Please try again.")
 
     questions = session.exec(
         select(CodingQuestions).where(CodingQuestions.paper_id == paper_id)
@@ -199,7 +204,8 @@ async def delete_coding_paper(
         session.commit()
     except Exception as exc:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete coding paper: {exc}")
+        logger.error(f"Failed to delete coding paper {paper_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete coding paper. Please try again.")
 
     return ApiResponse(
         status_code=200,
@@ -247,7 +253,8 @@ async def add_coding_question(
         session.refresh(question)
     except Exception as exc:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to add coding question: {exc}")
+        logger.error(f"Failed to add coding question to paper {paper_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to add coding question. Please try again.")
 
     return ApiResponse(
         status_code=201,
@@ -318,7 +325,8 @@ async def update_coding_question(
         session.refresh(question)
     except Exception as exc:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update coding question: {exc}")
+        logger.error(f"Failed to update coding question {q_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update coding question. Please try again.")
 
     return ApiResponse(
         status_code=200,
@@ -352,7 +360,8 @@ async def delete_coding_question(
         session.commit()
     except Exception as exc:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete coding question: {exc}")
+        logger.error(f"Failed to delete coding question {q_id}: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete coding question. Please try again.")
 
     return ApiResponse(
         status_code=200,
