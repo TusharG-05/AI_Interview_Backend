@@ -54,6 +54,9 @@ email_service = EmailService()
 from ..services.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
 from ..tasks.email_tasks import send_interview_invitation_task
+from ..services.cloudinary_service import CloudinaryService
+
+cloudinary_service = CloudinaryService()
 
 @router.websocket("/dashboard/ws")
 async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
@@ -1914,19 +1917,22 @@ async def create_user(
         if not resume.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
-        timestamp = int(time.time())
-        filename = f"user_{new_user.id}_{timestamp}.pdf"
-        file_path = os.path.join(RESUME_DIR, filename)
-
         try:
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(resume.file, buffer)
-            new_user.resume_path = file_path
-            session.add(new_user)
-            session.commit()
-            session.refresh(new_user)
+            # Read file content
+            resume_content = await resume.read()
+            
+            # Upload to Cloudinary
+            cloudinary_url = cloudinary_service.upload_resume(resume_content, folder="resumes")
+            
+            if cloudinary_url:
+                new_user.resume_path = cloudinary_url
+                session.add(new_user)
+                session.commit()
+                session.refresh(new_user)
+            else:
+                logger.error("Cloudinary upload returned None for resume")
         except Exception as e:
-            logger.error(f"Failed to save resume during user creation: {e}")
+            logger.error(f"Failed to upload resume to Cloudinary during user creation: {e}")
             # We don't fail the whole user creation, just log the error
     
     # Serialize team for response
@@ -2078,21 +2084,21 @@ async def update_user(
         if not resume.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
-        timestamp = int(time.time())
-        filename = f"user_{user.id}_{timestamp}.pdf"
-        file_path = os.path.join(RESUME_DIR, filename)
-
         try:
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(resume.file, buffer)
+            # Read file content
+            resume_content = await resume.read()
             
-            # Delete old file
-            if user.resume_path and os.path.exists(user.resume_path):
-                os.remove(user.resume_path)
-                
-            user.resume_path = file_path
+            # Upload to Cloudinary
+            cloudinary_url = cloudinary_service.upload_resume(resume_content, folder="resumes")
+            
+            if cloudinary_url:
+                # Store the new Cloudinary URL
+                user.resume_path = cloudinary_url
+            else:
+                logger.error("Cloudinary upload returned None for resume update")
+                raise HTTPException(status_code=500, detail="Failed to upload resume to Cloudinary")
         except Exception as e:
-            logger.error(f"Failed to update resume: {e}")
+            logger.error(f"Failed to update resume on Cloudinary: {e}")
             raise HTTPException(status_code=500, detail="Failed to save resume")
 
     session.add(user)

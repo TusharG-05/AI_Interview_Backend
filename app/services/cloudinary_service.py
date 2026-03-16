@@ -6,12 +6,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Configure cloudinary
-cloudinary.config(
-    cloud_name=CLOUDINARY_CLOUD_NAME,
-    api_key=CLOUDINARY_API_KEY,
-    api_secret=CLOUDINARY_API_SECRET,
-    secure=True
-)
+# The cloudinary library automatically picks up CLOUDINARY_URL from the environment.
+# cloudinary.config() is not required if CLOUDINARY_URL is set.
 
 class CloudinaryService:
     def upload_image(self, file_content: bytes, folder: str = "interview_selfies") -> str:
@@ -21,9 +17,25 @@ class CloudinaryService:
         try:
             upload_result = cloudinary.uploader.upload(
                 file_content,
-                folder=folder
+                folder=folder,
+                resource_type="image"
             )
             return upload_result.get("secure_url")
         except Exception as e:
             logger.error(f"Cloudinary upload failed: {e}")
+            raise e
+
+    def upload_resume(self, file_content: bytes, folder: str = "resumes") -> str:
+        """
+        Uploads resume (PDF) to Cloudinary and returns the secure URL.
+        """
+        try:
+            upload_result = cloudinary.uploader.upload(
+                file_content,
+                folder=folder,
+                resource_type="auto"  # Automatically detect resource type for PDFs
+            )
+            return upload_result.get("secure_url")
+        except Exception as e:
+            logger.error(f"Cloudinary resume upload failed: {e}")
             raise e
