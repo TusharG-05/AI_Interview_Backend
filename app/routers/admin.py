@@ -2,7 +2,7 @@ from typing import List, Optional
 import json as _json
 from sqlalchemy import func
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
@@ -35,13 +35,15 @@ from ..schemas.interview_result import (
     InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested,
     CodingPaperNested, CodingQuestionNested
 )
-from ..schemas.api_response import ApiResponse
+from ..schemas.api_response import ApiResponse, create_response
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
 import shutil
 import uuid
 import secrets
 from datetime import datetime, timedelta, timezone
+import time
+from .resume import RESUME_DIR
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
@@ -539,69 +541,7 @@ async def generate_coding_paper(
         message=f"Added {len(question_objects)} coding problems to '{paper.name}' (ID: {paper.id})",
     )
 
-@router.post("/upload-doc", response_model=ApiResponse[dict])
-async def upload_document(
-    paper_id: int,
-    file: UploadFile = File(...), 
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
-):
-    """Extract questions from an uploaded document (Resume/Job Desc/Excel)."""
-    # Verify paper belongs to admin if provided
-    if paper_id:
-        paper = session.get(QuestionPaper, paper_id)
-        if not paper or paper.admin_user != current_user.id:
-            raise HTTPException(status_code=404, detail="Paper not found")
 
-    # 1. Validation (DoS Prevention)
-    allowed_exts = ('.pdf', '.txt', '.docx', '.xlsx', '.xls')
-    if not file.filename.lower().endswith(allowed_exts):
-         raise HTTPException(status_code=400, detail=f"Supported formats: {', '.join(allowed_exts)}")
-    
-    file.file.seek(0, 2)
-    size = file.file.tell()
-    file.file.seek(0)
-    
-    MAX_SIZE = 10 * 1024 * 1024 # 10MB
-    if size > MAX_SIZE:
-         raise HTTPException(status_code=400, detail=f"File too large. Max size is {MAX_SIZE/1024/1024}MB.")
-
-    os.makedirs("temp_uploads", exist_ok=True)
-    file_path = f"temp_uploads/{uuid.uuid4().hex[:8]}_{file.filename}"
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    try:
-        # Default to questions_only extraction
-        try:
-            extracted_data = nlp_service.extract_qa_from_file(file_path, questions_only=True)
-        except Exception as extract_err:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Failed to extract questions from file: {str(extract_err)}. "
-                       "Ensure the file is a valid document with readable text."
-            )
-        for item in extracted_data:
-            q = Questions(
-                paper_id=paper_id,
-                content=item['question'], 
-                question_text=item['question'], 
-                topic="Uploaded Document",
-                response_type="audio" # Default for extracted
-            )
-            session.add(q)
-        try:
-            session.commit()
-        except Exception as e:
-            session.rollback()
-            raise HTTPException(status_code=500, detail=f"Failed to upload questions: {str(e)}")
-        return ApiResponse(
-            status_code=200,
-            data={"questions_count": len(extracted_data)},
-            message=f"Successfully extracted and added {len(extracted_data)} questions to paper"
-        )
-    finally:
-        if os.path.exists(file_path): os.remove(file_path)
 
 @router.delete("/questions/{q_id}", response_model=ApiResponse[dict])
 async def delete_question(
@@ -782,7 +722,6 @@ async def schedule_interview(
     
     # Track initial status - INVITED
     from ..services.status_manager import record_status_change
-    from ..models.db_models import CandidateStatus
     
     record_status_change(
         session=session,
@@ -947,7 +886,7 @@ async def get_live_status_dashboard(
     Returns:
         List of active interviews with basic status, warnings, and progress
     """
-    from ..models.db_models import CandidateStatus
+    
     
     # Get all active interviews for this admin
     # Active = not completed/cancelled/suspended permanently
@@ -1934,28 +1873,33 @@ async def get_enrollment_audio(
 
 @router.post("/users", response_model=ApiResponse[UserRead])
 async def create_user(
-    user_data: UserCreate,
+    email: str = Form(...),
+    full_name: str = Form(...),
+    password: str = Form(...),
+    role: UserRole = Form(UserRole.CANDIDATE),
+    team_id: Optional[int] = Form(None),
+    resume: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Create a new user (Candidate or Admin)."""
-    existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
+    """Create a new user (Candidate or Admin) with optional resume upload."""
+    existing_user = session.exec(select(User).where(User.email == email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     # Permission Check: Only Super Admin can create another Super Admin
-    if user_data.role == UserRole.SUPER_ADMIN and current_user.role != UserRole.SUPER_ADMIN:
+    if role == UserRole.SUPER_ADMIN and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=403, 
             detail="Only Super Admins can create other Super Admins"
         )
     
     new_user = User(
-        email=user_data.email,
-        full_name=user_data.full_name,
-        password_hash=get_password_hash(user_data.password),
-        role=user_data.role,
-        team_id=user_data.team_id
+        email=email,
+        full_name=full_name,
+        password_hash=get_password_hash(password),
+        role=role,
+        team_id=team_id
     )
     session.add(new_user)
     try:
@@ -1964,6 +1908,26 @@ async def create_user(
     except Exception as e:
         session.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+
+    # Handle optional resume upload
+    if resume:
+        if not resume.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        
+        timestamp = int(time.time())
+        filename = f"user_{new_user.id}_{timestamp}.pdf"
+        file_path = os.path.join(RESUME_DIR, filename)
+
+        try:
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(resume.file, buffer)
+            new_user.resume_path = file_path
+            session.add(new_user)
+            session.commit()
+            session.refresh(new_user)
+        except Exception as e:
+            logger.error(f"Failed to save resume during user creation: {e}")
+            # We don't fail the whole user creation, just log the error
     
     # Serialize team for response
     team_data = None
@@ -1971,17 +1935,18 @@ async def create_user(
         from .teams import _serialize_team_basic
         team_data = _serialize_team_basic(new_user.team, session)
 
-    return ApiResponse(
+    return create_response(ApiResponse(
         status_code=201,
         data=UserRead(
             id=new_user.id,
             email=new_user.email,
             full_name=new_user.full_name,
             role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
+            resume_url=f"/api/resume/{new_user.id}" if new_user.resume_path else None,
             team=team_data
         ),
         message="User created successfully"
-    )
+    ))
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
@@ -1996,6 +1961,8 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             email=u.email, 
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
+            resume_filename=u.resume_filename,
+            resume_url=f"/api/resume/{u.id}" if u.resume_path else None,
             team=team_data
         ))
         
@@ -2037,11 +2004,12 @@ async def get_user(
             email=user.email,
             full_name=user.full_name,
             role=user.role.value if hasattr(user.role, "value") else str(user.role),
-            resume_text=user.resume_text,
             has_profile_image=user.profile_image_bytes is not None,
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
+            resume_filename=user.resume_filename,
+            resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
             profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
             team=team_data
         ),
@@ -2051,82 +2019,82 @@ async def get_user(
 @router.patch("/users/{user_id}", response_model=ApiResponse[UserDetailRead])
 async def update_user(
     user_id: int,
-    update_data: UserUpdate,
+    email: Optional[str] = Form(None),
+    full_name: Optional[str] = Form(None),
+    password: Optional[str] = Form(None),
+    role: Optional[str] = Form(None),
+    team_id: Optional[int] = Form(None),
+    resume: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Update user details with role change protections."""
+    """Update user details with optional resume replacement."""
     user = session.get(User, user_id)
     
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    update_dict = update_data.model_dump(exclude_unset=True)
-    
-    # Email uniqueness validation
-    if "email" in update_dict and update_dict["email"] != user.email:
-        existing_user = session.exec(
-            select(User).where(User.email == update_dict["email"])
-        ).first()
+    # Email uniqueness
+    if email and email != user.email:
+        existing_user = session.exec(select(User).where(User.email == email)).first()
         if existing_user:
             raise HTTPException(status_code=400, detail="Email already registered")
+        user.email = email
     
-    # Password hashing
-    if "password" in update_dict:
-        update_dict["password_hash"] = get_password_hash(update_dict.pop("password"))
-    
-    # Team association
-    if "team_id" in update_dict:
-        # Validate team if not None
-        if update_dict["team_id"] is not None:
-            team = session.get(Team, update_dict["team_id"])
+    if full_name:
+        user.full_name = full_name
+        
+    if password:
+        user.password_hash = get_password_hash(password)
+        
+    if team_id is not None:
+        if team_id != 0: # Use 0 or similar to unset? For now assume valid or None
+            team = session.get(Team, team_id)
             if not team:
                 raise HTTPException(status_code=404, detail="Team not found")
-        setattr(user, "team_id", update_dict.pop("team_id"))
-    
+            user.team_id = team_id
+        else:
+            user.team_id = None
+
     # Role change validation
-    if "role" in update_dict:
+    if role:
         try:
-            new_role = UserRole(update_dict["role"])
+            new_role = UserRole(role)
         except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid role. Must be one of: {', '.join([r.value for r in UserRole])}"
-            )
+            raise HTTPException(status_code=400, detail="Invalid role")
         
-        # Protection 1: Only SUPER_ADMIN can promote to SUPER_ADMIN
         if new_role == UserRole.SUPER_ADMIN and current_user.role != UserRole.SUPER_ADMIN:
-            raise HTTPException(
-                status_code=403,
-                detail="Only Super Admins can promote users to Super Admin"
-            )
+            raise HTTPException(status_code=403, detail="Unauthorized role promotion")
         
-        # Protection 2: Prevent demoting the last SUPER_ADMIN
         if user.role == UserRole.SUPER_ADMIN and new_role != UserRole.SUPER_ADMIN:
-            # Count active SUPER_ADMINs
-            super_admin_count = session.exec(
-                select(User).where(User.role == UserRole.SUPER_ADMIN)
-            ).all()
+            super_count = len(session.exec(select(User).where(User.role == UserRole.SUPER_ADMIN)).all())
+            if super_count <= 1:
+                raise HTTPException(status_code=400, detail="Last super admin protection")
+        
+        user.role = new_role
+
+    # Handle optional resume upload
+    if resume:
+        if not resume.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        
+        timestamp = int(time.time())
+        filename = f"user_{user.id}_{timestamp}.pdf"
+        file_path = os.path.join(RESUME_DIR, filename)
+
+        try:
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(resume.file, buffer)
             
-            if len(super_admin_count) <= 1:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Cannot demote the last Super Admin. Promote another user first."
-                )
-        
-        # Protection 3: Prevent self-demotion from SUPER_ADMIN
-        if user.id == current_user.id and user.role == UserRole.SUPER_ADMIN and new_role != UserRole.SUPER_ADMIN:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot demote yourself from Super Admin role"
-            )
-        
-        update_dict["role"] = new_role
-    
-    # Apply updates
-    for key, value in update_dict.items():
-        setattr(user, key, value)
-    
+            # Delete old file
+            if user.resume_path and os.path.exists(user.resume_path):
+                os.remove(user.resume_path)
+                
+            user.resume_path = file_path
+        except Exception as e:
+            logger.error(f"Failed to update resume: {e}")
+            raise HTTPException(status_code=500, detail="Failed to save resume")
+
     session.add(user)
     try:
         session.commit()
@@ -2143,22 +2111,26 @@ async def update_user(
         select(InterviewSession).where(InterviewSession.candidate_id == user_id)
     ).all()
     
-    return ApiResponse(
+    from .teams import _serialize_team_basic
+    team_data = _serialize_team_basic(user.team, session) if user.team else None
+
+    return create_response(ApiResponse(
         status_code=200,
         data=UserDetailRead(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
-            role=user.role.value,
-            resume_text=user.resume_text,
+            role=user.role.value if hasattr(user.role, "value") else str(user.role),
             has_profile_image=user.profile_image_bytes is not None,
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
-            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None
+            resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
+            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
+            team=team_data
         ),
         message="User updated successfully"
-    )
+    ))
 
 @router.get("/users/{user_id}/check-delete", response_model=ApiResponse[dict])
 async def check_delete_user(
