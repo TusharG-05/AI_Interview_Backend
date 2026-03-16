@@ -43,7 +43,7 @@ class User(SQLModel, table=True):
     password_hash: str
     role: UserRole = Field(default=UserRole.CANDIDATE)
     access_token: Optional[str] = Field(default="")
-    resume_text: Optional[str] = Field(default=None)  # Stored extracted text
+    resume_path: Optional[str] = Field(default=None)
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
     profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
     face_embedding: Optional[str] = Field(default=None) # JSON/CSV string of the ArcFace/Sface vector

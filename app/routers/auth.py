@@ -232,8 +232,7 @@ async def read_users_me(current_user: User = Depends(get_current_user), session:
     # Add additional profile information
     user_data.update({
         "has_profile_image": current_user.profile_image_bytes is not None or current_user.profile_image is not None,
-        "has_face_embedding": current_user.face_embedding is not None,
-        "resume_text": current_user.resume_text
+        "has_face_embedding": current_user.face_embedding is not None
     })
 
     # Ensure team is serialized correctly if present

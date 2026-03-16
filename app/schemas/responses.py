@@ -169,6 +169,7 @@ class UserRead(BaseModel):
     email: str
     full_name: str
     role: str
+    resume_url: Optional[str] = None
     team: Optional[TeamReadBasic] = None
 
 class UserMeResponse(BaseModel):
@@ -177,10 +178,10 @@ class UserMeResponse(BaseModel):
     email: str
     full_name: str
     role: str
+    resume_url: Optional[str] = None
     profile_image: Optional[str] = None
     has_profile_image: bool = False
     has_face_embedding: bool = False
-    resume_text: Optional[str] = None
     team: Optional[TeamReadBasic] = None
 
 class Token(BaseModel):
@@ -313,11 +314,11 @@ class UserDetailRead(BaseModel):
     email: str
     full_name: str
     role: str
-    resume_text: Optional[str] = None
     has_profile_image: bool
     has_face_embedding: bool
     created_interviews_count: int  # As admin
     participated_interviews_count: int  # As candidate
+    resume_url: Optional[str] = None
     profile_image_url: Optional[str] = None
     team: Optional[TeamReadBasic] = None
 
@@ -410,4 +411,9 @@ class LiveStatusItem(BaseModel):
     is_suspended: bool
     last_activity: Optional[str] = None
     progress_percent: float  # Calculated as (answered/total) * 100
+
+
+class ResumeResponse(BaseModel):
+    user_id: int
+    resume_url: Optional[str] = None
 

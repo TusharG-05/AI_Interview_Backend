@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions
+from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CandidateStatus
 from ..schemas.requests import AnswerRequest
 from ..schemas.interview_result import QuestionPaperNested
 from ..services import interview as interview_service
@@ -160,7 +160,7 @@ async def access_interview(
     Returns a cleaned, frontend-friendly response structure.
     """
     from sqlalchemy.orm import selectinload
-    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus, CandidateStatus
+    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus
 
     # Query with all relationships preloaded to avoid N+1 issues
     session = session_db.exec(
@@ -447,7 +447,7 @@ async def upload_selfie_session(
     """
     Allows candidate to upload their reference selfie via interview session context.
     """
-    from ..models.db_models import CandidateStatus, User
+    from ..models.db_models import User
     import os, json, tempfile
     from ..core.logger import get_logger
     _logger = get_logger(__name__)
@@ -572,7 +572,6 @@ async def upload_selfie_session(
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
 async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     from ..services.status_manager import record_status_change, update_last_activity
-    from ..models.db_models import CandidateStatus
     
     # Get session and check suspension
     session_obj = session_db.get(InterviewSession, interview_id)
