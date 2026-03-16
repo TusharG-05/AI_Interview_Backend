@@ -390,6 +390,8 @@ async def get_schedule_time(
         data={"schedule_time": schedule_time_iso},
         message="Interview schedule time retrieved successfully"
     )
+    
+@router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])
 async def start_session_logic(
     interview_id: int,
     enrollment_audio: UploadFile = File(None),
