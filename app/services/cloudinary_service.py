@@ -30,10 +30,15 @@ class CloudinaryService:
         Uploads resume (PDF) to Cloudinary and returns the secure URL.
         """
         try:
+            import uuid
+            # Using a public_id with .pdf extension often helps Cloudinary "auto" detection
+            public_id = f"resume_{uuid.uuid4().hex}.pdf"
             upload_result = cloudinary.uploader.upload(
                 file_content,
                 folder=folder,
-                resource_type="auto"  # Automatically detect resource type for PDFs
+                public_id=public_id,
+                resource_type="auto",
+                overwrite=True
             )
             return upload_result.get("secure_url")
         except Exception as e:

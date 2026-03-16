@@ -1933,7 +1933,7 @@ async def create_user(
                 logger.error("Cloudinary upload returned None for resume")
         except Exception as e:
             logger.error(f"Failed to upload resume to Cloudinary during user creation: {e}")
-            # We don't fail the whole user creation, just log the error
+            raise HTTPException(status_code=500, detail="Failed to save resume")
     
     # Serialize team for response
     team_data = None
@@ -1967,7 +1967,6 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             email=u.email, 
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
-            resume_filename=u.resume_filename,
             resume_url=f"/api/resume/{u.id}" if u.resume_path else None,
             team=team_data
         ))
@@ -2014,7 +2013,6 @@ async def get_user(
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
-            resume_filename=user.resume_filename,
             resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
             profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
             team=team_data
@@ -2054,7 +2052,7 @@ async def update_user(
         user.password_hash = get_password_hash(password)
         
     if team_id is not None:
-        if team_id != 0: # Use 0 or similar to unset? For now assume valid or None
+        if team_id != 0:
             team = session.get(Team, team_id)
             if not team:
                 raise HTTPException(status_code=404, detail="Team not found")
@@ -2085,14 +2083,10 @@ async def update_user(
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
         try:
-            # Read file content
             resume_content = await resume.read()
-            
-            # Upload to Cloudinary
             cloudinary_url = cloudinary_service.upload_resume(resume_content, folder="resumes")
             
             if cloudinary_url:
-                # Store the new Cloudinary URL
                 user.resume_path = cloudinary_url
             else:
                 logger.error("Cloudinary upload returned None for resume update")
@@ -2107,7 +2101,7 @@ async def update_user(
         session.refresh(user)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to update user")
     
     # Return updated user details
     created_interviews = session.exec(

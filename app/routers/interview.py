@@ -17,11 +17,11 @@ from ..schemas.interview_responses import (
     QuestionNested, 
     CodingPaperNested, 
     CodingQuestionNested,
+    CodingQuestionBasic,
     AnswersData,
     QuestionData,
     CodingAnswersData,
     QuestionPaperData,
-    CodingAnswersData
 )
 from ..schemas.user_schemas import serialize_user
 from ..schemas.api_response import ApiResponse
@@ -736,7 +736,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                 status_code=200,
                 data={
                     "question_id": proxy_q.id,
-                    "coding_question_id": next_cq.id,
+                    "coding_question": next_cq.id,
                     "text": next_cq.title,
                     "audio_url": f"/interview/audio/question/{proxy_q.id}",
                     "response_type": "code",
@@ -785,6 +785,15 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
         "total_questions": total_questions,
         "coding_content": None,
     }
+
+    # If this question is a proxy for a coding question, expose the real coding question ID
+    if question.response_type == "code" and question.question_text and question.question_text.startswith("__coding__"):
+        try:
+            real_coding_id = int(question.question_text.split("__coding__")[1])
+            response_data["coding_question_id"] = real_coding_id
+            response_data["coding_question"] = real_coding_id
+        except (ValueError, IndexError):
+            pass
 
     if question.response_type == "code" and question.content:
         try:
@@ -1012,7 +1021,10 @@ async def submit_answer_code(
     question = session_db.get(CodingQuestions, coding_question_id)
     if not question: raise HTTPException(status_code=404, detail="Coding question not found")
 
-    _evaluate_and_update_score(session_db, answer, question.problem_statement or question.title or "", session, result)
+    try:
+        _evaluate_and_update_score(session_db, answer, question.problem_statement or question.title or "", session, result)
+    except Exception as e:
+        logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
     session_db.refresh(answer)
 
     return ApiResponse(
@@ -1020,15 +1032,23 @@ async def submit_answer_code(
         data=CodingAnswersData(
             id=answer.id,
             interview_result_id=answer.interview_result_id,
-            coding_question_id=CodingQuestionNested(
-                id=question.id, paper_id=question.paper_id, title=question.title,
-                problem_statement=question.problem_statement, examples=question.examples,
-                constraints=question.constraints, starter_code=question.starter_code or "",
-                topic=question.topic, difficulty=question.difficulty, marks=question.marks
+            coding_question_id=CodingQuestionBasic(
+                id=question.id,
+                paper_id=question.paper_id,
+                title=question.title or "",
+                problem_statement=question.problem_statement or "",
+                examples=question.examples,
+                constraints=question.constraints,
+                starter_code=question.starter_code or "",
+                topic=question.topic or "Algorithms",
+                difficulty=question.difficulty or "Medium",
+                marks=question.marks or 0,
             ),
             candidate_answer=answer.candidate_answer,
             feedback=answer.feedback,
             score=answer.score,
+            audio_path=answer.audio_path or "",
+            transcribed_text=answer.transcribed_text or "",
             timestamp=answer.timestamp
         ),
         message="Code submitted successfully"
@@ -1106,7 +1126,7 @@ async def submit_answer_text(
             data={
                 "id": answer.id,
                 "interview_result_id": answer.interview_result_id,
-                "coding_question_id": {
+                "coding_question": {
                     "id": coding_q.id, "title": coding_q.title, "problem_statement": coding_q.problem_statement,
                     "examples": coding_q.examples, "constraints": coding_q.constraints, "marks": coding_q.marks
                 },
