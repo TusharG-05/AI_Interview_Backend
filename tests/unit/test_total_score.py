@@ -53,7 +53,7 @@ def _create_completed_interview(session, admin, score: float):
     session.refresh(candidate)
 
     # Paper + Question
-    paper = QuestionPaper(name="Score Test Paper", admin_id=admin.id)
+    paper = QuestionPaper(name="Score Test Paper", admin_user=admin.id)
     session.add(paper)
     session.commit()
     session.refresh(paper)
@@ -225,8 +225,8 @@ class TestTotalScoreInResultDetail:
 
         # Verify both top-level and nested total_score
         assert data["total_score"] == 6.0
-        assert data["interview_data"]["total_score"] == 6.0, (
-            f"Nested interview_data.total_score should be 6.0, got {data['interview_data']['total_score']}"
+        assert data["interview"]["total_score"] == 6.0, (
+            f"Nested interview.total_score should be 6.0, got {data['interview']['total_score']}"
         )
 
 

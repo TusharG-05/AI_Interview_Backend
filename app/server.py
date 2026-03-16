@@ -146,12 +146,20 @@ async def not_found_handler(request: Request, exc: Exception):
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Catch other 4xx errors and wrap them."""
+    message = str(exc.detail)
+    data = None
+    
+    if isinstance(exc.detail, dict):
+        # If detail is a dict, we pull out message and use the whole dict as data
+        message = exc.detail.get("message", "Error occurred")
+        data = exc.detail
+
     return JSONResponse(
         status_code=exc.status_code,
         content=ApiErrorResponse(
             status_code=exc.status_code,
-            message=str(exc.detail),
-            data=None
+            message=message,
+            data=data
         ).model_dump()
     )
 

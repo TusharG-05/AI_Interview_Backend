@@ -27,5 +27,5 @@ if __name__ == "__main__":
     else:
         print("\n[WARNING] No SSL Certificates found. HTTPS disabled.")
 
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run("app.server:app", host="0.0.0.0", port=port, reload=False, **ssl_config)
+    port = int(os.getenv("PORT", 8001))
+    uvicorn.run("app.server:app", host="0.0.0.0", port=port, reload=True, **ssl_config)

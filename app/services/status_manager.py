@@ -346,7 +346,10 @@ def get_status_summary(
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
             "enrollment_audio_path": interview_session.enrollment_audio_path,
-            "is_completed": interview_session.is_completed or False
+            "is_completed": interview_session.is_completed or False,
+            "tab_switch_count": interview_session.tab_switch_count,
+            "tab_switch_timestamp": interview_session.tab_switch_timestamp.isoformat() if interview_session.tab_switch_timestamp else None,
+            "tab_warning_active": interview_session.tab_warning_active
         },
         "admin_user": admin_dict,
         "candidate_user": candidate_dict,

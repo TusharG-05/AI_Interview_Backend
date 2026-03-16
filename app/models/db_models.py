@@ -213,6 +213,11 @@ class InterviewSession(SQLModel, table=True):
 
     # Copy-Paste Control
     allow_copy_paste: bool = Field(default=False)
+
+    # Tab-Switch Monitoring
+    tab_switch_count: int = Field(default=0)
+    tab_switch_timestamp: Optional[datetime] = Field(default=None)
+    tab_warning_active: bool = Field(default=False)
     
     # Relationships
     admin: User = Relationship(sa_relationship_kwargs={"foreign_keys": "InterviewSession.admin_id"})
