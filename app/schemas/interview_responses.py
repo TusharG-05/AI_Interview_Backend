@@ -48,7 +48,9 @@ class CodingQuestionNested(BaseModel):
                     try:
                         data[field] = _json.loads(raw)
                     except:
-                        data[field] = []
+                        data[field] = [] if field == "examples" else []
+                elif raw is None:
+                    data[field] = [] if field == "examples" else []
         return data
 
 class CodingPaperNested(BaseModel):
