@@ -356,7 +356,40 @@ async def access_interview(
     )
 
 
-@router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])
+@router.get("/schedule-time/{token}")
+async def get_schedule_time(
+    token: str,
+    session_db: Session = Depends(get_session)
+):
+    """
+    Returns only the scheduled interview time for a given access token.
+    No authentication required. Used for public access to schedule information.
+    """
+    # Find interview by access token
+    session = session_db.exec(
+        select(InterviewSession).where(InterviewSession.access_token == token)
+    ).first()
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Invalid interview token")
+    
+    # Return only the schedule time in ISO format
+    schedule_time = session.schedule_time
+    if schedule_time:
+        # Ensure timezone awareness and return ISO format
+        if schedule_time.tzinfo is None:
+            from datetime import timezone
+            schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+        schedule_time_iso = schedule_time.isoformat()
+    else:
+        # Handle case where schedule_time might be None (shouldn't happen in normal cases)
+        raise HTTPException(status_code=400, detail="Interview schedule time not set")
+    
+    return ApiResponse(
+        status_code=200,
+        data={"schedule_time": schedule_time_iso},
+        message="Interview schedule time retrieved successfully"
+    )
 async def start_session_logic(
     interview_id: int,
     enrollment_audio: UploadFile = File(None),
