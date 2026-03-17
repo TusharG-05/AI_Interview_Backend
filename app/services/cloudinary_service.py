@@ -44,15 +44,18 @@ class CloudinaryService:
                 file_bytes = file_content
 
             # 2. Use .pdf extension so browsers recognize the file type
-            unique_id = uuid.uuid4().hex
-            public_id = f"resume_{unique_id}.pdf"
+            if filename and filename.endswith(".pdf"):
+                public_id = filename.replace(".pdf", "")
+            else:
+                unique_id = uuid.uuid4().hex
+                public_id = f"resume_{unique_id}"
 
             # 3. Upload to Cloudinary
             upload_result = cloudinary.uploader.upload(
                 file_bytes,
                 folder=folder,
                 public_id=public_id,
-                resource_type="raw",  # Reverted to raw per user preference
+                resource_type="raw",
                 overwrite=True
             )
             

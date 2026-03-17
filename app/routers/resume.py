@@ -1,10 +1,11 @@
+ 
 import os
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlmodel import Session
 from ..core.database import get_db as get_session
-from ..models.db_models import User, UserRole # Assuming UserRole is defined here or imported
+from ..models.db_models import User, UserRole
 from ..auth.dependencies import get_current_user
 
 from ..schemas.api_response import ApiResponse

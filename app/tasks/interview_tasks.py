@@ -73,6 +73,7 @@ def process_session_results(interview_id: int, db: Session = None):
                     q_text = "General Question"
                     resp_type = "text"
                     q_title = ""
+                    q_marks = 10.0
                     
                     if resp.question_id:
                         q = db.get(Questions, resp.question_id)
@@ -80,18 +81,21 @@ def process_session_results(interview_id: int, db: Session = None):
                             q_text = q.question_text or q.content or "General Question"
                             resp_type = q.response_type
                             q_title = q.question_text or q.content or ""
+                            q_marks = float(q.marks or 10.0)
                     elif resp.coding_question_id:
                         cq = db.get(CodingQuestions, resp.coding_question_id)
                         if cq:
                             q_text = cq.problem_statement or cq.title or "Coding Problem"
                             resp_type = "code"
                             q_title = cq.title or ""
+                            q_marks = float(cq.marks or 10.0)
 
-                    logger.info(f"  Answer {resp.id}: evaluating (type={resp_type})...")
+                    logger.info(f"  Answer {resp.id}: evaluating (type={resp_type}, marks={q_marks})...")
                     evaluation = interview_service.evaluate_answer_content(
                         q_text, resp.candidate_answer,
                         response_type=resp_type or "text",
                         question_title=q_title,
+                        question_marks=q_marks,
                     )
 
                     resp.feedback = evaluation.get("feedback", "")
