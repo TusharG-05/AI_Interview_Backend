@@ -128,45 +128,68 @@ async def upload_selfie(
                 new_status=CandidateStatus.SELFIE_UPLOADED
             )
             logger.info(f"Updated status for interview {interview_id} to SELFIE_UPLOADED via candidate API")
+
     
-    # 3. Generate Dual Embeddings (Hybrid Strategy)
+        # 3. Generate Dual Embeddings (Hybrid Strategy)
     try:
         from deepface import DeepFace
-        import numpy as np
+        from ..services.face import USE_MODAL, get_modal_embedding
         import json
         import tempfile
         import os
 
         embeddings_map = {}
         
-        # Using a temp file for processing
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            tmp.write(image_bytes)
-            tmp_path = tmp.name
-        
-        try:
-            # 1. Generate ArcFace (High Accuracy)
+        # 1. Generate ArcFace (High Accuracy)
+        # Try Modal.com if enabled
+        if USE_MODAL:
             try:
-                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                if arc_objs:
-                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                modal_cls = get_modal_embedding()
+                if modal_cls:
+                    logger.info("Calling Modal for ArcFace enrollment...")
+                    result = modal_cls().get_embedding.remote(image_bytes)
+                    if result.get("success"):
+                        embeddings_map["ArcFace"] = result["embedding"]
+                        logger.info("ArcFace embedding generated via Modal")
             except Exception as e:
-                logger.warning(f"ArcFace embedding failed: {e}")
+                logger.warning(f"Modal ArcFace enrollment failed: {e}")
 
-            # 2. Generate SFace (Lightweight)
+        # Fallback to local ArcFace if Modal failed/disabled
+        if "ArcFace" not in embeddings_map:
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(image_bytes)
+                    tmp_path = tmp.name
+                try:
+                    arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                    if arc_objs:
+                        embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                        logger.info("ArcFace embedding generated locally")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+            except Exception as e:
+                logger.warning(f"Local ArcFace fallback failed: {e}")
+
+        # 2. Generate SFace (Always local as lightweight backup)
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(image_bytes)
+                tmp_path = tmp.name
             try:
                 sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
                 if sface_objs:
                     embeddings_map["SFace"] = sface_objs[0]["embedding"]
-            except Exception as e:
-                logger.warning(f"SFace embedding failed: {e}")
+                    logger.info("SFace embedding generated locally")
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        except Exception as e:
+            logger.warning(f"SFace embedding failed: {e}")
 
-            if embeddings_map:
-                current_user.face_embedding = json.dumps(embeddings_map)
-                logger.info(f"Generated embeddings for: {list(embeddings_map.keys())}")
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        if embeddings_map:
+            current_user.face_embedding = json.dumps(embeddings_map)
+            logger.info(f"Generated embeddings for: {list(embeddings_map.keys())}")
                 
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")

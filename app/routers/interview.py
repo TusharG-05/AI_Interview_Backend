@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CandidateStatus
+from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CandidateStatus, UserRole
 from ..schemas.requests import AnswerRequest
 from ..schemas.interview_result import QuestionPaperNested
 from ..services import interview as interview_service
@@ -531,13 +531,21 @@ async def upload_selfie_session(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Admin uploads candidate's selfie for profile image.
+    Candidate uploads selfie during interview for face verification.
+    Compares uploaded selfie embeddings with stored candidate embeddings.
+    Returns verification result with similarity score.
     """
     from ..models.db_models import User
     from ..core.logger import get_logger
+    import numpy as np
+    import json
+    import tempfile
+    import os
+    from deepface import DeepFace
+    
     _logger = get_logger(__name__)
     
-    # 1. Get candidate directly
+    # 1. Get candidate and verify existence
     candidate = session_db.get(User, candidate_id)
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -554,43 +562,166 @@ async def upload_selfie_session(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Received empty file")
     
-    # 4. Save to User object (Backup Storage)
-    candidate.profile_image_bytes = image_bytes
+    # 4. Check for stored embeddings
+    if not candidate.face_embedding:
+        raise HTTPException(
+            status_code=400, 
+            detail="No enrollment selfie found for this candidate. Please ensure candidate uploaded selfie during registration."
+        )
     
-    # 5. Upload to Cloudinary (Primary Storage for URLs)
-    from ..services.cloudinary_service import CloudinaryService
-    cloudinary_service = CloudinaryService()
+        # 5. Generate embeddings from uploaded selfie
     try:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(cloudinary_service.upload_image, image_bytes, folder="interview_selfies")
+        from deepface import DeepFace
+        from ..services.face import USE_MODAL, get_modal_embedding
+        
+        arcface_embedding = None
+        sface_embedding = None
+        
+        # 1. Try ArcFace via Modal.com (GPU) if enabled
+        if USE_MODAL:
             try:
-                cloudinary_url = future.result(timeout=15)
-                candidate.profile_image = cloudinary_url
-            except concurrent.futures.TimeoutError:
-                _logger.warning("Cloudinary upload timed out")
-                raise
+                modal_cls = get_modal_embedding()
+                if modal_cls:
+                    _logger.info("Calling Modal for ArcFace verification...")
+                    result = modal_cls().get_embedding.remote(image_bytes)
+                    if result.get("success"):
+                        arcface_embedding = result["embedding"]
+                        _logger.info("ArcFace embedding generated via Modal")
+            except Exception as e:
+                _logger.warning(f"Modal ArcFace call failed: {e}")
+        
+        # 2. Local Fallback for ArcFace and SFace
+        if arcface_embedding is None or True: # Always generate SFace locally, and ArcFace if Modal failed
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(image_bytes)
+                tmp_path = tmp.name
+            
+            try:
+                # Generate ArcFace if not already got from Modal
+                if arcface_embedding is None:
+                    try:
+                        arc_objs = DeepFace.represent(
+                            img_path=tmp_path,
+                            model_name="ArcFace",
+                            detector_backend="mediapipe",
+                            enforce_detection=True
+                        )
+                        if arc_objs:
+                            arcface_embedding = arc_objs[0]["embedding"]
+                            _logger.info("ArcFace embedding generated locally")
+                    except Exception as e:
+                        _logger.warning(f"Local ArcFace embedding failed: {e}")
+                
+                # Always generate SFace locally as lightweight backup
+                try:
+                    sface_objs = DeepFace.represent(
+                        img_path=tmp_path,
+                        model_name="SFace",
+                        detector_backend="mediapipe",
+                        enforce_detection=True
+                    )
+                    if sface_objs:
+                        sface_embedding = sface_objs[0]["embedding"]
+                        _logger.info("SFace embedding generated locally")
+                except Exception as e:
+                    _logger.warning(f"Local SFace embedding failed: {e}")
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+        
+        # Check if any embeddings were generated
+        if arcface_embedding is None and sface_embedding is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to generate face embeddings. Please ensure a clear face is visible in the image."
+            )
+        
+        # 6. Parse stored embeddings
+        stored_embeddings = json.loads(candidate.face_embedding)
+        # Handle both lowercase and capitalized keys for robustness
+        stored_arcface = stored_embeddings.get("ArcFace") or stored_embeddings.get("arcface")
+        stored_sface = stored_embeddings.get("SFace") or stored_embeddings.get("sface")
+        
+        # 7. Compute similarity handles
+        ARCFACE_THRESHOLD = 0.50
+        SFACE_THRESHOLD = 0.67
+        
+        arcface_sim = None
+        sface_sim = None
+        verification_results = []
+        
+        # Compare ArcFace embeddings (primary - high accuracy)
+        if arcface_embedding and stored_arcface:
+            arcface_sim = float(np.dot(arcface_embedding, stored_arcface) / (
+                np.linalg.norm(arcface_embedding) * np.linalg.norm(stored_arcface)
+            ))
+            verification_results.append(arcface_sim >= ARCFACE_THRESHOLD)
+            _logger.info(f"ArcFace similarity: {arcface_sim:.4f}, Passed: {arcface_sim >= ARCFACE_THRESHOLD}")
+        
+        # Compare SFace embeddings (fallback - lightweight)
+        if sface_embedding and stored_sface:
+            sface_sim = float(np.dot(sface_embedding, stored_sface) / (
+                np.linalg.norm(sface_embedding) * np.linalg.norm(stored_sface)
+            ))
+            verification_results.append(sface_sim >= SFACE_THRESHOLD)
+            _logger.info(f"SFace similarity: {sface_sim:.4f}, Passed: {sface_sim >= SFACE_THRESHOLD}")
+        
+        # Check if any comparison were possible
+        if not verification_results:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not compute similarity - embedding mismatch."
+            )
+        
+        # 8. Final Verification: Both must pass if available
+        is_verified = all(verification_results)
+        
+        # 9. Save selfie to Cloudinary for audit trail
+        from ..services.cloudinary_service import CloudinaryService
+        cloudinary_service = CloudinaryService()
+        try:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    cloudinary_service.upload_image, 
+                    image_bytes, 
+                    folder="interview_verification_selfies"
+                )
+                try:
+                    cloudinary_url = future.result(timeout=15)
+                except concurrent.futures.TimeoutError:
+                    _logger.warning("Cloudinary upload timed out")
+                    cloudinary_url = None
+        except Exception as e:
+            _logger.error(f"Cloudinary upload failed: {e}")
+            cloudinary_url = None
+        
+        # 10. Return verification result
+        message = "Face verified successfully" if is_verified else "Face verification failed - candidate identity mismatch"
+        
+        return ApiResponse(
+            status_code=200,
+            data={
+                "verified": is_verified,
+                "arcface_score": round(arcface_sim, 4) if arcface_sim is not None else None,
+                "sface_score": round(sface_sim, 4) if sface_sim is not None else None,
+                "arcface_threshold": ARCFACE_THRESHOLD,
+                "sface_threshold": SFACE_THRESHOLD,
+                "candidate_id": candidate_id,
+                "cloudinary_url": cloudinary_url,
+                "verification_method": "hybrid_arcface_sface"
+            },
+            message=message
+        )
+        
+    except HTTPException:
+        raise
     except Exception as e:
-        _logger.error(f"Cloudinary upload failed: {e}")
-        candidate.profile_image = None
-
-    session_db.add(candidate)
-    
-    try:
-        session_db.commit()
-    except Exception as e:
-        session_db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save selfie to storage")
-    
-    return ApiResponse(
-        status_code=200,
-        data={
-            "candidate_id": candidate_id,
-            "cloudinary_url": candidate.profile_image,
-            "has_backup": candidate.profile_image_bytes is not None
-        },
-        message="Candidate selfie uploaded successfully to Cloudinary"
-    )
+        _logger.error(f"Face verification failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Face verification processing failed: {str(e)}"
+        )
 
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
 async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
