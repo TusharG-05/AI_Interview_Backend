@@ -44,7 +44,6 @@ import uuid
 import secrets
 from datetime import datetime, timedelta, timezone
 import time
-from .resume import RESUME_DIR
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
