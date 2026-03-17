@@ -1642,7 +1642,7 @@ async def get_result(
             coding_answers_nested.append(CodingAnswersData(
                 id=cans.id,
                 interview_result_id=cans.interview_result_id,
-                coding_question_id=cq_nested,
+                coding_question=cq_nested,
                 candidate_answer=cans.candidate_answer or "",
                 feedback=cans.feedback or "",
                 score=cans.score or 0.0,

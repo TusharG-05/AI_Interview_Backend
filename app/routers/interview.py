@@ -1091,7 +1091,7 @@ async def submit_answer_code(
         data=CodingAnswersData(
             id=answer.id,
             interview_result_id=answer.interview_result_id,
-            coding_question_id=CodingQuestionBasic(
+            coding_question=CodingQuestionBasic(
                 id=question.id,
                 paper_id=question.paper_id,
                 title=question.title or "",
@@ -1104,8 +1104,8 @@ async def submit_answer_code(
                 marks=question.marks or 0,
             ),
             candidate_answer=answer.candidate_answer,
-            feedback=answer.feedback,
-            score=answer.score,
+            feedback=answer.feedback or "",
+            score=answer.score if answer.score is not None else 0.0,
             audio_path=answer.audio_path or "",
             transcribed_text=answer.transcribed_text or "",
             timestamp=answer.timestamp
