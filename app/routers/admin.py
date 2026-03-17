@@ -127,7 +127,8 @@ async def create_paper(
         session.refresh(new_paper)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create paper: {str(e)}")
+        logger.error(f"Failed to create paper: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create paper. Please try again.")
     paper_read = PaperRead(
         id=new_paper.id, name=new_paper.name, description=new_paper.description, 
         question_count=0, questions=[], created_at=new_paper.created_at.isoformat(),
@@ -190,7 +191,8 @@ async def update_paper(
         session.refresh(paper)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update paper: {str(e)}")
+        logger.error(f"Failed to update paper {paper_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update paper. Please try again.")
     paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions),
@@ -232,7 +234,8 @@ async def delete_paper(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete paper: {str(e)}")
+        logger.error(f"Failed to delete paper {paper_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete paper. Please try again.")
     return ApiResponse(
         status_code=200,
         data={},
@@ -267,7 +270,8 @@ async def add_question_to_paper(
         session.refresh(new_q)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create question: {str(e)}")
+        logger.error(f"Failed to create question for paper {paper_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create question. Please try again.")
     return ApiResponse(
         status_code=201,
         data=new_q,
@@ -317,9 +321,10 @@ async def generate_paper(
             num_questions=request_data.num_questions,
         )
     except ValueError as e:
+        logger.error(f"AI service unavailable during paper generation: {e}", exc_info=True)
         raise HTTPException(
             status_code=503,
-            detail=f"AI service unavailable: {str(e)}"
+            detail="AI service is currently unavailable. Please try again later."
         )
 
     if not generated_questions:
@@ -350,7 +355,8 @@ async def generate_paper(
         session.refresh(new_paper)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create paper: {str(e)}")
+        logger.error(f"Failed to create generated paper: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create paper for generated questions.")
 
     # Bulk-insert the generated questions
     question_objects = []
@@ -387,7 +393,8 @@ async def generate_paper(
             session.refresh(q)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to save questions: {str(e)}")
+        logger.error(f"Failed to save generated questions for paper {new_paper.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to save generated questions. Please try again.")
 
     # Build response
     paper_read = PaperRead(
@@ -464,7 +471,8 @@ async def generate_coding_paper(
             num_questions=request_data.num_questions,
         )
     except ValueError as e:
-        raise HTTPException(status_code=503, detail=f"AI service unavailable: {str(e)}")
+        logger.error(f"AI service unavailable during coding paper generation: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="AI service is currently unavailable. Please try again later.")
 
     if not generated_problems:
         raise HTTPException(status_code=502, detail="AI returned no problems. Please try again.")
@@ -507,7 +515,8 @@ async def generate_coding_paper(
             session.refresh(q)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to save coding problems: {str(e)}")
+        logger.error(f"Failed to save coding problems for paper {paper.id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to save coding problems. Please try again.")
 
     # Build response using all questions now in the paper
     all_questions = session.exec(
@@ -560,7 +569,8 @@ async def delete_question(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete question: {str(e)}")
+        logger.error(f"Failed to delete question {q_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete question. Please try again.")
     return ApiResponse(
         status_code=200,
         data={},
@@ -642,7 +652,8 @@ async def update_question(
         session.refresh(q)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update question: {str(e)}")
+        logger.error(f"Failed to update question {q_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update question. Please try again.")
     return ApiResponse(
         status_code=200,
         data=q,
@@ -722,7 +733,8 @@ async def schedule_interview(
         session.refresh(new_session)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to schedule interview: {str(e)}")
+        logger.error(f"Failed to schedule interview: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to schedule interview. Please try again.")
     
     # Track initial status - INVITED
     from ..services.status_manager import record_status_change
@@ -770,7 +782,8 @@ async def schedule_interview(
             session.refresh(new_session)
         except Exception as e:
             session.rollback()
-            raise HTTPException(status_code=500, detail=f"Failed to assign questions: {str(e)}")
+            logger.error(f"Failed to assign questions to session {new_session.id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to assign questions to the interview.")
     # Coding paper is linked via FK on the session — no pre-assignment needed
     
     # Generate Link - Must match frontend route: /interview/:token
@@ -1109,7 +1122,7 @@ async def get_interview(
         )
     except Exception as e:
         logger.error(f"Serialization error in get_interview: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Serialization failure: {str(e)}")
+        raise HTTPException(status_code=500, detail="An error occurred while preparing the interview details.")
     
     return ApiResponse(
         status_code=200,
@@ -1229,7 +1242,8 @@ async def update_interview(
         session.refresh(interview_session)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update interview: {str(e)}")
+        logger.error(f"Failed to update interview {interview_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update interview. Please try again.")
     
     # Return updated interview details
     admin_dict = serialize_user(interview_session.admin, fallback_role="admin")
@@ -1299,7 +1313,8 @@ async def delete_interview(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete interview: {str(e)}")
+        logger.error(f"Failed to delete interview {interview_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete interview. Please try again.")
     
     return ApiResponse(
         status_code=200,
@@ -1488,8 +1503,8 @@ async def get_result(
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    # Authorization: Only admin who created the interview
-    if interview_session.admin_id != current_user.id:
+    # Authorization: Only admin who created the interview OR super admin
+    if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Not authorized to view this result"
@@ -1668,8 +1683,8 @@ async def update_result(
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    # Authorization: Only admin who created the interview
-    if interview_session.admin_id != current_user.id:
+    # Authorization: Only admin who created the interview OR super admin
+    if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Not authorized to modify this result"
@@ -1746,7 +1761,8 @@ async def update_result(
         session.refresh(interview_session)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update proctor settings: {str(e)}")
+        logger.error(f"Failed to update result/responses for session {interview_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update result. Please try again.")
     
     # Return updated result using GET logic
     updated_result = await get_result(interview_id, current_user, session)
@@ -1761,8 +1777,12 @@ async def delete_result(
 ):
     """Delete all result data for an interview session (hard delete responses, keep session)."""
     interview_session = session.get(InterviewSession, interview_id)
-    if not interview_session or interview_session.admin_id != current_user.id:
+    if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    # Authorization: Only admin who created the interview OR super admin
+    if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this result")
     
     # Hard delete responses to keep session history but clear results
     if interview_session.result:
@@ -1776,7 +1796,8 @@ async def delete_result(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to reset evaluation: {str(e)}")
+        logger.error(f"Failed to reset evaluation for session {interview_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reset evaluation.")
     
     return ApiResponse(
         status_code=200,
@@ -1801,8 +1822,8 @@ async def get_response(response_id: int, session: Session = Depends(get_session)
     if not answer:
        raise HTTPException(status_code=404, detail="Answer not found")
        
-    # Authorization: Only admin who created the interview session associated with this answer
-    if answer.interview_result.session.admin_id != current_user.id:
+    # Authorization: Only admin who created the interview session OR super admin
+    if answer.interview_result.session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Not authorized to access this response")
 
     # We might need to construct a response that matches what UI expects if UI hasn't changed
@@ -1835,7 +1856,8 @@ async def get_response_audio(
         raise HTTPException(status_code=404, detail="Audio response not found")
         
     # Answers -> InterviewResult -> InterviewSession
-    if not response.interview_result or not response.interview_result.session or response.interview_result.session.admin_id != current_user.id:
+    if not response.interview_result or not response.interview_result.session or \
+       (response.interview_result.session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
     if not os.path.exists(response.audio_path):
@@ -1858,7 +1880,8 @@ async def get_enrollment_audio(
     if not interview_session or not interview_session.enrollment_audio_path:
         raise HTTPException(status_code=404, detail="Enrollment audio not found")
         
-    if interview_session.admin_id != current_user.id:
+    # Authorization: Only admin who created the interview OR super admin
+    if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
     if not os.path.exists(interview_session.enrollment_audio_path):
@@ -1910,7 +1933,8 @@ async def create_user(
         session.refresh(new_user)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create user: {str(e)}")
+        logger.error(f"Failed to create user: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create user. Please try again.")
 
     # Handle optional resume upload
     if resume:
@@ -2100,7 +2124,8 @@ async def update_user(
         session.refresh(user)
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update user")
+        logger.error(f"Failed to update user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update user. Please try again.")
     
     # Return updated user details
     created_interviews = session.exec(
@@ -2238,7 +2263,8 @@ async def delete_user(
         session.commit()
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
+        logger.error(f"Failed to delete user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete user. Please try again.")
     
     return ApiResponse(
         status_code=200,
@@ -2303,8 +2329,8 @@ async def get_candidate_status(
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    # Authorization: Only admin who created the interview
-    if interview_session.admin_id != current_user.id:
+    # Authorization: Only admin who created the interview OR super admin
+    if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=403,
             detail="Not authorized to view this interview status"

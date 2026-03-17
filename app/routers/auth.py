@@ -1,5 +1,6 @@
 from datetime import timedelta, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Response
+import logging
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
@@ -19,6 +20,7 @@ from ..auth.dependencies import get_current_user, get_current_user_optional
 from ..models.db_models import User, UserRole, InterviewSession, Team
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+logger = logging.getLogger(__name__)
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
@@ -38,6 +40,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
     user = session.exec(select(User).where(User.email == login_data.email.lower())).first()
     if not user or not verify_password(login_data.password, user.password_hash):
+        logger.error(f"Login failed for user: {login_data.email}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
@@ -83,7 +86,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
-        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
+        "role": str(user.role.value) if hasattr(user.role, "value") else str(user.role),
         "expires_at": expire_time.isoformat(),
         "team": team_data
     }
@@ -123,7 +126,7 @@ async def login_for_access_token(
         "access_token": token, 
         "token_type": "bearer",
         "id": user.id,
-        "role": user.role.value if hasattr(user.role, "value") else str(user.role),
+        "role": str(user.role.value) if hasattr(user.role, "value") else str(user.role),
         "email": user.email,
         "full_name": user.full_name,
         "expires_at": (datetime.now(timezone.utc) + access_token_expires).isoformat(),
@@ -159,20 +162,22 @@ async def register(
     if all_user_count > 0:
         # Require Admin Auth
         if not current_user or current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+            logger.error(f"Unauthorized registration attempt by user: {current_user.email if current_user else 'None'}")
             raise HTTPException(
-                status_code=403, 
+                status_code=403,
                 detail="Registration is restricted to Admins. Please contact an administrator."
             )
 
     existing_user = session.exec(select(User).where(User.email == user_data.email.lower())).first()
     if existing_user:
+        logger.error(f"Registration attempt for already registered email: {user_data.email}")
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
     hashed_password = get_password_hash(user_data.password)
-    
+
     # Handle Team assignment for new user
     team_id = user_data.team_id
-    
+
     # Bootstrap: First user is SUPER_ADMIN
     if all_user_count == 0:
         user_data.role = UserRole.SUPER_ADMIN
@@ -211,7 +216,7 @@ async def register(
         "id": new_user.id,
         "email": new_user.email,
         "full_name": new_user.full_name,
-        "role": new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
+        "role": str(new_user.role.value) if hasattr(new_user.role, "value") else str(new_user.role),
         "expires_at": expire_time.isoformat(),
         "team": team_data
     }

@@ -103,7 +103,8 @@ async def create_team(
         )
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to create team: {str(e)}")
+        logger.error(f"Failed to create team: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create team. Please try again.")
 
     return ApiResponse(
         status_code=201,
@@ -207,7 +208,8 @@ async def update_team(
         )
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to update team: {str(e)}")
+        logger.error(f"Failed to update team {team_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update team. Please try again.")
 
     return ApiResponse(
         status_code=200,
@@ -252,8 +254,8 @@ async def delete_team(
         session.commit()
     except Exception as e:
         session.rollback()
-        logger.error(f"Error during team deletion: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to delete team: {str(e)}")
+        logger.error(f"Failed to delete team {team_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete team. Please try again.")
 
     return ApiResponse(
         status_code=200,
