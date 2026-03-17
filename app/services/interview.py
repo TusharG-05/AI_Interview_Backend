@@ -1,7 +1,7 @@
 import os
 import random
 import json
-from typing import Dict, Union, Optional
+from typing import Dict, Union, Optional, Any
 from sqlmodel import Session, select
 from ..models.db_models import Questions
 from ..core.config import local_llm
@@ -61,198 +61,141 @@ def get_modal_evaluator():
     return _modal_evaluator
 
 
+def calculate_scaled_score(llm_score: Any, question_marks: float) -> float:
+    """Scale a 0-10 LLM score to the question's marks with clamping and rounding."""
+    try:
+        llm_score = float(llm_score)
+    except (ValueError, TypeError):
+        llm_score = 0.0
+    
+    scaling_factor = float(question_marks) / 10.0
+    final_score = llm_score * scaling_factor
+    
+    # Safeguards: Clamp to [0, marks] and round to 1 decimal place
+    final_score_float = float(final_score)
+    final_score_clamped = max(0.0, min(final_score_float, float(question_marks)))
+    return round(final_score_clamped, 1)
+
+
 def evaluate_answer_content(
     question: str,
     answer: str,
     response_type: str = "text",
     question_title: str = "",
+    question_marks: float = 10.0,
 ) -> Dict[str, Union[str, float]]:
-    """Evaluate interview answer using LLM.
+    """Evaluate interview answer using LLM with retry logic and scaling.
     
-    For response_type='code', delegates to evaluate_code_submission().
-    Uses Modal if enabled, else falls back through HF → local Ollama.
+    Uses Modal if enabled, else falls back through Groq → HF → local Ollama.
+    Retries up to 2 times on failure.
     """
     if response_type == "code":
         return evaluate_code_submission(
             problem_title=question_title or "Coding Problem",
             problem_statement=question,
             code=answer,
+            question_marks=question_marks,
         )
-    
-    last_error = None
 
-    # Try Modal if enabled
-    if USE_MODAL:
-        evaluator_cls = get_modal_evaluator()
-        if evaluator_cls:
-            try:
-                logger.info("Using Modal LLM for evaluation")
-                # Instantiate the class before calling remote method
-                result = evaluator_cls().evaluate.remote(question, answer)
-                logger.info(f"Modal evaluation complete. Score: {result.get('score', 'N/A')}")
-                return result
-            except Exception as e:
-                last_error = f"Modal LLM Execution failed: {str(e)}"
-                logger.warning(last_error)
-        else:
-            # Direct access since we are in the same module
-            last_error = f"Modal setup failed: {_modal_lookup_error or 'Unknown error'}"
-            logger.warning(last_error)
-            
-    # Groq API Fallback (Ultra-fast)
-    if groq_client:
+    def _parse_llm_result(raw_content: str) -> Optional[dict]:
+        """Try to parse JSON and normalize keys."""
         try:
-            logger.info("Using Groq API for evaluation")
-            system_instruction = (
-                "You are an expert technical interviewer. Evaluate the candidate's answer. "
-                "Provide feedback using 'You' and 'Your' instead of 'the candidate' and 'the candidate's'. "
-                "Return a JSON object with 'feedback' (string) and 'score' (float 0-10)."
-            )
-            completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_instruction},
-                    {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}"}
-                ],
-                temperature=0.1,
-                max_completion_tokens=512,
-                top_p=1,
-                stream=False,
-                response_format={"type": "json_object"},
-            )
-            content = completion.choices[0].message.content
-            try:
-                result = json.loads(content)
-                if "feedback" not in result:
-                    result["feedback"] = content
-                if "score" not in result:
-                    result["score"] = 5.0
-                logger.info("✅ Groq API evaluation successful")
-                return result
-            except json.JSONDecodeError:
-                logger.warning("Groq API returned non-JSON")
-                return {
-                    "feedback": content,
-                    "score": 5.0
-                }
-        except Exception as e:
-            fallback_error = f"Groq API Execution failed: {str(e)}"
-            logger.error(fallback_error)
-            if last_error:
-                last_error += f" | {fallback_error}"
-            else:
-                last_error = fallback_error
-
-    # Hugging Face Inference API Fallback
-
-    hf_token = os.getenv("HF_TOKEN")
-    if hf_token:
-        try:
-            logger.info("Attempting Hugging Face Inference API fallback...")
-            client = InferenceClient(token=hf_token)
+            # Handle markdown code blocks if present
+            clean_content = raw_content.strip()
+            if clean_content.startswith("```"):
+                lines = clean_content.split('\n')
+                if lines[0].startswith("```"): lines = lines[1:]
+                if lines and lines[-1].strip() == "```": lines = lines[:-1]
+                clean_content = "\n".join(lines).strip()
             
-            # Using Qwen 2.5 7B Instruct (same as Modal) for consistency
-            model_id = "Qwen/Qwen2.5-7B-Instruct" 
+            data = json.loads(clean_content)
+            # Normalize keys
+            feedback = data.get("feedback") or data.get("reason") or ""
+            score_raw = data.get("score_out_of_10")
+            if score_raw is None:
+                score_raw = data.get("score", 5.0)
             
-            # Simple fallback prompt to avoid LangChain dependency issues
-            system_instruction = (
-                "You are an expert technical interviewer. Evaluate the candidate's answer. "
-                "Provide feedback using 'You' and 'Your' instead of 'the candidate' and 'the candidate's'. "
-                "Return a JSON object with 'feedback' (string) and 'score' (float 0-10)."
-            )
-            
-            messages = [
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}"}
-            ]
-            
-            response = client.chat_completion(
-                model=model_id, 
-                messages=messages, 
-                max_tokens=512,
-                temperature=0.1
-            )
-            
-            content = response.choices[0].message.content
-            
-            # Clean markdown if present
-            if content.startswith("```"):
-                lines = content.split('\n')
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                content = "\n".join(lines).strip()
-            
-            try:
-                result = json.loads(content)
-                if "feedback" not in result:
-                    result["feedback"] = content
-                if "score" not in result:
-                    result["score"] = 5.0
-                logger.info("✅ HF Inference API fallback successful")
-                return result
-            except json.JSONDecodeError:
-                logger.warning("HF API returned non-JSON")
-                return {
-                    "feedback": content,
-                    "score": 5.0
-                }
-                
-        except Exception as e:
-            fallback_error = f"HF Inference API failed: {str(e)}"
-            logger.error(fallback_error)
-            if last_error:
-                last_error += f" | {fallback_error}"
-            else:
-                last_error = fallback_error
-
-    
-    # Local Ollama fallback
-    try:
-        if not USE_MODAL:
-            logger.info("Using local Ollama for evaluation")
-
-        response = evaluation_chain.invoke({
-            "question": question,
-            "answer": answer
-        })
-        
-        content = response.content.strip()
-        if content.startswith("```"):
-            lines = content.split('\n')
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines[-1].startswith("```"):
-                lines = lines[:-1]
-            content = "\n".join(lines).strip()
-
-        logger.debug(f"LLM Evaluation Raw Response: '{response.content}'")
-        
-        try:
-            result = json.loads(content)
-            if "feedback" not in result:
-                 result["feedback"] = str(content)
-            if "score" not in result:
-                 result["score"] = 0.5
-            return result
-        except json.JSONDecodeError:
             return {
-                "feedback": response.content,
-                "score": 0.5
+                "feedback": feedback,
+                "score": calculate_scaled_score(score_raw, question_marks)
             }
-    except Exception as e:
-        error_msg = f"LLM Service failure: {str(e)}"
-        if last_error:
-            error_msg = f"{last_error} | Fallback failed: {str(e)}"
+        except Exception:
+            return None
+
+    for attempt in range(2):
+        logger.info(f"Evaluation attempt {attempt + 1}/2 for question: {question[:50]}...")
+        
+        # 1. Try Modal if enabled
+        if USE_MODAL:
+            evaluator_cls = get_modal_evaluator()
+            if evaluator_cls:
+                try:
+                    result = evaluator_cls().evaluate.remote(question, answer)
+                    parsed = _parse_llm_result(json.dumps(result))
+                    if parsed: return parsed
+                except Exception as e:
+                    logger.warning(f"Modal attempt {attempt + 1} failed: {e}")
+
+        # 2. Groq Fallback
+        if groq_client:
+            try:
+                system_instruction = (
+                    "You are an expert technical interviewer. Evaluate the candidate's answer. "
+                    "Provide constructive feedback. Return a JSON object with "
+                    "'feedback' (string) and 'score_out_of_10' (float 0-10)."
+                )
+                completion = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": system_instruction},
+                        {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}"}
+                    ],
+                    temperature=0.1,
+                    response_format={"type": "json_object"},
+                )
+                parsed = _parse_llm_result(completion.choices[0].message.content)
+                if parsed:
+                    logger.info(f"✅ Groq evaluation successful on attempt {attempt + 1}")
+                    return parsed
+            except Exception as e:
+                logger.warning(f"Groq attempt {attempt + 1} failed: {e}")
+
+        # 3. HF / local fallback
+        try:
+            # Try HF if token exists
+            hf_token = os.getenv("HF_TOKEN")
+            if hf_token:
+                try:
+                    client = InferenceClient(token=hf_token)
+                    response = client.chat_completion(
+                        model="Qwen/Qwen2.5-7B-Instruct",
+                        messages=[
+                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10)."},
+                            {"role": "user", "content": f"Q: {question}\nA: {answer}"}
+                        ],
+                        max_tokens=512,
+                        temperature=0.1
+                    )
+                    parsed = _parse_llm_result(response.choices[0].message.content)
+                    if parsed: return parsed
+                except Exception as e:
+                    logger.warning(f"HF attempt {attempt + 1} failed: {e}")
+
+            # Local fallback (Ollama via LangChain)
+            response = evaluation_chain.invoke({"question": question, "answer": answer})
+            parsed = _parse_llm_result(response.content)
+            if parsed: return parsed
             
-        logger.error(error_msg)
-        return {
-            "feedback": "Evaluation service currently unavailable. Please check later.",
-            "score": 0.0,
-            "error": True,
-            "details": error_msg if USE_MODAL else "Local Ollama unreachable"
-        }
+        except Exception as e:
+            logger.error(f"Fallback attempt {attempt + 1} failed: {e}")
+
+    # If all attempts fail
+    logger.error("All evaluation attempts failed. Using default 50% score.")
+    return {
+        "feedback": "Automated evaluation was unable to process your answer currently. A default score has been applied.",
+        "score": calculate_scaled_score(5.0, question_marks),
+        "error": True
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +206,7 @@ def evaluate_code_submission(
     problem_title: str,
     problem_statement: str,
     code: str,
+    question_marks: float = 10.0,
 ) -> Dict[str, Union[str, float]]:
     """Evaluate a candidate's code submission for a coding problem.
     
@@ -270,6 +214,17 @@ def evaluate_code_submission(
     space_complexity, issues.
     """
     import json as _json
+
+    def _scale_code_result(result_dict: dict) -> dict:
+        """Helper to scale score and ensure all keys exist."""
+        score_raw = result_dict.get("score", 0.0)
+        # Assuming code LLM returns score out of 10 by default
+        result_dict["score"] = calculate_scaled_score(score_raw, question_marks)
+        result_dict.setdefault("correctness", "unknown")
+        result_dict.setdefault("time_complexity", "unknown")
+        result_dict.setdefault("space_complexity", "unknown")
+        result_dict.setdefault("issues", [])
+        return result_dict
 
     def _chain_invoke(chain, vars_: dict) -> dict:
         """Run chain and parse JSON response."""
@@ -321,13 +276,8 @@ def evaluate_code_submission(
                 lines = [l for l in lines if not l.startswith("```")]
                 content = "\n".join(lines).strip()
             result = _json.loads(content)
-            # Ensure all expected keys exist
-            result.setdefault("correctness", "unknown")
-            result.setdefault("time_complexity", "unknown")
-            result.setdefault("space_complexity", "unknown")
-            result.setdefault("issues", [])
             logger.info(f"evaluate_code: HF API score={result.get('score')}")
-            return result
+            return _scale_code_result(result)
         except Exception as e:
             logger.warning(f"evaluate_code: HF API failed: {e}")
 
@@ -335,23 +285,15 @@ def evaluate_code_submission(
     try:
         logger.info("evaluate_code: Using local Ollama...")
         result = _chain_invoke(code_eval_chain, chain_vars)
-        result.setdefault("correctness", "unknown")
-        result.setdefault("time_complexity", "unknown")
-        result.setdefault("space_complexity", "unknown")
-        result.setdefault("issues", [])
         logger.info(f"evaluate_code: Ollama score={result.get('score')}")
-        return result
+        return _scale_code_result(result)
     except Exception as e:
         logger.error(f"evaluate_code: Ollama failed: {e}")
-        return {
+        return _scale_code_result({
             "feedback": "Code evaluation service temporarily unavailable.",
             "score": 0.0,
-            "correctness": "unknown",
-            "time_complexity": "unknown",
-            "space_complexity": "unknown",
-            "issues": [],
             "error": True,
-        }
+        })
 
 
 # ---------------------------------------------------------------------------
