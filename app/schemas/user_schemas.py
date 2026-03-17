@@ -78,7 +78,7 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "resume_url": f"/api/resume/{user.id}" if user.resume_path else None,
+        "resume_url": user.resume_path if user.resume_path else None,
         "team": team_data
     }
 
@@ -110,6 +110,6 @@ def serialize_user_flat(user: User) -> Dict[str, Any]:
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "resume_url": f"/api/resume/{user.id}" if user.resume_path else None,
+        "resume_url": user.resume_path if user.resume_path else None,
         "team": team_data
     }
