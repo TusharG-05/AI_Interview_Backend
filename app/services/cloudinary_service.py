@@ -43,12 +43,9 @@ class CloudinaryService:
             else:
                 file_bytes = file_content
 
-            # 2. Use .pdf extension so browsers recognize the file type
-            if filename and filename.endswith(".pdf"):
-                public_id = filename.replace(".pdf", "")
-            else:
-                unique_id = uuid.uuid4().hex
-                public_id = f"resume_{unique_id}"
+            # 2. Generate a unique ID for the resource
+            unique_id = uuid.uuid4().hex
+            public_id = f"resume_{unique_id}.pdf"
 
             # 3. Upload to Cloudinary
             upload_result = cloudinary.uploader.upload(

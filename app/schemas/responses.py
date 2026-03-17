@@ -170,6 +170,7 @@ class UserRead(BaseModel):
     full_name: str
     role: str
     resume_url: Optional[str] = None
+    profile_image_url: Optional[str] = None
     team: Optional[TeamReadBasic] = None
 
 class UserMeResponse(BaseModel):
@@ -179,6 +180,7 @@ class UserMeResponse(BaseModel):
     full_name: str
     role: str
     resume_url: Optional[str] = None
+    profile_image_url: Optional[str] = None
     profile_image: Optional[str] = None
     has_profile_image: bool = False
     has_face_embedding: bool = False

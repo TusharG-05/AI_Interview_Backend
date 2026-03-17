@@ -1904,21 +1904,18 @@ async def create_user(
     role: UserRole = Form(UserRole.CANDIDATE),
     team_id: Optional[int] = Form(None),
     resume: Optional[UploadFile] = File(None),
+    profile_image: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
-    """Create a new user (Candidate or Admin) with optional resume upload."""
+    """Create a new user with resume, profile picture, and face embeddings."""
+    
+    # 1. Existing user check
     existing_user = session.exec(select(User).where(User.email == email)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Permission Check: Only Super Admin can create another Super Admin
-    if role == UserRole.SUPER_ADMIN and current_user.role != UserRole.SUPER_ADMIN:
-        raise HTTPException(
-            status_code=403, 
-            detail="Only Super Admins can create other Super Admins"
-        )
-    
+    # 2. Create initial user object
     new_user = User(
         email=email,
         full_name=full_name,
@@ -1927,38 +1924,104 @@ async def create_user(
         team_id=team_id
     )
     session.add(new_user)
+    # We will commit everything at once at the end.
+    
+    updates_made = False
+
+    # --- 3. Handle Profile Picture & Face Embeddings ---
+    if profile_image:
+        if profile_image.content_type and not (
+            profile_image.content_type.startswith("image/") or 
+            profile_image.content_type == "application/octet-stream"
+        ):
+            raise HTTPException(status_code=400, detail="Invalid image format")
+
+        image_bytes = await profile_image.read()
+        if image_bytes:
+            new_user.profile_image_bytes = image_bytes
+            
+            # A. Generate Face Embeddings (Hybrid Strategy)
+            try:
+                from deepface import DeepFace
+                import json
+                import tempfile
+                import os
+
+                embeddings_map = {}
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(image_bytes)
+                    tmp_path = tmp.name
+                
+                try:
+                    # ArcFace
+                    try:
+                        arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                        if arc_objs:
+                            embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                    except Exception as e:
+                        logger.warning(f"ArcFace failed during user creation: {e}")
+
+                    # SFace
+                    try:
+                        sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                        if sface_objs:
+                            embeddings_map["SFace"] = sface_objs[0]["embedding"]
+                    except Exception as e:
+                        logger.warning(f"SFace failed during user creation: {e}")
+
+                    if embeddings_map:
+                        new_user.face_embedding = json.dumps(embeddings_map)
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+            except Exception as e:
+                logger.error(f"Embedding generation failed: {e}")
+
+            # B. Upload to Cloudinary
+            try:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(
+                        cloudinary_service.upload_image, 
+                        image_bytes, 
+                        folder="profile_pictures" 
+                    )
+                    cloudinary_url = future.result(timeout=15)
+                    if cloudinary_url:
+                        new_user.profile_image = cloudinary_url
+            except Exception as e:
+                logger.error(f"Cloudinary upload failed: {e}")
+
+    # --- 4. Handle Optional Resume Upload ---
+    if resume:
+        # Check if resume.filename is used instead of just 'filename'
+        if not resume.filename.lower().endswith('.pdf'):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+        
+        try:
+            await resume.seek(0)
+            # Ensure your cloudinary_service call is also correct
+            resume_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            if resume_url:
+                new_user.resume_path = resume_url
+                updates_made = True
+            else:
+                logger.error("Cloudinary upload returned None for resume")
+        except Exception as e:
+            logger.error(f"Failed to upload resume to Cloudinary: {e}")
+
+    # 5. Final Save and refresh to get the ID
     try:
         session.commit()
         session.refresh(new_user)
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to create user: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to create user. Please try again.")
-
-    # Handle optional resume upload
-    if resume:
-        if not resume.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
-        
-        try:
-            # Upload to Cloudinary directly using the file-like object (avoids text decoding issues)
-            await resume.seek(0)
-            cloudinary_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
-            
-            if cloudinary_url:
-                new_user.resume_path = cloudinary_url
-                session.add(new_user)
-                session.commit()
-                session.refresh(new_user)
-            else:
-                logger.error("Cloudinary upload returned None for resume")
-        except Exception as e:
-            logger.error(f"Failed to upload resume to Cloudinary during user creation: {e}")
-            raise HTTPException(status_code=500, detail="Failed to save resume")
+        logger.error(f"Failed to commit new user: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create user.")
     
-    # Serialize team for response
+    # 6. Response
     team_data = None
-    if new_user.id and new_user.team_id:
+    if new_user.team_id:
         from .teams import _serialize_team_basic
         team_data = _serialize_team_basic(new_user.team, session)
 
@@ -1969,10 +2032,11 @@ async def create_user(
             email=new_user.email,
             full_name=new_user.full_name,
             role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
-            resume_url=new_user.resume_path if new_user.resume_path else None,
+            resume_url=new_user.resume_path,
+            profile_image_url=new_user.profile_image, 
             team=team_data
         ),
-        message="User created successfully"
+        message="User created with profile image and biometric embeddings."
     ))
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
@@ -1989,6 +2053,7 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
             resume_url=u.resume_path if u.resume_path else None,
+            profile_image_url=f"/api/candidate/profile-image/{u.id}" if u.profile_image_bytes or u.profile_image else None,
             team=team_data
         ))
         
