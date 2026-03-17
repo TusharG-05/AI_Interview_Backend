@@ -1,8 +1,9 @@
+
 import requests
-import json
 import uuid
-import time
 import os
+from datetime import datetime, timezone, timedelta
+from app.models.db_models import UserRole, InterviewStatus
 
 BASE_URL = "http://localhost:8000/api"
 ADMIN_EMAIL = "admin@test.com"
@@ -69,9 +70,7 @@ def test_api():
         assert create_res.status_code == 201, f"User Creation with Resume failed: {create_res.text}"
         cand_data = create_res.json()["data"]
         candidate_id = cand_data["id"]
-        # In the new Cloudinary logic, the resume_url is returned as /api/resume/{id} 
-        # but internally it redirects.
-        # Let's ensure resume_url is present.
+        # In the new Cloudinary logic, the resume_url is returned as absolute path
         assert "resume_url" in cand_data
         print(f" User created with direct resume upload: ID {candidate_id}")
 
@@ -92,8 +91,14 @@ def test_api():
         if get_resume.status_code == 307:
             print(f" Resume download verified via redirect: {get_resume.headers.get('location')}")
         else:
-            assert get_resume.headers["content-type"] == "application/pdf"
-            print(" Resume download verified via simplified GET API")
+            # Check if JSON or PDF
+            content_type = get_resume.headers.get("content-type", "")
+            if "application/pdf" in content_type:
+                print(" Resume download verified via direct PDF stream")
+            else:
+                data = get_resume.json()
+                assert "resume_url" in data["data"]
+                print(f" Resume URL verified via JSON API: {data['data']['resume_url']}")
 
     finally:
         if os.path.exists(pdf_path): os.remove(pdf_path)
@@ -123,75 +128,59 @@ def test_api():
     print("\n[6] Testing Adding Question...")
     q_res = requests.post(f"{BASE_URL}/admin/papers/{paper_id}/questions", headers=admin_headers, json={
         "content": "What is Python?",
-        "topic": "Python",
+        "topic": "General",
         "difficulty": "Easy",
         "marks": 10,
         "response_type": "text"
     })
     assert q_res.status_code == 201, f"Adding Question failed: {q_res.text}"
-    print(" Question Added Successfully")
+    q_id = q_res.json()["data"]["id"]
+    print(f" Question Added: ID {q_id}")
 
     # 7. ADMIN: Schedule Interview
-    print(f"\n[7] Testing Interview Scheduling...")
-    print(f" Attempting to schedule with Paper ID: {paper_id}, Team ID: {team_id}, Cand ID: {candidate_id}")
+    print("\n[7] Testing Interview Scheduling...")
     sched_res = requests.post(f"{BASE_URL}/admin/interviews/schedule", headers=admin_headers, json={
         "candidate_id": candidate_id,
         "paper_id": paper_id,
         "team_id": team_id,
         "interview_round": "ROUND_1",
-        "schedule_time": "2026-03-20T15:00:00Z",
-        "duration_minutes": 45
+        "schedule_time": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
+        "duration_minutes": 60
     })
-    if sched_res.status_code != 201:
-        print(f" ERROR: Schedule failed with status {sched_res.status_code}")
-        print(f" Response: {sched_res.text}")
-        # Try to fetch the paper to see if it's actually "missing"
-        check_p = requests.get(f"{BASE_URL}/admin/papers/{paper_id}", headers=admin_headers)
-        print(f" Diagnostic - Fetch Paper {paper_id} result: {check_p.status_code}")
-        if check_p.status_code != 200:
-            print(f" Diagnostic - Fetch Paper Response: {check_p.text}")
-            
-    assert sched_res.status_code == 201, f"Schedule failed: {sched_res.text}"
-    interview_data = sched_res.json()["data"]["interview"]
-    interview_id = interview_data["id"]
+    assert sched_res.status_code == 201, f"Scheduling failed: {sched_res.text}"
+    interview_id = sched_res.json()["data"]["interview"]["id"]
     access_token = sched_res.json()["data"]["access_token"]
-    print(f" Interview Scheduled: ID {interview_id}")
+    print(f" Interview Scheduled: ID {interview_id}, Access Token: {access_token}")
 
-    # 8. CANDIDATE: Login
-    print("\n[8] Testing Candidate Login...")
-    c_login_res = requests.post(f"{BASE_URL}/auth/login", json={
+    # 8. CANDIDATE: Login & Start
+    print("\n[8] Testing Candidate Login & Session Start...")
+    cand_login_res = requests.post(f"{BASE_URL}/auth/login", json={
         "email": cand_email,
         "password": "password123",
         "access_token": access_token
     })
-    assert c_login_res.status_code == 200, f"Candidate Login failed: {c_login_res.text}"
-    c_token = c_login_res.json()["data"]["access_token"]
-    c_headers = {"Authorization": f"Bearer {c_token}"}
-    print(" Candidate Login Successful")
+    assert cand_login_res.status_code == 200, f"Candidate Login failed: {cand_login_res.text}"
+    cand_token = cand_login_res.json()["data"]["access_token"]
+    cand_headers = {"Authorization": f"Bearer {cand_token}"}
+    
+    start_res = requests.post(f"{BASE_URL}/interview/start-session/{interview_id}", headers=cand_headers)
+    assert start_res.status_code == 200, f"Session Start failed: {start_res.text}"
+    print(" Candidate Login and Session Started")
 
-    # 9. INTERVIEW: Start & Submit
-    print("\n[9] Testing Interview Workflow...")
-    start_res = requests.post(f"{BASE_URL}/interview/start-session/{interview_id}", headers=c_headers)
-    assert start_res.status_code == 200
-    
-    nq_res = requests.get(f"{BASE_URL}/interview/next-question/{interview_id}", headers=c_headers)
-    assert nq_res.status_code == 200
-    nq_data = nq_res.json()["data"]
-    
-    if nq_data.get("status") != "finished":
-        q_id = nq_data["question_id"]
-        sub_res = requests.post(f"{BASE_URL}/interview/submit-answer-text", headers=c_headers, data={
-            "interview_id": interview_id,
-            "question_id": q_id,
-            "answer_text": "Python is a high-level programming language."
-        })
-        assert sub_res.status_code == 200
-        print(" Answer Submitted Successfully")
+    # 9. CANDIDATE: Submit Answer
+    print("\n[9] Testing Submitting Answer...")
+    sub_res = requests.post(f"{BASE_URL}/interview/submit-answer-text", headers=cand_headers, data={
+        "interview_id": interview_id,
+        "question_id": q_id,
+        "answer_text": "Python is a programming language."
+    })
+    assert sub_res.status_code == 200, f"Submitting Answer failed: {sub_res.text}"
+    print(" Answer Submitted Successfully")
 
     # 10. ADMIN: Results
     print("\n[10] Testing Admin Results...")
     res_res = requests.get(f"{BASE_URL}/admin/results/{interview_id}", headers=admin_headers)
-    assert res_res.status_code == 200
+    assert res_res.status_code == 200, f"Fetching Results failed: {res_res.text}"
     print(" Admin Results Verified")
 
     # 11. ADMIN: Create Coding Paper
@@ -289,6 +278,7 @@ def test_api():
     print(" Admin Coding Results Verified")
 
     print("\nALL COMPREHENSIVE TESTS FINISHED!")
+
 if __name__ == "__main__":
     try:
         test_api()

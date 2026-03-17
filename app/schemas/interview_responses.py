@@ -227,12 +227,12 @@ class CodingQuestionBasic(BaseModel):
 class CodingAnswersData(BaseModel):
     id: int
     interview_result_id: int
-    coding_question_id: CodingQuestionBasic
+    coding_question: CodingQuestionBasic
     candidate_answer: str
     feedback: str
     score: float
-    audio_path: str
-    transcribed_text: str
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
     timestamp: datetime
 
 class AdminResultData(BaseModel):

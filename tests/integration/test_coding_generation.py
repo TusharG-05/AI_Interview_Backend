@@ -8,7 +8,7 @@ def test_coding_paper_auto_creation_and_aggregation(client, session, auth_header
     Test 1: Auto-creation of coding paper (appending is disabled)
     Test 2: Combined score aggregation (Standard + Coding)
     """
-    admin, candidate = test_users
+    admin, candidate, super_admin = test_users
 
     # --- 1. AUTO-CREATION ---
     mock_generated = [
@@ -103,12 +103,12 @@ def test_coding_paper_auto_creation_and_aggregation(client, session, auth_header
     assert response.status_code == 200
     res_data = response.json()["data"]
     assert res_data["total_score"] == 10.0
-    assert len(res_data["Interview_response"]) == 2
+    assert len(res_data["interview_responses"]) == 2
     
     # Check if both types are present
-    ans_types = [a.get("question_id") is not None for a in res_data["Interview_response"]]
+    ans_types = [a.get("question") is not None for a in res_data["interview_responses"]]
     assert True in ans_types # Standard
     
-    coding_ans = [a.get("coding_question_id") for a in res_data["Interview_response"] if a.get("coding_question_id") is not None]
+    coding_ans = [a.get("coding_question") for a in res_data["interview_responses"] if a.get("coding_question") is not None]
     assert len(coding_ans) == 1
     assert coding_ans[0]["title"] == "Sum Array"

@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlmodel import Session
 from ..core.database import get_db as get_session
-from ..models.db_models import User, UserRole
+from ..models.db_models import User, UserRole # Assuming UserRole is defined here or imported
 from ..auth.dependencies import get_current_user
 
 router = APIRouter(prefix="/resume", tags=["Resume Management"])
 
 RESUME_DIR = os.path.join("app", "assets", "resumes")
+os.makedirs(RESUME_DIR, exist_ok=True)
 
 @router.get("/")
 async def get_resume(

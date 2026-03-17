@@ -356,6 +356,64 @@ async def access_interview(
     )
 
 
+@router.get("/schedule-time/{token}")
+async def get_schedule_time(
+    token: str,
+    session_db: Session = Depends(get_session)
+):
+    """
+    Returns only the scheduled interview time for a given access token.
+    No authentication required. Used for public access to schedule information.
+    Checks for interview status (completed, expired, cancelled) and returns error if not accessible.
+    """
+    from ..models.db_models import InterviewStatus
+    # Find interview by access token
+    session = session_db.exec(
+        select(InterviewSession).where(InterviewSession.access_token == token)
+    ).first()
+    
+    if not session:
+        logger.warning(f"Invalid interview token accessed: {token}")
+        raise HTTPException(status_code=404, detail="Invalid interview token")
+
+    # 1. Validation Checks
+    now = datetime.now(timezone.utc)
+    schedule_time = session.schedule_time
+    if schedule_time.tzinfo is None:
+        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+    
+    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+
+    # Check for Cancelled
+    if session.status == InterviewStatus.CANCELLED:
+        raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+
+    # Check for Completed
+    if session.is_completed or session.status == InterviewStatus.COMPLETED:
+        raise HTTPException(status_code=403, detail="This interview has already been completed.")
+
+    # Check for Expired
+    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
+    if is_expired:
+        raise HTTPException(status_code=403, detail="This interview link has expired.")
+
+    # Check if LIVE (Already attempted/in progress)
+    if session.status == InterviewStatus.LIVE:
+        # Depending on requirements, we might allow viewing schedule time if live, 
+        # but typical requirement is to prevent re-entry if they think they can "reset"
+        # The user said: "check messages for this api too. message should show if the interview on this access token attempted, complete or expired."
+        # If it's LIVE, it means it's "attempted".
+        raise HTTPException(status_code=403, detail="This interview is currently in progress (attempted).")
+
+    # Return only the schedule time in ISO format
+    schedule_time_iso = schedule_time.isoformat()
+    
+    return ApiResponse(
+        status_code=200,
+        data={"schedule_time": schedule_time_iso},
+        message="Interview schedule time retrieved successfully"
+    )
+    
 @router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])
 async def start_session_logic(
     interview_id: int,
@@ -429,7 +487,8 @@ async def start_session_logic(
         session_db.commit()
     except Exception as e:
         session_db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to start interview: {str(e)}")
+        logger.error(f"Failed to start interview for session {session.id if 'session' in locals() else 'unknown'}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to start interview session. Please contact support.")
         
     return ApiResponse(
         status_code=200,
@@ -714,7 +773,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                 except Exception as e:
                     logger.error(f"Failed to create coding question proxy: {e}", exc_info=True)
                     session_db.rollback()
-                    raise HTTPException(status_code=500, detail=f"Failed to create coding question proxy: {str(e)}")
+                    raise HTTPException(status_code=500, detail="An error occurred while loading the coding question.")
 
             # Generate TTS for the coding question title
             os.makedirs("app/assets/audio/questions", exist_ok=True)
@@ -966,7 +1025,7 @@ async def submit_answer_audio(
     )
 
 
-from ..schemas.interview_responses import AnswersData, QuestionData, CodingAnswersData, CodingQuestionNested
+from ..schemas.interview_responses import AnswersData, QuestionData, CodingAnswersData, CodingQuestionNested, CodingQuestionBasic
 
 @router.post("/submit-answer-code", response_model=ApiResponse[CodingAnswersData])
 async def submit_answer_code(
@@ -1032,17 +1091,11 @@ async def submit_answer_code(
         data=CodingAnswersData(
             id=answer.id,
             interview_result_id=answer.interview_result_id,
-            coding_question_id=CodingQuestionBasic(
-                id=question.id,
-                paper_id=question.paper_id,
-                title=question.title or "",
-                problem_statement=question.problem_statement or "",
-                examples=question.examples,
-                constraints=question.constraints,
-                starter_code=question.starter_code or "",
-                topic=question.topic or "Algorithms",
-                difficulty=question.difficulty or "Medium",
-                marks=question.marks or 0,
+            coding_question=CodingQuestionBasic(
+                id=question.id, paper_id=question.paper_id, title=question.title,
+                problem_statement=question.problem_statement, examples=question.examples,
+                constraints=question.constraints, starter_code=question.starter_code or "",
+                topic=question.topic, difficulty=question.difficulty, marks=question.marks
             ),
             candidate_answer=answer.candidate_answer,
             feedback=answer.feedback,
@@ -1245,7 +1298,8 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
             message="Answer evaluated successfully"
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Evaluation failed: {str(e)}")
+        logger.error(f"Evaluation failed for stateless request: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Answer evaluation failed. Technical details logged.")
 
 
 
@@ -1525,7 +1579,8 @@ async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User 
             message="Speech converted to text successfully"
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
+        logger.error(f"Standalone speech to text failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Speech to text conversion failed.")
 
 @router.get("/tts")
 async def standalone_tts(text: str, background_tasks: BackgroundTasks):

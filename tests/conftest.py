@@ -95,12 +95,20 @@ def test_users_fixture(session):
         password_hash=get_password_hash("TestPass123!"),
         role=UserRole.CANDIDATE,
     )
+    super_admin = User(
+        email="super_admin@example.com",
+        full_name="Super Admin",
+        password_hash=get_password_hash("SuperPass123!"),
+        role=UserRole.SUPER_ADMIN,
+    )
     session.add(admin)
     session.add(candidate)
+    session.add(super_admin)
     session.commit()
     session.refresh(admin)
     session.refresh(candidate)
-    return admin, candidate
+    session.refresh(super_admin)
+    return admin, candidate, super_admin
 
 @pytest.fixture(autouse=True)
 def override_dependencies(session):
@@ -160,8 +168,19 @@ def auth_headers(session, test_users):
     """
     # Use the existing admin user from test_users fixture
     from app.auth.security import create_access_token
-    admin, candidate = test_users
+    admin, candidate, super_admin = test_users
     
     access_token = create_access_token(data={"sub": admin.email})
+    return {"Authorization": f"Bearer {access_token}"}
+
+@pytest.fixture
+def super_auth_headers(session, test_users):
+    """
+    Creates a super admin user and returns JWT headers.
+    """
+    from app.auth.security import create_access_token
+    admin, candidate, super_admin = test_users
+    
+    access_token = create_access_token(data={"sub": super_admin.email})
     return {"Authorization": f"Bearer {access_token}"}
 

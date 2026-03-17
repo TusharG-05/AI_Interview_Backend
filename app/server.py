@@ -217,6 +217,10 @@ import json
 
 @app.middleware("http")
 async def diagnostic_logging_middleware(request: Request, call_next):
+    # Skip in production/Hugging Face to avoid issues
+    if os.getenv("ENV") == "production" or os.getenv("SPACE_ID"):
+        return await call_next(request)
+        
     # Skip noisy endpoints like swagger docs
     if request.url.path in ["/docs", "/openapi.json", "/redoc"]:
         return await call_next(request)

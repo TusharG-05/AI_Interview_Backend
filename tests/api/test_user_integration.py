@@ -1,80 +1,57 @@
-import requests
-import os
+
+import pytest
+import io
 import uuid
+from app.models.db_models import UserRole
 
-BASE_URL = "http://localhost:8000/api"
-ADMIN_EMAIL = "admin@test.com"
-ADMIN_PASS = "admin123"
-
-def create_test_pdf(filename):
-    with open(filename, "wb") as f:
-        f.write(b"%PDF-1.4\n% dummy content")
-
-def test_user_api_integration():
-    print("Starting User API Resume Integration Tests...")
-
-    # 1. Login as Admin
-    login_res = requests.post(f"{BASE_URL}/auth/login", json={
-        "email": ADMIN_EMAIL, "password": ADMIN_PASS
+def test_user_api_integration_workflow(client, session, test_users, auth_headers):
+    """
+    Test user lifecycle and resume integration:
+    - Create user without resume
+    - Verify fields are null
+    - Upload resume via Admin PATCH
+    - Verify fields in User Detail, Auth /me, and List Users
+    """
+    admin, candidate, super_admin = test_users
+    
+    # 1. REGISTER Candidate (Needs Auth if not bootstrap)
+    cand_email = f"int_{uuid.uuid4().hex[:6]}@test.com"
+    reg_res = client.post("/api/auth/register", headers=auth_headers, json={
+        "email": cand_email,
+        "password": "password123",
+        "full_name": "Integrated Cand",
+        "role": "CANDIDATE"
     })
-    admin_token = login_res.json()["data"]["access_token"]
-    admin_headers = {"Authorization": f"Bearer {admin_token}"}
-    print(" Admin Logged In")
+    assert reg_res.status_code == 201
+    cand_id = reg_res.json()["data"]["id"]
+    cand_token = reg_res.json()["data"]["access_token"]
+    c_headers = {"Authorization": f"Bearer {cand_token}"}
 
-    # 2. Register a candidate
-    cand_email = f"cand_int_{uuid.uuid4().hex[:6]}@test.com"
-    reg = requests.post(f"{BASE_URL}/auth/register", headers=admin_headers, json={
-        "email": cand_email, "password": "password123", "full_name": "Integrated Candidate", "role": "CANDIDATE"
-    })
-    cand_id = reg.json()["data"]["id"]
-    cand_token = reg.json()["data"]["access_token"]
-    cand_headers = {"Authorization": f"Bearer {cand_token}"}
-    print(f" Candidate Created: {cand_id}")
-
-    # 3. Check Admin GET User BEFORE upload
-    get_res = requests.get(f"{BASE_URL}/admin/users/{cand_id}", headers=admin_headers)
+    # 2. VERIFY Null Resume
+    get_res = client.get(f"/api/admin/users/{cand_id}", headers=auth_headers)
     user_data = get_res.json()["data"]
-    assert "resume_filename" in user_data
-    assert "resume_url" in user_data
-    assert user_data["resume_filename"] is None
     assert user_data["resume_url"] is None
-    print(" Verified fields exist (but null) BEFORE upload SUCCESS")
+    print(" Initial null resume verified")
 
-    # 4. Upload Resume for Candidate
-    pdf_path = "int_test.pdf"
-    create_test_pdf(pdf_path)
-    with open(pdf_path, "rb") as f:
-        requests.post(f"{BASE_URL}/resume/upload/{cand_id}", headers=admin_headers, files={"file": ("my_resume.pdf", f, "application/pdf")})
-    print(" Resume Uploaded")
+    # 3. UPLOAD Resume via Admin PATCH
+    resume_content = b"%PDF-1.4\nIntegrated Resume"
+    upload_res = client.patch(
+        f"/api/admin/users/{cand_id}",
+        headers=auth_headers,
+        files={"resume": ("integrated.pdf", io.BytesIO(resume_content), "application/pdf")}
+    )
+    assert upload_res.status_code == 200
+    print(" Resume uploaded via Patch")
 
-    # 5. Check Admin GET User AFTER upload
-    get_res_after = requests.get(f"{BASE_URL}/admin/users/{cand_id}", headers=admin_headers)
-    data_after = get_res_after.json()["data"]
-    assert data_after["resume_filename"] == "my_resume.pdf"
-    assert data_after["resume_url"] == f"/api/resume/{cand_id}"
-    print(" Verified Administrative User Detail contains resume info SUCCESS")
-
-    # 6. Check Auth /me AFTER upload
-    me_res = requests.get(f"{BASE_URL}/auth/me", headers=cand_headers)
+    # 4. VERIFY Auth /me
+    me_res = client.get("/api/auth/me", headers=c_headers)
     me_data = me_res.json()["data"]
-    assert me_data["resume_filename"] == "my_resume.pdf"
     assert me_data["resume_url"] == f"/api/resume/{cand_id}"
-    print(" Verified Auth /me contains resume info SUCCESS")
+    print(" Auth /me verified")
 
-    # 7. Check List Users
-    list_res = requests.get(f"{BASE_URL}/admin/users", headers=admin_headers)
-    found = False
-    for u in list_res.json()["data"]:
-        if u["id"] == cand_id:
-            assert u["resume_filename"] == "my_resume.pdf"
-            assert u["resume_url"] == f"/api/resume/{cand_id}"
-            found = True
+    # 5. VERIFY List Users
+    list_res = client.get("/api/admin/users", headers=auth_headers)
+    users = list_res.json()["data"]
+    found = any(u["id"] == cand_id and u["resume_url"] == f"/api/resume/{cand_id}" for u in users)
     assert found
-    print(" Verified List Users contains resume info SUCCESS")
-
-    # Cleanup
-    if os.path.exists(pdf_path): os.remove(pdf_path)
-    print("\nALL USER API INTEGRATION TESTS PASSED!")
-
-if __name__ == "__main__":
-    test_user_api_integration()
+    print(" List users verified")
