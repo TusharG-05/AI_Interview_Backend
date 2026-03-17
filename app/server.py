@@ -227,36 +227,41 @@ async def diagnostic_logging_middleware(request: Request, call_next):
         
     start_time = time.time()
     
-    # 1. Safely read and restore the request body
-    body_bytes = b""
-    try:
-        body_bytes = await request.body()
-    except Exception:
-        pass
-        
-    # Restore the stream so the endpoints can still access the body/files
-    async def receive():
-        return {"type": "http.request", "body": body_bytes}
-    request._receive = receive
+    # 1. Safely read and restore the request body (Skip multipart to avoid breaking file uploads)
+    content_type = request.headers.get("content-type", "")
+    is_multipart = "multipart/form-data" in content_type
     
-    # 2. Try to parse JSON for pretty printing and masking passwords
     body_str = ""
     is_json = False
-    try:
-        if body_bytes:
-            parsed = json.loads(body_bytes)
-            # Mask potential secrets
-            for key in ["password", "token", "access_token"]:
-                if isinstance(parsed, dict) and key in parsed:
-                    parsed[key] = "********"
-            body_str = json.dumps(parsed, indent=2)
-            is_json = True
-    except Exception:
-        body_str = "<binary, form, or non-json data>"
+    
+    if not is_multipart:
+        try:
+            body_bytes = await request.body()
+            # Restore the stream so the endpoints can still access the body
+            async def receive():
+                return {"type": "http.request", "body": body_bytes}
+            request._receive = receive
+            
+            # 2. Try to parse JSON for pretty printing and masking passwords
+            if body_bytes:
+                try:
+                    parsed = json.loads(body_bytes)
+                    # Mask potential secrets
+                    for key in ["password", "token", "access_token"]:
+                        if isinstance(parsed, dict) and key in parsed:
+                            parsed[key] = "********"
+                    body_str = json.dumps(parsed, indent=2)
+                    is_json = True
+                except Exception:
+                    body_str = body_bytes.decode(errors="replace")[:500]
+        except Exception:
+            body_str = "<error reading body>"
+    else:
+        body_str = "<multipart/form-data (skipped to preserve stream)>"
 
-    print(f"\n\033[96m[REQUEST START] {request.method} {request.url.path}\033[0m")
-    if is_json:
-        print(f"\033[90mPayload:\n{body_str}\033[0m")
+    print(f"\n\033[96m[REQUEST START] {request.method} {request.url.path}\033[0m", flush=True)
+    if body_str:
+        print(f"\033[90mPayload:\n{body_str}\033[0m", flush=True)
         
     # 3. Execute the request and catch any 500s directly here to print context
     try:
@@ -271,19 +276,19 @@ async def diagnostic_logging_middleware(request: Request, call_next):
         else:
             color = "\033[91m" # Red
             
-        print(f"{color}[REQUEST END] {request.method} {request.url.path} - {response.status_code} - {process_time:.2f}ms\033[0m")
+        print(f"{color}[REQUEST END] {request.method} {request.url.path} - {response.status_code} - {process_time:.2f}ms\033[0m", flush=True)
         return response
         
     except Exception as e:
         process_time = (time.time() - start_time) * 1000
-        print(f"\n\033[91m====================== CRITICAL ERROR ======================\033[0m")
-        print(f"\033[91mFailed Endpoint: {request.method} {request.url.path}\033[0m")
-        print(f"\033[91mExecution Time: {process_time:.2f}ms\033[0m")
-        print(f"\033[91mInput Payload that caused failure:\n{body_str}\033[0m")
-        print(f"\033[91m------------------------------------------------------------\033[0m")
+        print(f"\n\033[91m====================== CRITICAL ERROR ======================\033[0m", flush=True)
+        print(f"\033[91mFailed Endpoint: {request.method} {request.url.path}\033[0m", flush=True)
+        print(f"\033[91mExecution Time: {process_time:.2f}ms\033[0m", flush=True)
+        print(f"\033[91mInput Payload that caused failure:\n{body_str}\033[0m", flush=True)
+        print(f"\033[91m------------------------------------------------------------\033[0m", flush=True)
         import traceback
         traceback.print_exc()
-        print(f"\033[91m============================================================\033[0m\n")
+        print(f"\033[91m============================================================\033[0m\n", flush=True)
         raise e
 
 # (Redundant endpoint removed. Use settings.router instead)

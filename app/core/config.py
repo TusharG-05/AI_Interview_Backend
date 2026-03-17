@@ -78,6 +78,7 @@ SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Cloudinary Configuration
+CLOUDINARY_URL = os.getenv("CLOUDINARY_URL")
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
