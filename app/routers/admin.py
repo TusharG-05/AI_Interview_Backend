@@ -1918,11 +1918,9 @@ async def create_user(
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
         try:
-            # Read file content
-            resume_content = await resume.read()
-            
-            # Upload to Cloudinary
-            cloudinary_url = cloudinary_service.upload_resume(resume_content, folder="resumes")
+            # Upload to Cloudinary directly using the file-like object (avoids text decoding issues)
+            await resume.seek(0)
+            cloudinary_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
             
             if cloudinary_url:
                 new_user.resume_path = cloudinary_url
@@ -1948,7 +1946,7 @@ async def create_user(
             email=new_user.email,
             full_name=new_user.full_name,
             role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
-            resume_url=f"/api/resume/{new_user.id}" if new_user.resume_path else None,
+            resume_url=new_user.resume_path if new_user.resume_path else None,
             team=team_data
         ),
         message="User created successfully"
@@ -1967,7 +1965,7 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             email=u.email, 
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
-            resume_url=f"/api/resume/{u.id}" if u.resume_path else None,
+            resume_url=u.resume_path if u.resume_path else None,
             team=team_data
         ))
         
@@ -2013,7 +2011,7 @@ async def get_user(
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
-            resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
+            resume_url=user.resume_path if user.resume_path else None,
             profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
             team=team_data
         ),
@@ -2083,9 +2081,10 @@ async def update_user(
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
         try:
-            resume_content = await resume.read()
-            cloudinary_url = cloudinary_service.upload_resume(resume_content, folder="resumes")
-            
+            await resume.seek(0)
+            cloudinary_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            print(cloudinary_url)
+
             if cloudinary_url:
                 user.resume_path = cloudinary_url
             else:
@@ -2125,7 +2124,7 @@ async def update_user(
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
-            resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
+            resume_url=user.resume_path if user.resume_path else None,
             profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
             team=team_data
         ),

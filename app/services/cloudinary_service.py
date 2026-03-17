@@ -2,6 +2,8 @@ import cloudinary
 import cloudinary.uploader
 from ..core.config import CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET
 import logging
+import uuid
+from typing import BinaryIO, Union
 
 logger = logging.getLogger(__name__)
 
@@ -25,22 +27,45 @@ class CloudinaryService:
             logger.error(f"Cloudinary upload failed: {e}")
             raise e
 
-    def upload_resume(self, file_content: bytes, folder: str = "resumes") -> str:
+    def upload_resume(self, file_content: Union[bytes, BinaryIO], folder: str = "resumes") -> str:
         """
-        Uploads resume (PDF) to Cloudinary and returns the secure URL.
+        Uploads resume (PDF) to Cloudinary as a 'raw' resource and returns the secure URL.
         """
         try:
-            import uuid
-            # Using a public_id with .pdf extension often helps Cloudinary "auto" detection
-            public_id = f"resume_{uuid.uuid4().hex}.pdf"
+            # 1. Prepare the bytes correctly
+            if hasattr(file_content, "read"):
+                try:
+                    file_content.seek(0)
+                except Exception:
+                    # Some file-like objects don't support seek; we handle it gracefully
+                    pass
+                file_bytes = file_content.read()
+            else:
+                file_bytes = file_content
+
+            # 2. Use .pdf extension so browsers recognize the file type
+            unique_id = uuid.uuid4().hex
+            public_id = f"resume_{unique_id}.pdf"
+
+            # 3. Upload to Cloudinary
             upload_result = cloudinary.uploader.upload(
-                file_content,
+                file_bytes,
                 folder=folder,
                 public_id=public_id,
-                resource_type="auto",
+                resource_type="raw",  # Reverted to raw per user preference
                 overwrite=True
             )
-            return upload_result.get("secure_url")
+            
+            # 4. Extract and return the direct clickable link
+            secure_url = upload_result.get("secure_url")
+            
+            if not secure_url:
+                logger.error("Cloudinary upload succeeded but no secure_url was returned.")
+                return ""
+
+            return secure_url
+
         except Exception as e:
-            logger.error(f"Cloudinary resume upload failed: {e}")
+            logger.error(f"Cloudinary resume upload failed: {str(e)}")
+            # Raise the exception so the API endpoint can catch it and return a 500 error
             raise e
