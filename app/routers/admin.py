@@ -54,6 +54,9 @@ email_service = EmailService()
 from ..services.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
 from ..tasks.email_tasks import send_interview_invitation_task
+from ..services.cloudinary_service import CloudinaryService
+
+cloudinary_service = CloudinaryService()
 
 @router.websocket("/dashboard/ws")
 async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
@@ -103,7 +106,6 @@ from pydantic import BaseModel, Field
 class PaperCreate(BaseModel):
     name: str = Field(..., min_length=1, description="Name of the question paper")
     description: Optional[str] = None
-
 
 
 @router.post("/papers", response_model=ApiResponse[PaperRead], status_code=201)
@@ -1938,20 +1940,21 @@ async def create_user(
         if not resume.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
-        timestamp = int(time.time())
-        filename = f"user_{new_user.id}_{timestamp}.pdf"
-        file_path = os.path.join(RESUME_DIR, filename)
-
         try:
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(resume.file, buffer)
-            new_user.resume_path = file_path
-            session.add(new_user)
-            session.commit()
-            session.refresh(new_user)
+            # Upload to Cloudinary directly using the file-like object (avoids text decoding issues)
+            await resume.seek(0)
+            cloudinary_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            
+            if cloudinary_url:
+                new_user.resume_path = cloudinary_url
+                session.add(new_user)
+                session.commit()
+                session.refresh(new_user)
+            else:
+                logger.error("Cloudinary upload returned None for resume")
         except Exception as e:
-            logger.error(f"Failed to save resume during user creation: {e}")
-            # We don't fail the whole user creation, just log the error
+            logger.error(f"Failed to upload resume to Cloudinary during user creation: {e}")
+            raise HTTPException(status_code=500, detail="Failed to save resume")
     
     # Serialize team for response
     team_data = None
@@ -1966,7 +1969,7 @@ async def create_user(
             email=new_user.email,
             full_name=new_user.full_name,
             role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
-            resume_url=f"/api/resume/{new_user.id}" if new_user.resume_path else None,
+            resume_url=new_user.resume_path if new_user.resume_path else None,
             team=team_data
         ),
         message="User created successfully"
@@ -1985,6 +1988,7 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             email=u.email, 
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
+            resume_filename=u.resume_filename,
             resume_url=f"/api/resume/{u.id}" if u.resume_path else None,
             team=team_data
         ))
@@ -2031,6 +2035,7 @@ async def get_user(
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
+            resume_filename=user.resume_filename,
             resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
             profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
             team=team_data
@@ -2070,7 +2075,7 @@ async def update_user(
         user.password_hash = get_password_hash(password)
         
     if team_id is not None:
-        if team_id != 0: # Use 0 or similar to unset? For now assume valid or None
+        if team_id != 0:
             team = session.get(Team, team_id)
             if not team:
                 raise HTTPException(status_code=404, detail="Team not found")
@@ -2100,21 +2105,18 @@ async def update_user(
         if not resume.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="Only PDF files are supported")
         
-        timestamp = int(time.time())
-        filename = f"user_{user.id}_{timestamp}.pdf"
-        file_path = os.path.join(RESUME_DIR, filename)
-
         try:
-            with open(file_path, "wb") as buffer:
-                shutil.copyfileobj(resume.file, buffer)
-            
-            # Delete old file
-            if user.resume_path and os.path.exists(user.resume_path):
-                os.remove(user.resume_path)
-                
-            user.resume_path = file_path
+            await resume.seek(0)
+            cloudinary_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            print(cloudinary_url)
+
+            if cloudinary_url:
+                user.resume_path = cloudinary_url
+            else:
+                logger.error("Cloudinary upload returned None for resume update")
+                raise HTTPException(status_code=500, detail="Failed to upload resume to Cloudinary")
         except Exception as e:
-            logger.error(f"Failed to update resume: {e}")
+            logger.error(f"Failed to update resume on Cloudinary: {e}")
             raise HTTPException(status_code=500, detail="Failed to save resume")
 
     session.add(user)
@@ -2123,8 +2125,7 @@ async def update_user(
         session.refresh(user)
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to update user {user_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to update user. Please try again.")
+        raise HTTPException(status_code=500, detail=f"Failed to update user: {str(e)}")
     
     # Return updated user details
     created_interviews = session.exec(
@@ -2148,7 +2149,7 @@ async def update_user(
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
-            resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
+            resume_url=user.resume_path if user.resume_path else None,
             profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
             team=team_data
         ),
