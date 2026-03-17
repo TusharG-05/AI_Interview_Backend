@@ -2053,7 +2053,7 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
             resume_url=u.resume_path if u.resume_path else None,
-            profile_image_url=f"/api/candidate/profile-image/{u.id}" if u.profile_image_bytes or u.profile_image else None,
+            profile_image_url=u.profile_image if u.profile_image_bytes or u.profile_image else None,
             team=team_data
         ))
         
@@ -2100,7 +2100,7 @@ async def get_user(
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
             resume_url=user.resume_path if user.resume_path else None,
-            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
+            profile_image_url=user.profile_image if user.profile_image_bytes or user.profile_image else None,
             team=team_data
         ),
         message="User details retrieved successfully"
@@ -2214,7 +2214,7 @@ async def update_user(
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
             resume_url=user.resume_path if user.resume_path else None,
-            profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
+            profile_image_url=user.profile_image if user.profile_image_bytes or user.profile_image else None,
             team=team_data
         ),
         message="User updated successfully"
