@@ -387,8 +387,11 @@ async def get_schedule_time(
     ).first()
     
     if not session:
-        logger.warning(f"Invalid interview token accessed: {token}")
-        raise HTTPException(status_code=404, detail="Invalid interview token")
+        return ApiResponse(
+            status_code=404,
+            data=None,
+            message="Invalid interview token"
+        )
 
     # 1. Setup Time and Message Logic
     now = datetime.now(timezone.utc)
