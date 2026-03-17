@@ -4,7 +4,8 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 import random
-from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions, InterviewStatus
+from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions, InterviewStatus, CandidateStatus
+from ..services.status_manager import record_status_change
 from ..schemas.api_response import ApiResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
@@ -12,6 +13,8 @@ router = APIRouter(prefix="/candidate", tags=["Candidate"])
 from ..schemas.requests import UserUpdate
 from ..schemas.responses import HistoryItem
 from ..auth.dependencies import get_current_user
+from ..core.logger import get_logger
+logger = get_logger(__name__)
 from datetime import datetime
 from ..utils import format_iso_datetime
 
@@ -96,18 +99,35 @@ from fastapi import UploadFile, File
 @router.post("/upload-selfie", response_model=ApiResponse[dict])
 async def upload_selfie(
     file: UploadFile = File(...),
+    interview_id: Optional[int] = None,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    """Allows candidate to upload their reference selfie for face verification."""
+    """
+    Candidate uploads their own selfie for face enrollment and identity verification.
+    Generates face embeddings (ArcFace + SFace) for proctoring during interview.
+    Optionally updates interview status to SELFIE_UPLOADED if interview_id provided.
+    """
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File must be an image")
         
-    # 1. Read bytes
+    # 1. Read bytes for processing
     image_bytes = await file.read()
     
-    # 2. Save to DB (Binary Store)
-    current_user.profile_image_bytes = image_bytes
+    # 2. Update Interview Status if requested
+    if interview_id:
+        statement = select(InterviewSession).where(
+            InterviewSession.id == interview_id,
+            InterviewSession.candidate_id == current_user.id
+        )
+        interview_session = session.exec(statement).first()
+        if interview_session:
+            record_status_change(
+                session=session,
+                interview_session=interview_session,
+                new_status=CandidateStatus.SELFIE_UPLOADED
+            )
+            logger.info(f"Updated status for interview {interview_id} to SELFIE_UPLOADED via candidate API")
     
     # 3. Generate Dual Embeddings (Hybrid Strategy)
     try:
@@ -119,26 +139,22 @@ async def upload_selfie(
 
         embeddings_map = {}
         
-        # Using a temp file is safest for binary bytes.
+        # Using a temp file for processing
         with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
             tmp.write(image_bytes)
             tmp_path = tmp.name
         
         try:
-            # 1. Generate ArcFace (High Accuracy - For Modal)
+            # 1. Generate ArcFace (High Accuracy)
             try:
-                from ..core.logger import get_logger
-                logger = get_logger(__name__)
-                logger.info("Generating ArcFace embedding...")
                 arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
                 if arc_objs:
                     embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
             except Exception as e:
                 logger.warning(f"ArcFace embedding failed: {e}")
 
-            # 2. Generate SFace (Lightweight - For Local Fallback)
+            # 2. Generate SFace (Lightweight)
             try:
-                logger.info("Generating SFace embedding...")
                 sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
                 if sface_objs:
                     embeddings_map["SFace"] = sface_objs[0]["embedding"]
@@ -153,24 +169,9 @@ async def upload_selfie(
                 os.remove(tmp_path)
                 
     except Exception as e:
-        from ..core.logger import get_logger
-        logger = get_logger(__name__)
         logger.error(f"Embedding generation failed: {e}")
-        # We still save the bytes even if embedding fails, but log it
         
-    # 4. Store image URL in database profile_image
-    from ..services.cloudinary_service import CloudinaryService
-    cloudinary_service = CloudinaryService()
-    try:
-        cloudinary_url = cloudinary_service.upload_image(image_bytes, folder="profile_selfies")
-        current_user.profile_image = cloudinary_url
-    except Exception as e:
-        logger.error(f"Cloudinary upload failed: {e}")
-        # Fallback to base64 for now to avoid breaking the app if Cloudinary fails
-        import base64
-        base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-        current_user.profile_image = f"data:{file.content_type};base64,{base64_encoded}"
-
+    # 4. Finalize
     session.add(current_user)
     
     try:
@@ -178,18 +179,17 @@ async def upload_selfie(
         session.refresh(current_user)
     except Exception as e:
         session.rollback()
-        from ..core.logger import get_logger
-        logger = get_logger(__name__)
-        logger.error(f"Failed to save profile image: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save profile image")
+        logger.error(f"Failed to save profile embeddings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save profile embeddings")
     
     return ApiResponse(
         status_code=200,
         data={
             "user_id": current_user.id,
-            "profile_image_url": current_user.profile_image
+            "has_embeddings": current_user.face_embedding is not None,
+            "status_updated": interview_id is not None
         },
-        message="Selfie uploaded and identity verified successfully"
+        message="Selfie identity verified and embeddings generated successfully"
     )
 
 @router.get("/profile-image/{user_id}")

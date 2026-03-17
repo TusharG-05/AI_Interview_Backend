@@ -525,134 +525,71 @@ async def start_session_logic(
 
 @router.post("/upload-selfie", response_model=ApiResponse[dict])
 async def upload_selfie_session(
-    interview_id: int = Form(...),
+    candidate_id: int = Form(...),
     file: UploadFile = File(...),
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Allows candidate to upload their reference selfie via interview session context.
+    Admin uploads candidate's selfie for profile image.
     """
     from ..models.db_models import User
-    import os, json, tempfile
     from ..core.logger import get_logger
     _logger = get_logger(__name__)
     
-    # 1. Verify Session
-    interview_session = session_db.get(InterviewSession, interview_id)
-    if not interview_session:
-        raise HTTPException(status_code=404, detail="Interview session not found")
-        
-    candidate = interview_session.candidate
+    # 1. Get candidate directly
+    candidate = session_db.get(User, candidate_id)
     if not candidate:
-        raise HTTPException(status_code=404, detail="Candidate not found for this session")
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    
+    if candidate.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=400, detail="User must be a candidate")
 
-    # Relaxed content type check: canvas.toBlob can send application/octet-stream in some browsers
+    # 2. Validate image
     if file.content_type and not (file.content_type.startswith("image/") or file.content_type == "application/octet-stream"):
         raise HTTPException(status_code=400, detail=f"File must be an image, got: {file.content_type}")
         
-    # 2. Read bytes
+    # 3. Read bytes
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Received empty file")
     
-    # 3. Save to User object
+    # 4. Save to User object (Backup Storage)
     candidate.profile_image_bytes = image_bytes
     
-    # 4. Generate Embeddings (best effort — never block on failure)
-    try:
-        from deepface import DeepFace
-        import asyncio
-        embeddings_map = {}
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            tmp.write(image_bytes)
-            tmp_path = tmp.name
-        
-        try:
-            # Use asyncio timeout for better Hugging Face compatibility
-            async def generate_embeddings():
-                try:
-                    arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False, detector_backend="skip")
-                    if arc_objs:
-                        embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-                except Exception as e:
-                    _logger.warning(f"ArcFace embedding failed: {e}")
-
-                try:
-                    sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False, detector_backend="skip")
-                    if sface_objs:
-                        embeddings_map["SFace"] = sface_objs[0]["embedding"]
-                except Exception as e:
-                    _logger.warning(f"SFace embedding failed: {e}")
-
-                if embeddings_map:
-                    candidate.face_embedding = json.dumps(embeddings_map)
-            
-            # Run with timeout
-            try:
-                await asyncio.wait_for(generate_embeddings(), timeout=10.0)
-            except asyncio.TimeoutError:
-                _logger.warning("Embedding generation timed out (non-fatal)")
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    except Exception as e:
-        _logger.error(f"Embedding generation failed (non-fatal): {e}")
-
-    # 5. Store image URL in database profile_image
+    # 5. Upload to Cloudinary (Primary Storage for URLs)
     from ..services.cloudinary_service import CloudinaryService
     cloudinary_service = CloudinaryService()
     try:
-        # Add timeout for Cloudinary upload
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(cloudinary_service.upload_image, image_bytes, folder="interview_selfies")
             try:
-                cloudinary_url = future.result(timeout=15)  # 15 second timeout
+                cloudinary_url = future.result(timeout=15)
                 candidate.profile_image = cloudinary_url
             except concurrent.futures.TimeoutError:
-                _logger.warning("Cloudinary upload timed out (non-fatal)")
+                _logger.warning("Cloudinary upload timed out")
                 raise
     except Exception as e:
-        _logger.error(f"Cloudinary upload failed (non-fatal): {e}")
-        # Fallback to base64 if cloudinary fails
-        import base64
-        content_type = file.content_type or "image/jpeg"
-        base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-        candidate.profile_image = f"data:{content_type};base64,{base64_encoded}"
+        _logger.error(f"Cloudinary upload failed: {e}")
+        candidate.profile_image = None
 
     session_db.add(candidate)
-    
-    # 6. Track Status (best effort — don't let enum issues block the upload)
-    try:
-        from ..services.status_manager import record_status_change
-        record_status_change(
-            session=session_db,
-            interview_session=interview_session,
-            new_status=CandidateStatus.SELFIE_UPLOADED
-        )
-    except Exception as e:
-        _logger.warning(f"Status tracking failed (non-fatal): {e}")
-        try:
-            session_db.commit()
-        except Exception:
-            session_db.rollback()
     
     try:
         session_db.commit()
     except Exception as e:
         session_db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save identity data")
+        raise HTTPException(status_code=500, detail="Failed to save selfie to storage")
     
     return ApiResponse(
         status_code=200,
         data={
-            "interview_id": interview_id,
-            "candidate_id": candidate.id,
-            "profile_image_url": candidate.profile_image
+            "candidate_id": candidate_id,
+            "cloudinary_url": candidate.profile_image,
+            "has_backup": candidate.profile_image_bytes is not None
         },
-        message="Selfie uploaded and identity verified successfully"
+        message="Candidate selfie uploaded successfully to Cloudinary"
     )
 
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
