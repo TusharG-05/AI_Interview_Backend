@@ -361,57 +361,53 @@ async def get_schedule_time(
     token: str,
     session_db: Session = Depends(get_session)
 ):
-    """
-    Returns only the scheduled interview time for a given access token.
-    No authentication required. Used for public access to schedule information.
-    Checks for interview status (completed, expired, cancelled) and returns error if not accessible.
-    """
     from ..models.db_models import InterviewStatus
+    
     # Find interview by access token
     session = session_db.exec(
         select(InterviewSession).where(InterviewSession.access_token == token)
     ).first()
     
     if not session:
-        logger.warning(f"Invalid interview token accessed: {token}")
-        raise HTTPException(status_code=404, detail="Invalid interview token")
+        return ApiResponse(
+            status_code=404,
+            data=None,
+            message="Invalid interview token"
+        )
 
-    # 1. Validation Checks
+    # 1. Setup Time Logic
     now = datetime.now(timezone.utc)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
     
     expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
-
-    # Check for Cancelled
-    if session.status == InterviewStatus.CANCELLED:
-        raise HTTPException(status_code=403, detail="This interview has been cancelled.")
-
-    # Check for Completed
-    if session.is_completed or session.status == InterviewStatus.COMPLETED:
-        raise HTTPException(status_code=403, detail="This interview has already been completed.")
-
-    # Check for Expired
-    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
-    if is_expired:
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
-
-    # Check if LIVE (Already attempted/in progress)
-    if session.status == InterviewStatus.LIVE:
-        # Depending on requirements, we might allow viewing schedule time if live, 
-        # but typical requirement is to prevent re-entry if they think they can "reset"
-        # The user said: "check messages for this api too. message should show if the interview on this access token attempted, complete or expired."
-        # If it's LIVE, it means it's "attempted".
-        raise HTTPException(status_code=403, detail="This interview is currently in progress (attempted).")
-
-    # Return only the schedule time in ISO format
-    schedule_time_iso = schedule_time.isoformat()
     
+    # 2. Determine the status message
+    # Default message
+    display_message = "Interview schedule time retrieved successfully."
+
+    # Logic to overwrite message based on state
+    if session.status == InterviewStatus.CANCELLED:
+        display_message = "This interview has been cancelled."
+        
+    elif session.is_completed or session.status == InterviewStatus.COMPLETED:
+        display_message = "This interview has already been completed."
+        
+    elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
+        display_message = "This interview link has expired."
+        
+    elif session.status == InterviewStatus.LIVE:
+        display_message = "This interview is currently in progress (attempted)."
+    
+    elif now < schedule_time:
+        display_message = "This interview is scheduled but has not started yet."
+
+    # 3. Always return the time and the custom message
     return ApiResponse(
         status_code=200,
-        data={"schedule_time": schedule_time_iso},
-        message="Interview schedule time retrieved successfully"
+        data={"schedule_time": schedule_time.isoformat()},
+        message=display_message
     )
     
 @router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])
