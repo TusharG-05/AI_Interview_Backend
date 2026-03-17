@@ -9,7 +9,7 @@ from main import app
 
 client = TestClient(app)
 
-def test_allow_question_navigate_in_access_api(client, session, test_users, auth_headers):
+def test_allow_question_navigate_in_access_api(client, session, test_users):
     """
     Verify that allow_question_navigate is present in the access/{token} response.
     """
@@ -29,7 +29,7 @@ def test_allow_question_navigate_in_access_api(client, session, test_users, auth
     session.commit()
     
     # Get access
-    response = client.get(f"/api/interview/access/{token}", headers=auth_headers)
+    response = client.get(f"/api/interview/access/{token}")
     assert response.status_code == 200
     data = response.json()["data"]
     
@@ -49,7 +49,7 @@ def test_allow_question_navigate_in_access_api(client, session, test_users, auth
     session.add(interview_false)
     session.commit()
 
-    response = client.get(f"/api/interview/access/{token_false}", headers=auth_headers)
+    response = client.get(f"/api/interview/access/{token_false}")
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["allow_question_navigate"] is False
