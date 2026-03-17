@@ -21,6 +21,8 @@ from ..schemas.interview_responses import (
     AnswersData,
     QuestionData,
     CodingAnswersData,
+    PaperNested,
+    CodingPaperNested,
     QuestionPaperData,
 )
 from ..schemas.user_schemas import serialize_user
@@ -72,24 +74,28 @@ def _evaluate_and_update_score(
         # 2. Load question to get response_type and title
         resp_type = "text"
         q_title = question_text
+        q_marks = 10.0
         
         if getattr(answer, 'question_id', None):
             question_obj = db.get(Questions, answer.question_id)
             if question_obj:
                 resp_type = (question_obj.response_type.value if hasattr(question_obj.response_type, 'value') else str(question_obj.response_type)) if question_obj.response_type else "text"
                 q_title = question_obj.question_text or question_obj.content or question_text
+                q_marks = float(question_obj.marks or 10.0)
         elif getattr(answer, 'coding_question_id', None):
             question_obj = db.get(CodingQuestions, answer.coding_question_id)
             if question_obj:
                 resp_type = "code"
                 q_title = question_obj.title or question_text
+                q_marks = float(question_obj.marks or 10.0)
 
         # 3. Call LLM evaluation (routes to code evaluator if response_type='code')
-        logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type})...")
+        logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type}, marks={q_marks})...")
         evaluation = interview_service.evaluate_answer_content(
             question_text, text_to_evaluate,
             response_type=resp_type,
             question_title=q_title,
+            question_marks=q_marks,
         )
 
         answer.feedback = evaluation.get("feedback", "")
@@ -345,7 +351,9 @@ async def access_interview(
         suspended_at=session.suspended_at,
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
-        allow_copy_paste=session.allow_copy_paste,
+        tab_warning_active=session.tab_warning_active or False,
+        allow_copy_paste=session.allow_copy_paste or False,
+        allow_question_navigate=session.allow_question_navigate or False,
         result_status="PENDING" # Default for access endpoint as per original schema
     )
 
@@ -361,11 +369,21 @@ async def get_schedule_time(
     token: str,
     session_db: Session = Depends(get_session)
 ):
-    from ..models.db_models import InterviewStatus
-    
-    # Find interview by access token
+    """
+    No authentication required. Used for public access to schedule information.
+    Checks for interview status (completed, expired, cancelled) and returns error if not accessible.
+    """
+    from ..models.db_models import InterviewStatus, QuestionPaper, CodingQuestionPaper
+    from sqlalchemy.orm import selectinload
+
+    # Find interview by access token with preloaded papers
     session = session_db.exec(
-        select(InterviewSession).where(InterviewSession.access_token == token)
+        select(InterviewSession)
+        .options(
+            selectinload(InterviewSession.paper),
+            selectinload(InterviewSession.coding_paper)
+        )
+        .where(InterviewSession.access_token == token)
     ).first()
     
     if not session:
@@ -375,38 +393,54 @@ async def get_schedule_time(
             message="Invalid interview token"
         )
 
-    # 1. Setup Time Logic
+    # 1. Setup Time and Message Logic
     now = datetime.now(timezone.utc)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
     
     expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
-    
-    # 2. Determine the status message
-    # Default message
+
+    # Determine display message
     display_message = "Interview schedule time retrieved successfully."
 
-    # Logic to overwrite message based on state
     if session.status == InterviewStatus.CANCELLED:
         display_message = "This interview has been cancelled."
-        
     elif session.is_completed or session.status == InterviewStatus.COMPLETED:
         display_message = "This interview has already been completed."
-        
     elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
         display_message = "This interview link has expired."
-        
     elif session.status == InterviewStatus.LIVE:
         display_message = "This interview is currently in progress (attempted)."
-    
     elif now < schedule_time:
         display_message = "This interview is scheduled but has not started yet."
 
-    # 3. Always return the time and the custom message
+    # 2. Prepare metadata for return (Always return details even if status is not 'scheduled')
+    schedule_time_iso = schedule_time.isoformat()
+    
+    paper_data = None
+    if session.paper:
+        p_dict = session.paper.model_dump()
+        p_dict['questions'] = []
+        p_dict['admin_user'] = None
+        paper_data = PaperNested.model_validate(p_dict).model_dump()
+
+    coding_paper_data = None
+    if session.coding_paper:
+        cp_dict = session.coding_paper.model_dump()
+        cp_dict['coding_questions'] = []
+        cp_dict['admin_user'] = None
+        coding_paper_data = CodingPaperNested.model_validate(cp_dict).model_dump()
+
     return ApiResponse(
         status_code=200,
-        data={"schedule_time": schedule_time.isoformat()},
+        data={
+            "schedule_time": schedule_time_iso,
+            "duration_minutes": session.duration_minutes,
+            "max_questions": session.max_questions,
+            "paper": paper_data,
+            "coding_paper": coding_paper_data,
+        },
         message=display_message
     )
     
@@ -494,134 +528,71 @@ async def start_session_logic(
 
 @router.post("/upload-selfie", response_model=ApiResponse[dict])
 async def upload_selfie_session(
-    interview_id: int = Form(...),
+    candidate_id: int = Form(...),
     file: UploadFile = File(...),
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Allows candidate to upload their reference selfie via interview session context.
+    Admin uploads candidate's selfie for profile image.
     """
     from ..models.db_models import User
-    import os, json, tempfile
     from ..core.logger import get_logger
     _logger = get_logger(__name__)
     
-    # 1. Verify Session
-    interview_session = session_db.get(InterviewSession, interview_id)
-    if not interview_session:
-        raise HTTPException(status_code=404, detail="Interview session not found")
-        
-    candidate = interview_session.candidate
+    # 1. Get candidate directly
+    candidate = session_db.get(User, candidate_id)
     if not candidate:
-        raise HTTPException(status_code=404, detail="Candidate not found for this session")
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    
+    if candidate.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=400, detail="User must be a candidate")
 
-    # Relaxed content type check: canvas.toBlob can send application/octet-stream in some browsers
+    # 2. Validate image
     if file.content_type and not (file.content_type.startswith("image/") or file.content_type == "application/octet-stream"):
         raise HTTPException(status_code=400, detail=f"File must be an image, got: {file.content_type}")
         
-    # 2. Read bytes
+    # 3. Read bytes
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Received empty file")
     
-    # 3. Save to User object
+    # 4. Save to User object (Backup Storage)
     candidate.profile_image_bytes = image_bytes
     
-    # 4. Generate Embeddings (best effort — never block on failure)
-    try:
-        from deepface import DeepFace
-        import asyncio
-        embeddings_map = {}
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            tmp.write(image_bytes)
-            tmp_path = tmp.name
-        
-        try:
-            # Use asyncio timeout for better Hugging Face compatibility
-            async def generate_embeddings():
-                try:
-                    arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False, detector_backend="skip")
-                    if arc_objs:
-                        embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-                except Exception as e:
-                    _logger.warning(f"ArcFace embedding failed: {e}")
-
-                try:
-                    sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False, detector_backend="skip")
-                    if sface_objs:
-                        embeddings_map["SFace"] = sface_objs[0]["embedding"]
-                except Exception as e:
-                    _logger.warning(f"SFace embedding failed: {e}")
-
-                if embeddings_map:
-                    candidate.face_embedding = json.dumps(embeddings_map)
-            
-            # Run with timeout
-            try:
-                await asyncio.wait_for(generate_embeddings(), timeout=10.0)
-            except asyncio.TimeoutError:
-                _logger.warning("Embedding generation timed out (non-fatal)")
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-    except Exception as e:
-        _logger.error(f"Embedding generation failed (non-fatal): {e}")
-
-    # 5. Store image URL in database profile_image
+    # 5. Upload to Cloudinary (Primary Storage for URLs)
     from ..services.cloudinary_service import CloudinaryService
     cloudinary_service = CloudinaryService()
     try:
-        # Add timeout for Cloudinary upload
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(cloudinary_service.upload_image, image_bytes, folder="interview_selfies")
             try:
-                cloudinary_url = future.result(timeout=15)  # 15 second timeout
+                cloudinary_url = future.result(timeout=15)
                 candidate.profile_image = cloudinary_url
             except concurrent.futures.TimeoutError:
-                _logger.warning("Cloudinary upload timed out (non-fatal)")
+                _logger.warning("Cloudinary upload timed out")
                 raise
     except Exception as e:
-        _logger.error(f"Cloudinary upload failed (non-fatal): {e}")
-        # Fallback to base64 if cloudinary fails
-        import base64
-        content_type = file.content_type or "image/jpeg"
-        base64_encoded = base64.b64encode(image_bytes).decode('utf-8')
-        candidate.profile_image = f"data:{content_type};base64,{base64_encoded}"
+        _logger.error(f"Cloudinary upload failed: {e}")
+        candidate.profile_image = None
 
     session_db.add(candidate)
-    
-    # 6. Track Status (best effort — don't let enum issues block the upload)
-    try:
-        from ..services.status_manager import record_status_change
-        record_status_change(
-            session=session_db,
-            interview_session=interview_session,
-            new_status=CandidateStatus.SELFIE_UPLOADED
-        )
-    except Exception as e:
-        _logger.warning(f"Status tracking failed (non-fatal): {e}")
-        try:
-            session_db.commit()
-        except Exception:
-            session_db.rollback()
     
     try:
         session_db.commit()
     except Exception as e:
         session_db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save identity data")
+        raise HTTPException(status_code=500, detail="Failed to save selfie to storage")
     
     return ApiResponse(
         status_code=200,
         data={
-            "interview_id": interview_id,
-            "candidate_id": candidate.id,
-            "profile_image_url": candidate.profile_image
+            "candidate_id": candidate_id,
+            "cloudinary_url": candidate.profile_image,
+            "has_backup": candidate.profile_image_bytes is not None
         },
-        message="Selfie uploaded and identity verified successfully"
+        message="Candidate selfie uploaded successfully to Cloudinary"
     )
 
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
@@ -1088,14 +1059,20 @@ async def submit_answer_code(
             id=answer.id,
             interview_result_id=answer.interview_result_id,
             coding_question=CodingQuestionBasic(
-                id=question.id, paper_id=question.paper_id, title=question.title,
-                problem_statement=question.problem_statement, examples=question.examples,
-                constraints=question.constraints, starter_code=question.starter_code or "",
-                topic=question.topic, difficulty=question.difficulty, marks=question.marks
+                id=question.id,
+                paper_id=question.paper_id,
+                title=question.title or "",
+                problem_statement=question.problem_statement or "",
+                examples=question.examples,
+                constraints=question.constraints,
+                starter_code=question.starter_code or "",
+                topic=question.topic or "Algorithms",
+                difficulty=question.difficulty or "Medium",
+                marks=question.marks or 0,
             ),
             candidate_answer=answer.candidate_answer,
-            feedback=answer.feedback,
-            score=answer.score,
+            feedback=answer.feedback or "",
+            score=answer.score if answer.score is not None else 0.0,
             audio_path=answer.audio_path or "",
             transcribed_text=answer.transcribed_text or "",
             timestamp=answer.timestamp

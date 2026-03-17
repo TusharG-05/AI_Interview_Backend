@@ -95,6 +95,8 @@ class InterviewAccessResponse(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool
     tab_warning_active: bool = False
+    allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
     result_status: Optional[str] = "PENDING"
 
 # --- End New Schemas ---
@@ -146,13 +148,43 @@ class AnswersData(BaseModel):
     transcribed_text: Optional[str] = None
     timestamp: datetime
 
+class CodingQuestionBasic(BaseModel):
+    id: int
+    paper_id: int
+    title: str
+    problem_statement: str
+    examples: List[dict] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+    topic: str
+    difficulty: str
+    marks: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_json_fields(cls, data: Any) -> Any:
+        """Parse JSON-encoded examples and constraints strings into Python lists."""
+        if isinstance(data, dict):
+            # Already a dict, handle potential string fields within it
+            data = dict(data)
+            for field in ("examples", "constraints"):
+                raw = data.get(field)
+                if isinstance(raw, str):
+                    try:
+                        data[field] = _json.loads(raw)
+                    except (_json.JSONDecodeError, TypeError):
+                        data[field] = []
+        return data
+
 class CodingAnswersData(BaseModel):
     id: int
     interview_result_id: int
-    coding_question: CodingQuestionNested
+    coding_question: CodingQuestionBasic
     candidate_answer: str
     feedback: str
     score: float
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
     timestamp: datetime
 
 class AnswersDataAdmin(BaseModel):
@@ -196,44 +228,9 @@ class InterviewSessionData(BaseModel):
     tab_warning_active: bool = False
     result_status: Optional[str] = "PENDING"
 
-class CodingQuestionBasic(BaseModel):
-    id: int
-    paper_id: int
-    title: str
-    problem_statement: str
-    examples: List[dict] = []
-    constraints: List[str] = []
-    starter_code: Optional[str] = None
-    topic: str
-    difficulty: str
-    marks: int
+# End of schemas
 
-    @model_validator(mode="before")
-    @classmethod
-    def parse_json_fields(cls, data: Any) -> Any:
-        """Parse JSON-encoded examples and constraints strings into Python lists."""
-        if isinstance(data, dict):
-            # Already a dict, handle potential string fields within it
-            data = dict(data)
-            for field in ("examples", "constraints"):
-                raw = data.get(field)
-                if isinstance(raw, str):
-                    try:
-                        data[field] = _json.loads(raw)
-                    except (_json.JSONDecodeError, TypeError):
-                        data[field] = []
-        return data
-
-class CodingAnswersData(BaseModel):
-    id: int
-    interview_result_id: int
-    coding_question: CodingQuestionBasic
-    candidate_answer: str
-    feedback: str
-    score: float
-    audio_path: Optional[str] = None
-    transcribed_text: Optional[str] = None
-    timestamp: datetime
+# End of schemas
 
 class AdminResultData(BaseModel):
     id: int
