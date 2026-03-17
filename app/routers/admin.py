@@ -44,7 +44,6 @@ import uuid
 import secrets
 from datetime import datetime, timedelta, timezone
 import time
-from .resume import RESUME_DIR
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 nlp_service = NLPService()
@@ -1988,7 +1987,6 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             email=u.email, 
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
-            resume_filename=u.resume_filename,
             resume_url=f"/api/resume/{u.id}" if u.resume_path else None,
             team=team_data
         ))
@@ -2035,7 +2033,6 @@ async def get_user(
             has_face_embedding=user.face_embedding is not None,
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
-            resume_filename=user.resume_filename,
             resume_url=f"/api/resume/{user.id}" if user.resume_path else None,
             profile_image_url=f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
             team=team_data

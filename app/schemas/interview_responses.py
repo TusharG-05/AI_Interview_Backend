@@ -95,6 +95,8 @@ class InterviewAccessResponse(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool
     tab_warning_active: bool = False
+    allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
     result_status: Optional[str] = "PENDING"
 
 # --- End New Schemas ---

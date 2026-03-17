@@ -21,6 +21,8 @@ from ..schemas.interview_responses import (
     AnswersData,
     QuestionData,
     CodingAnswersData,
+    PaperNested,
+    CodingPaperNested,
     QuestionPaperData,
 )
 from ..schemas.user_schemas import serialize_user
@@ -72,24 +74,28 @@ def _evaluate_and_update_score(
         # 2. Load question to get response_type and title
         resp_type = "text"
         q_title = question_text
+        q_marks = 10.0
         
         if getattr(answer, 'question_id', None):
             question_obj = db.get(Questions, answer.question_id)
             if question_obj:
                 resp_type = (question_obj.response_type.value if hasattr(question_obj.response_type, 'value') else str(question_obj.response_type)) if question_obj.response_type else "text"
                 q_title = question_obj.question_text or question_obj.content or question_text
+                q_marks = float(question_obj.marks or 10.0)
         elif getattr(answer, 'coding_question_id', None):
             question_obj = db.get(CodingQuestions, answer.coding_question_id)
             if question_obj:
                 resp_type = "code"
                 q_title = question_obj.title or question_text
+                q_marks = float(question_obj.marks or 10.0)
 
         # 3. Call LLM evaluation (routes to code evaluator if response_type='code')
-        logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type})...")
+        logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type}, marks={q_marks})...")
         evaluation = interview_service.evaluate_answer_content(
             question_text, text_to_evaluate,
             response_type=resp_type,
             question_title=q_title,
+            question_marks=q_marks,
         )
 
         answer.feedback = evaluation.get("feedback", "")
@@ -345,7 +351,9 @@ async def access_interview(
         suspended_at=session.suspended_at,
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
-        allow_copy_paste=session.allow_copy_paste,
+        tab_warning_active=session.tab_warning_active or False,
+        allow_copy_paste=session.allow_copy_paste or False,
+        allow_question_navigate=session.allow_question_navigate or False,
         result_status="PENDING" # Default for access endpoint as per original schema
     )
 
@@ -362,21 +370,27 @@ async def get_schedule_time(
     session_db: Session = Depends(get_session)
 ):
     """
-    Returns only the scheduled interview time for a given access token.
     No authentication required. Used for public access to schedule information.
     Checks for interview status (completed, expired, cancelled) and returns error if not accessible.
     """
-    from ..models.db_models import InterviewStatus
-    # Find interview by access token
+    from ..models.db_models import InterviewStatus, QuestionPaper, CodingQuestionPaper
+    from sqlalchemy.orm import selectinload
+
+    # Find interview by access token with preloaded papers
     session = session_db.exec(
-        select(InterviewSession).where(InterviewSession.access_token == token)
+        select(InterviewSession)
+        .options(
+            selectinload(InterviewSession.paper),
+            selectinload(InterviewSession.coding_paper)
+        )
+        .where(InterviewSession.access_token == token)
     ).first()
     
     if not session:
         logger.warning(f"Invalid interview token accessed: {token}")
         raise HTTPException(status_code=404, detail="Invalid interview token")
 
-    # 1. Validation Checks
+    # 1. Setup Time and Message Logic
     now = datetime.now(timezone.utc)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
@@ -384,34 +398,47 @@ async def get_schedule_time(
     
     expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
 
-    # Check for Cancelled
+    # Determine display message
+    display_message = "Interview schedule time retrieved successfully."
+
     if session.status == InterviewStatus.CANCELLED:
-        raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+        display_message = "This interview has been cancelled."
+    elif session.is_completed or session.status == InterviewStatus.COMPLETED:
+        display_message = "This interview has already been completed."
+    elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
+        display_message = "This interview link has expired."
+    elif session.status == InterviewStatus.LIVE:
+        display_message = "This interview is currently in progress (attempted)."
+    elif now < schedule_time:
+        display_message = "This interview is scheduled but has not started yet."
 
-    # Check for Completed
-    if session.is_completed or session.status == InterviewStatus.COMPLETED:
-        raise HTTPException(status_code=403, detail="This interview has already been completed.")
-
-    # Check for Expired
-    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
-    if is_expired:
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
-
-    # Check if LIVE (Already attempted/in progress)
-    if session.status == InterviewStatus.LIVE:
-        # Depending on requirements, we might allow viewing schedule time if live, 
-        # but typical requirement is to prevent re-entry if they think they can "reset"
-        # The user said: "check messages for this api too. message should show if the interview on this access token attempted, complete or expired."
-        # If it's LIVE, it means it's "attempted".
-        raise HTTPException(status_code=403, detail="This interview is currently in progress (attempted).")
-
-    # Return only the schedule time in ISO format
+    # 2. Prepare metadata for return (Always return details even if status is not 'scheduled')
     schedule_time_iso = schedule_time.isoformat()
     
+    paper_data = None
+    if session.paper:
+        p_dict = session.paper.model_dump()
+        p_dict['questions'] = []
+        p_dict['admin_user'] = None
+        paper_data = PaperNested.model_validate(p_dict).model_dump()
+
+    coding_paper_data = None
+    if session.coding_paper:
+        cp_dict = session.coding_paper.model_dump()
+        cp_dict['coding_questions'] = []
+        cp_dict['admin_user'] = None
+        coding_paper_data = CodingPaperNested.model_validate(cp_dict).model_dump()
+
     return ApiResponse(
         status_code=200,
-        data={"schedule_time": schedule_time_iso},
-        message="Interview schedule time retrieved successfully"
+        data={
+            "schedule_time": schedule_time_iso,
+            "duration_minutes": session.duration_minutes,
+            "max_questions": session.max_questions,
+            "paper": paper_data,
+            "coding_paper": coding_paper_data,
+        },
+        message=display_message
     )
     
 @router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])

@@ -212,8 +212,9 @@ class InterviewSession(SQLModel, table=True):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = Field(default=False)
 
-    # Copy-Paste Control
+    # Control Flags
     allow_copy_paste: bool = Field(default=False)
+    allow_question_navigate: bool = Field(default=False)
 
     # Tab-Switch Monitoring
     tab_switch_count: int = Field(default=0)
