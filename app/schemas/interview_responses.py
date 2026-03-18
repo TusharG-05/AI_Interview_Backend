@@ -223,6 +223,7 @@ class InterviewSessionData(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool
     allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
     tab_switch_count: int = 0
     tab_switch_timestamp: Optional[datetime] = None
     tab_warning_active: bool = False

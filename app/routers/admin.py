@@ -723,7 +723,8 @@ async def schedule_interview(
         max_warnings=3,
         is_suspended=False,
         is_completed=False,
-        allow_copy_paste=schedule_data.allow_copy_paste
+        allow_copy_paste=schedule_data.allow_copy_paste,
+        allow_question_navigate=schedule_data.allow_question_navigate
     )
     
     session.add(new_session)
@@ -831,6 +832,7 @@ async def schedule_interview(
         enrollment_audio_path=new_session.enrollment_audio_path,
         is_completed=new_session.is_completed or False,
         allow_copy_paste=new_session.allow_copy_paste,
+        allow_question_navigate=new_session.allow_question_navigate,
         team_id=candidate.team_id
     )
 
@@ -879,6 +881,7 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             scheduled_at=format_iso_datetime(s.schedule_time),
             score=s.total_score,
             allow_copy_paste=s.allow_copy_paste or False,
+            allow_question_navigate=s.allow_question_navigate or False,
             interview_round=s.interview_round.value if s.interview_round else None,
             team_id=s.candidate.team_id if s.candidate else None
         ))
@@ -953,6 +956,7 @@ async def get_live_status_dashboard(
             "enrollment_audio_path": interview_session.enrollment_audio_path,
             "is_completed": interview_session.is_completed or False,
             "allow_copy_paste": interview_session.allow_copy_paste,
+            "allow_question_navigate": interview_session.allow_question_navigate,
             "interview_round": interview_session.interview_round.value if interview_session.interview_round else None
         }
         
@@ -1114,6 +1118,7 @@ async def get_interview(
             enrollment_audio_path=getattr(interview_session, "enrollment_audio_path", None),
             is_completed=getattr(interview_session, "is_completed", False) or False,
             allow_copy_paste=getattr(interview_session, "allow_copy_paste", False),
+            allow_question_navigate=getattr(interview_session, "allow_question_navigate", False),
             response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
             proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
             enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None,
@@ -1264,7 +1269,8 @@ async def update_interview(
         response_count=len(interview_session.result.answers) if interview_session.result else 0,
         proctoring_event_count=len(interview_session.proctoring_events),
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None,
-        allow_copy_paste=interview_session.allow_copy_paste
+        allow_copy_paste=interview_session.allow_copy_paste,
+        allow_question_navigate=interview_session.allow_question_navigate
     )
     return ApiResponse(
         status_code=200,
@@ -1456,6 +1462,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             suspended_at=s.suspended_at,
             enrollment_audio_path=f"/api/admin/interviews/enrollment-audio/{s.id}" if s.enrollment_audio_path else None,
             allow_copy_paste=s.allow_copy_paste or False,
+            allow_question_navigate=s.allow_question_navigate or False,
             is_completed=s.is_completed or False,
             result_status=s.result.result_status if s.result else "PENDING"
         )
@@ -1576,6 +1583,7 @@ async def get_result(
         enrollment_audio_path=s.enrollment_audio_path,
         is_completed=s.is_completed or False,
         allow_copy_paste=s.allow_copy_paste or False,
+        allow_question_navigate=s.allow_question_navigate or False,
         result_status=s.result.result_status if s.result else "PENDING"
     )
     

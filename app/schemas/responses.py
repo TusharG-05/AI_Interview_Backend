@@ -162,6 +162,7 @@ class SessionRead(BaseModel):
     scheduled_at: str
     score: Optional[float] = None
     allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
     interview_round: Optional[str] = None
     team_id: Optional[int] = None
 class UserRead(BaseModel):
@@ -214,6 +215,7 @@ class InterviewSessionDetail(BaseModel):
     last_activity: Optional[str] = None
     warning_count: int
     allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
     max_warnings: int
     is_suspended: bool
     suspension_reason: Optional[str] = None
@@ -249,6 +251,7 @@ class InterviewDetailRead(BaseModel):
     proctoring_event_count: int
     enrollment_audio_url: Optional[str] = None
     allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
 
 class QuestionPaperExpanded(BaseModel):
     id: int = 0
@@ -306,6 +309,7 @@ class InterviewSessionExpanded(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
     response_count: int = 0
     proctoring_event_count: int = 0
     enrollment_audio_url: Optional[str] = None

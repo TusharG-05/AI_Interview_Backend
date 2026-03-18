@@ -438,6 +438,7 @@ async def get_schedule_time(
             "schedule_time": schedule_time_iso,
             "duration_minutes": session.duration_minutes,
             "max_questions": session.max_questions,
+            "allow_question_navigate": session.allow_question_navigate,
             "paper": paper_data,
             "coding_paper": coding_paper_data,
         },
