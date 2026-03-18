@@ -33,6 +33,7 @@ class InterviewSessionNested(BaseModel):
     suspension_reason: Optional[str] = None
     suspended_at: Optional[datetime] = None
     enrollment_audio_path: Optional[str] = None
+    allow_question_navigate: bool = False
     is_completed: bool = False
 
 class AnswersNested(BaseModel):

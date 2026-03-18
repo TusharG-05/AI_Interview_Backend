@@ -30,6 +30,7 @@ class InterviewScheduleCreate(BaseModel):
     duration_minutes: int = 1440
     max_questions: Optional[int] = None  # Limit questions, None = use all
     allow_copy_paste: bool = False  # Whether candidate can copy/paste during interview
+    allow_question_navigate: bool = False  # Whether candidate can navigate between questions
     team_id: Optional[int] = None
 
     @model_validator(mode="after")
@@ -58,6 +59,7 @@ class InterviewUpdate(BaseModel):
     paper_id: Optional[int] = None  # Allow changing question paper
     max_questions: Optional[int] = None  # Update question limit
     allow_copy_paste: Optional[bool] = None  # Update copy/paste permission
+    allow_question_navigate: Optional[bool] = None  # Update navigation permission
 
 class ResponseUpdate(BaseModel):
     """Update individual response within a result"""
