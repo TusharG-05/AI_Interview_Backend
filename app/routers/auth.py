@@ -35,7 +35,7 @@ def set_auth_cookie(response: Response, token: str):
         secure=(ENV == "production")  # Only secure in production (HTTPS)
     )
 
-@router.post("/login", response_model=ApiResponse[Token])
+@router.post("/login", response_model=ApiResponse[dict])
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
     user = session.exec(select(User).where(User.email == login_data.email.lower())).first()
@@ -75,19 +75,17 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
     )
     
     set_auth_cookie(response, token)
-    expire_time = datetime.now(timezone.utc) + access_token_expires
     
     from .teams import _serialize_team_basic
     team_data = _serialize_team_basic(user.team, session) if user.team else None
 
     token_data = {
         "access_token": token, 
-        "token_type": "bearer",
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
         "role": str(user.role.value) if hasattr(user.role, "value") else str(user.role),
-        "expires_at": expire_time.isoformat(),
+        "profile_image_url" : user.profile_image,
         "team": team_data
     }
     

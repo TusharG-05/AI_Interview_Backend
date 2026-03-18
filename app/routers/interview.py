@@ -1407,7 +1407,7 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
 
 
 
-@router.post("/{interview_id}/tab-switch", response_model=ApiResponse[InterviewSessionData])
+@router.post("/{interview_id}/tab-switch", response_model=ApiResponse[dict])
 async def log_tab_switch(
     interview_id: int,
     request: TabSwitchRequest,
@@ -1533,78 +1533,83 @@ async def log_tab_switch(
     session_db.refresh(session_obj)
 
     # Build InterviewSessionData for consistent response
-    candidate_data = None
-    if session_obj.candidate:
-        candidate_data = UserNested(
-            id=session_obj.candidate.id,
-            email=session_obj.candidate.email,
-            full_name=session_obj.candidate.full_name,
-            role=session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else str(session_obj.candidate.role),
-            access_token=session_obj.candidate.access_token
-        )
+    # candidate_data = None
+    # if session_obj.candidate:
+    #     candidate_data = UserNested(
+    #         id=session_obj.candidate.id,
+    #         email=session_obj.candidate.email,
+    #         full_name=session_obj.candidate.full_name,
+    #         role=session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else str(session_obj.candidate.role),
+    #         access_token=session_obj.candidate.access_token
+    #     )
 
-    admin_data = None
-    if session_obj.admin:
-        admin_data = UserNested(
-            id=session_obj.admin.id,
-            email=session_obj.admin.email,
-            full_name=session_obj.admin.full_name,
-            role=session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else str(session_obj.admin.role),
-            access_token=session_obj.admin.access_token
-        )
+    # admin_data = None
+    # if session_obj.admin:
+    #     admin_data = UserNested(
+    #         id=session_obj.admin.id,
+    #         email=session_obj.admin.email,
+    #         full_name=session_obj.admin.full_name,
+    #         role=session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else str(session_obj.admin.role),
+    #         access_token=session_obj.admin.access_token
+    #     )
 
-    paper_data = None
-    if session_obj.paper:
-        paper_questions = []
-        if hasattr(session_obj.paper, 'questions') and session_obj.paper.questions:
-            for q in session_obj.paper.questions:
-                paper_questions.append(QuestionData(
-                    id=q.id, paper_id=q.paper_id, content=q.content or "", question_text=q.question_text or "",
-                    topic=q.topic or "", difficulty=q.difficulty.value if hasattr(q.difficulty, 'value') else str(q.difficulty),
-                    marks=q.marks, response_type=q.response_type.value if hasattr(q.response_type, 'value') else str(q.response_type)
-                ))
-        paper_data = QuestionPaperData(
-            id=session_obj.paper.id,
-            name=session_obj.paper.name,
-            description=session_obj.paper.description or "",
-            admin_user=admin_data if admin_data else None,
-            question_count=len(paper_questions),
-            questions=paper_questions,
-            total_marks=session_obj.paper.total_marks,
-            created_at=session_obj.paper.created_at or datetime.now(timezone.utc)
-        )
+    # paper_data = None
+    # if session_obj.paper:
+    #     paper_questions = []
+    #     if hasattr(session_obj.paper, 'questions') and session_obj.paper.questions:
+    #         for q in session_obj.paper.questions:
+    #             paper_questions.append(QuestionData(
+    #                 id=q.id, paper_id=q.paper_id, content=q.content or "", question_text=q.question_text or "",
+    #                 topic=q.topic or "", difficulty=q.difficulty.value if hasattr(q.difficulty, 'value') else str(q.difficulty),
+    #                 marks=q.marks, response_type=q.response_type.value if hasattr(q.response_type, 'value') else str(q.response_type)
+    #             ))
+    #     paper_data = QuestionPaperData(
+    #         id=session_obj.paper.id,
+    #         name=session_obj.paper.name,
+    #         description=session_obj.paper.description or "",
+    #         admin_user=admin_data if admin_data else None,
+    #         question_count=len(paper_questions),
+    #         questions=paper_questions,
+    #         total_marks=session_obj.paper.total_marks,
+    #         created_at=session_obj.paper.created_at or datetime.now(timezone.utc)
+    #     )
 
-    result_data = InterviewSessionData(
-        id=session_obj.id,
-        access_token=session_obj.access_token,
-        admin_user=serialize_user(session_obj.admin) if session_obj.admin else None,  # ← Always UserNested
-        candidate_user=candidate_data,
-        paper=paper_data,
-        schedule_time=session_obj.schedule_time,
-        duration_minutes=session_obj.duration_minutes,
-        max_questions=session_obj.max_questions,
-        start_time=session_obj.start_time,
-        end_time=session_obj.end_time,
-        status=session_obj.status.value if hasattr(session_obj.status, 'value') else str(session_obj.status),
-        total_score=session_obj.total_score,
-        current_status=session_obj.current_status.value if hasattr(session_obj.current_status, 'value') else str(session_obj.current_status),
-        last_activity=session_obj.last_activity or datetime.now(timezone.utc),
-        warning_count=session_obj.warning_count or 0,
-        max_warnings=session_obj.max_warnings or 3,
-        is_suspended=session_obj.is_suspended or False,
-        suspension_reason=session_obj.suspension_reason,
-        suspended_at=session_obj.suspended_at,
-        enrollment_audio_path=session_obj.enrollment_audio_path,
-        is_completed=session_obj.is_completed or False,
-        allow_copy_paste=session_obj.allow_copy_paste,
-        tab_switch_count=session_obj.tab_switch_count,
-        tab_switch_timestamp=session_obj.tab_switch_timestamp,
-        tab_warning_active=session_obj.tab_warning_active
-    )
+    # result_data = InterviewSessionData(
+    #     id=session_obj.id,
+    #     access_token=session_obj.access_token,
+    #     admin_user=serialize_user(session_obj.admin) if session_obj.admin else None,  # ← Always UserNested
+    #     candidate_user=candidate_data,
+    #     paper=paper_data,
+    #     schedule_time=session_obj.schedule_time,
+    #     duration_minutes=session_obj.duration_minutes,
+    #     max_questions=session_obj.max_questions,
+    #     start_time=session_obj.start_time,
+    #     end_time=session_obj.end_time,
+    #     status=session_obj.status.value if hasattr(session_obj.status, 'value') else str(session_obj.status),
+    #     total_score=session_obj.total_score,
+    #     current_status=session_obj.current_status.value if hasattr(session_obj.current_status, 'value') else str(session_obj.current_status),
+    #     last_activity=session_obj.last_activity or datetime.now(timezone.utc),
+    #     warning_count=session_obj.warning_count or 0,
+    #     max_warnings=session_obj.max_warnings or 3,
+    #     is_suspended=session_obj.is_suspended or False,
+    #     suspension_reason=session_obj.suspension_reason,
+    #     suspended_at=session_obj.suspended_at,
+    #     enrollment_audio_path=session_obj.enrollment_audio_path,
+    #     is_completed=session_obj.is_completed or False,
+    #     allow_copy_paste=session_obj.allow_copy_paste,
+    #     tab_switch_count=session_obj.tab_switch_count,
+    #     tab_switch_timestamp=session_obj.tab_switch_timestamp,
+    #     tab_warning_active=session_obj.tab_warning_active
+    # )
 
     return ApiResponse(
         status_code=200 if not session_obj.is_suspended else 403,
-        data=result_data,
+        data={
+            "tab_switch_count": session_obj.tab_switch_count,
+            "tab_warning_active": session_obj.tab_warning_active,
+            "is_suspended": session_obj.is_suspended,
+            "reason": session_obj.suspension_reason
+        },
         message=return_msg
     )
 
