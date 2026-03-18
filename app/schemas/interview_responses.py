@@ -148,6 +148,41 @@ class AnswersData(BaseModel):
     transcribed_text: Optional[str] = None
     timestamp: datetime
 
+class AnswerShort(BaseModel):
+    id: int
+    interview_result_id: int
+    candidate_answer: str
+    feedback: str
+    score: float
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
+    timestamp: datetime
+
+class QuestionWithAnswer(BaseModel):
+    id: int
+    paper_id: Optional[int] = None
+    content: str
+    question_text: str
+    topic: str
+    Answer: AnswerShort
+    difficulty: str
+    marks: int
+    response_type: str
+    coding_content: Optional[dict] = None  # Added for admin results consistency
+
+class CodingQuestionWithAnswer(BaseModel):
+    id: int
+    paper_id: Optional[int] = None
+    title: str
+    problem_statement: str
+    examples: List[Any] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+    Answer: AnswerShort
+    topic: str
+    difficulty: str
+    marks: int
+
 class CodingQuestionBasic(BaseModel):
     id: int
     paper_id: int
@@ -236,8 +271,8 @@ class InterviewSessionData(BaseModel):
 class AdminResultData(BaseModel):
     id: int
     interview: InterviewSessionData
-    interview_responses: List[AnswersDataAdmin] = []
-    coding_responses: List[CodingAnswersData] = []
+    interview_responses: List[QuestionWithAnswer] = []
+    coding_responses: List[CodingQuestionWithAnswer] = []
     total_score: float
     result_status: Optional[str] = "PENDING"
     created_at: datetime

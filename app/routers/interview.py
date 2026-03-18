@@ -24,6 +24,8 @@ from ..schemas.interview_responses import (
     PaperNested,
     CodingPaperNested,
     QuestionPaperData,
+    QuestionWithAnswer,
+    CodingQuestionWithAnswer,
 )
 from ..schemas.user_schemas import serialize_user
 from ..schemas.api_response import ApiResponse
@@ -1124,9 +1126,9 @@ async def submit_answer_audio(
     )
 
 
-from ..schemas.interview_responses import AnswersData, QuestionData, CodingAnswersData, CodingQuestionNested, CodingQuestionBasic
+# Endpoint updated with new response format returning CodingQuestionWithAnswer
 
-@router.post("/submit-answer-code", response_model=ApiResponse[CodingAnswersData])
+@router.post("/submit-answer-code", response_model=ApiResponse[Union[CodingQuestionWithAnswer, dict]])
 async def submit_answer_code(
     interview_id: int = Form(...),
     coding_question_id: int = Form(...),
@@ -1185,34 +1187,41 @@ async def submit_answer_code(
         logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
     session_db.refresh(answer)
 
+    from ..schemas.interview_responses import AnswerShort, CodingQuestionWithAnswer
+    
+    import json as _json
+    answer_data = AnswerShort(
+        id=answer.id,
+        interview_result_id=answer.interview_result_id,
+        candidate_answer=answer.candidate_answer,
+        feedback=answer.feedback or "",
+        score=answer.score if answer.score is not None else 0.0,
+        audio_path=answer.audio_path or "",
+        transcribed_text=answer.transcribed_text or "",
+        timestamp=answer.timestamp
+    )
+
+    response_data = CodingQuestionWithAnswer(
+        id=question.id,
+        paper_id=question.paper_id,
+        title=question.title or "",
+        problem_statement=question.problem_statement or "",
+        examples=_json.loads(question.examples) if isinstance(question.examples, str) else (question.examples or []),
+        constraints=_json.loads(question.constraints) if isinstance(question.constraints, str) else (question.constraints or []),
+        starter_code=question.starter_code or "",
+        Answer=answer_data,
+        topic=question.topic or "Algorithms",
+        difficulty=question.difficulty or "Medium",
+        marks=question.marks or 0
+    )
+
     return ApiResponse(
         status_code=200,
-        data=CodingAnswersData(
-            id=answer.id,
-            interview_result_id=answer.interview_result_id,
-            coding_question=CodingQuestionBasic(
-                id=question.id,
-                paper_id=question.paper_id,
-                title=question.title or "",
-                problem_statement=question.problem_statement or "",
-                examples=question.examples,
-                constraints=question.constraints,
-                starter_code=question.starter_code or "",
-                topic=question.topic or "Algorithms",
-                difficulty=question.difficulty or "Medium",
-                marks=question.marks or 0,
-            ),
-            candidate_answer=answer.candidate_answer,
-            feedback=answer.feedback or "",
-            score=answer.score if answer.score is not None else 0.0,
-            audio_path=answer.audio_path or "",
-            transcribed_text=answer.transcribed_text or "",
-            timestamp=answer.timestamp
-        ),
+        data=response_data,
         message="Code submitted successfully"
     )
 
-@router.post("/submit-answer-text", response_model=ApiResponse[Union[AnswersData, dict]])
+@router.post("/submit-answer-text", response_model=ApiResponse[Union[QuestionWithAnswer, dict]])
 async def submit_answer_text(
     interview_id: int = Form(...),
     question_id: int = Form(...),
@@ -1279,20 +1288,37 @@ async def submit_answer_text(
         _evaluate_and_update_score(session_db, answer, coding_q.problem_statement or coding_q.title or "", session, result)
         session_db.refresh(answer)
 
+        from ..schemas.interview_responses import AnswerShort, CodingQuestionWithAnswer
+        import json as _json
+
+        answer_data = AnswerShort(
+            id=answer.id,
+            interview_result_id=answer.interview_result_id,
+            candidate_answer=answer.candidate_answer,
+            feedback=answer.feedback or "",
+            score=answer.score if answer.score is not None else 0.0,
+            audio_path=answer.audio_path or "",
+            transcribed_text=answer.transcribed_text or "",
+            timestamp=answer.timestamp
+        )
+
+        response_data = CodingQuestionWithAnswer(
+            id=coding_q.id,
+            paper_id=coding_q.paper_id,
+            title=coding_q.title or "",
+            problem_statement=coding_q.problem_statement or "",
+            examples=_json.loads(coding_q.examples) if isinstance(coding_q.examples, str) else (coding_q.examples or []),
+            constraints=_json.loads(coding_q.constraints) if isinstance(coding_q.constraints, str) else (coding_q.constraints or []),
+            starter_code=coding_q.starter_code or "",
+            Answer=answer_data,
+            topic=coding_q.topic or "Algorithms",
+            difficulty=coding_q.difficulty or "Medium",
+            marks=coding_q.marks or 0
+        )
+
         return ApiResponse(
             status_code=200,
-            data={
-                "id": answer.id,
-                "interview_result_id": answer.interview_result_id,
-                "coding_question": {
-                    "id": coding_q.id, "title": coding_q.title, "problem_statement": coding_q.problem_statement,
-                    "examples": coding_q.examples, "constraints": coding_q.constraints, "marks": coding_q.marks
-                },
-                "candidate_answer": answer.candidate_answer,
-                "feedback": answer.feedback,
-                "score": answer.score,
-                "timestamp": answer.timestamp.isoformat()
-            },
+            data=response_data,
             message="Coding answer submitted successfully"
         )
     
@@ -1330,23 +1356,34 @@ async def submit_answer_text(
     _evaluate_and_update_score(session_db, answer, question.question_text or question.content or "", session, result)
     session_db.refresh(answer)
 
+    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer
+    
+    answer_data = AnswerShort(
+        id=answer.id,
+        interview_result_id=answer.interview_result_id,
+        candidate_answer=answer.candidate_answer,
+        feedback=answer.feedback or "",
+        score=answer.score or 0.0,
+        audio_path=answer.audio_path or "",
+        transcribed_text=answer.transcribed_text or "",
+        timestamp=answer.timestamp
+    )
+
+    response_data = QuestionWithAnswer(
+        id=question.id,
+        paper_id=question.paper_id,
+        content=question.content or "",
+        question_text=question.question_text or "",
+        topic=question.topic or "",
+        Answer=answer_data,
+        difficulty=str(question.difficulty),
+        marks=question.marks,
+        response_type=str(question.response_type)
+    )
+
     return ApiResponse(
         status_code=200,
-        data=AnswersData(
-            id=answer.id,
-            interview_result_id=answer.interview_result_id,
-            question=QuestionData(
-                id=question.id, paper_id=question.paper_id, content=question.content or "",
-                question_text=question.question_text or "", topic=question.topic or "",
-                difficulty=str(question.difficulty), marks=question.marks, response_type=str(question.response_type)
-            ),
-            candidate_answer=answer.candidate_answer,
-            feedback=answer.feedback,
-            score=answer.score,
-            audio_path=answer.audio_path or "",
-            transcribed_text=answer.transcribed_text or "",
-            timestamp=answer.timestamp
-        ),
+        data=response_data,
         message="Answer submitted successfully"
     )
 

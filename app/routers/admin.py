@@ -1482,7 +1482,10 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All results retrieved successfully"
     )
 
-from ..schemas.interview_responses import AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, QuestionPaperData, CodingAnswersData, CodingQuestionBasic
+from ..schemas.interview_responses import (
+    AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, 
+    QuestionPaperData, CodingAnswersData, CodingQuestionBasic, QuestionWithAnswer, CodingQuestionWithAnswer
+)
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
 async def get_result(
@@ -1587,77 +1590,105 @@ async def get_result(
         result_status=s.result.result_status if s.result else "PENDING"
     )
     
-    # 5. Answers (mapped to Interview_response)
+    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
+    import json as _json
+
+    # 5. Standard Responses (mapped to interview_responses)
     answers_nested = []
     for ans in s.result.answers:
-        q_nested = None
+        # Prepare AnswerShort
+        answer_data = AnswerShort(
+            id=ans.id,
+            interview_result_id=ans.interview_result_id,
+            candidate_answer=ans.candidate_answer or "",
+            feedback=ans.feedback or "",
+            score=ans.score or 0.0,
+            audio_path=ans.audio_path or "",
+            transcribed_text=ans.transcribed_text or "",
+            timestamp=ans.timestamp or datetime.now(timezone.utc)
+        )
+
+        # Prepare QuestionWithAnswer
         if ans.question:
-            q_nested = QuestionData(
-                id=ans.question.id, paper_id=ans.question.paper_id,
+            # Parse coding_content if it's a proxy question
+            coding_content = None
+            if ans.question.response_type == "code" and ans.question.content:
+                 try:
+                     coding_content = _json.loads(ans.question.content)
+                 except: pass
+
+            q_nested = QuestionWithAnswer(
+                id=ans.question.id,
+                paper_id=ans.question.paper_id,
                 content=ans.question.content or "",
-                question_text=ans.question.question_text or "", topic=ans.question.topic or "",
-                difficulty=ans.question.difficulty.value if hasattr(ans.question.difficulty, 'value') else str(ans.question.difficulty), 
+                question_text=ans.question.question_text or "",
+                topic=ans.question.topic or "",
+                Answer=answer_data,
+                difficulty=str(ans.question.difficulty),
                 marks=ans.question.marks,
-                response_type=ans.question.response_type.value if hasattr(ans.question.response_type, 'value') else str(ans.question.response_type)
+                response_type=str(ans.question.response_type),
+                coding_content=coding_content
+            )
+        else:
+            # Fallback for orphaned answers
+            q_nested = QuestionWithAnswer(
+                id=ans.question_id or 0,
+                paper_id=0,
+                content="",
+                question_text="",
+                topic="",
+                Answer=answer_data,
+                difficulty="",
+                marks=0,
+                response_type=""
             )
         
-        cq_nested = None
-        if ans.coding_question:
-            cq_nested = CodingQuestionNested(
-                id=ans.coding_question.id, paper_id=ans.coding_question.paper_id,
-                title=ans.coding_question.title, problem_statement=ans.coding_question.problem_statement,
-                examples=ans.coding_question.examples, constraints=ans.coding_question.constraints,
-                starter_code=ans.coding_question.starter_code or "", topic=ans.coding_question.topic or "",
-                difficulty=ans.coding_question.difficulty, marks=ans.coding_question.marks
-            )
-        elif not ans.question and not ans.coding_question:
-             # Fallback if both miss
-             q_nested = QuestionData(id=ans.question_id or 0, paper_id=0, content="", question_text="", topic="", difficulty="", marks=0, response_type="")
+        answers_nested.append(q_nested)
         
-        answers_nested.append(AnswersDataAdmin(
-            id=ans.id, interview_result_id=ans.interview_result_id,
-            question=q_nested, # lowercase q per request
-            coding_question=cq_nested,
-            candidate_answer=ans.candidate_answer or "", feedback=ans.feedback or "",
-            score=ans.score or 0.0, audio_path=ans.audio_path,
-            transcribed_text=ans.transcribed_text, timestamp=ans.timestamp or datetime.now(timezone.utc)
-        ))
-        
-    # 6. Coding Answers (mapped to Coding_response)
+    # 6. Coding Responses (mapped to coding_responses)
     coding_answers_nested = []
     if s.result.coding_answers:
         for cans in s.result.coding_answers:
-            cq_nested = None
-            if cans.coding_question:
-                cq_nested = CodingQuestionBasic(
-                    id=cans.coding_question.id,
-                    paper_id=cans.coding_question.paper_id,
-                    title=cans.coding_question.title or "",
-                    problem_statement=cans.coding_question.problem_statement or "",
-                    examples=cans.coding_question.examples or "[]",
-                    constraints=cans.coding_question.constraints or "[]",
-                    starter_code=cans.coding_question.starter_code,
-                    topic=cans.coding_question.topic or "Algorithms",
-                    difficulty=cans.coding_question.difficulty or "Medium",
-                    marks=cans.coding_question.marks or 0
-                )
-            else:
-                cq_nested = CodingQuestionBasic(
-                    id=cans.coding_question_id, paper_id=0, title="", problem_statement="",
-                    examples="[]", constraints="[]", starter_code="", topic="", difficulty="", marks=0
-                )
-
-            coding_answers_nested.append(CodingAnswersData(
+            # Prepare AnswerShort
+            answer_data = AnswerShort(
                 id=cans.id,
                 interview_result_id=cans.interview_result_id,
-                coding_question=cq_nested,
                 candidate_answer=cans.candidate_answer or "",
                 feedback=cans.feedback or "",
                 score=cans.score or 0.0,
                 audio_path=cans.audio_path or "",
                 transcribed_text=cans.transcribed_text or "",
                 timestamp=cans.timestamp or datetime.now(timezone.utc)
-            ))
+            )
+
+            if cans.coding_question:
+                cq = cans.coding_question
+                cq_nested = CodingQuestionWithAnswer(
+                    id=cq.id,
+                    paper_id=cq.paper_id,
+                    title=cq.title or "",
+                    problem_statement=cq.problem_statement or "",
+                    examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
+                    constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
+                    starter_code=cq.starter_code or "",
+                    Answer=answer_data,
+                    topic=cq.topic or "Algorithms",
+                    difficulty=cq.difficulty or "Medium",
+                    marks=cq.marks or 0
+                )
+            else:
+                cq_nested = CodingQuestionWithAnswer(
+                    id=cans.coding_question_id,
+                    paper_id=0,
+                    title="",
+                    problem_statement="",
+                    Answer=answer_data,
+                    topic="",
+                    difficulty="",
+                    marks=0
+                )
+
+            coding_answers_nested.append(cq_nested)
 
     # 7. Top Level Result
     result_detail = AdminResultData(
