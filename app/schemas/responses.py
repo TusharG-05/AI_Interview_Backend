@@ -1,4 +1,5 @@
 from typing import Optional, List, Any
+from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 from .user_schemas import UserNested
 from .interview_result import QuestionPaperNested
@@ -154,6 +155,7 @@ class PaperRead(BaseModel):
     total_marks: int = 0
     questions: List[QuestionRead] = []
     created_at: str
+    
 class SessionRead(BaseModel):
     id: int
     admin_user: Optional[UserNested] = None
@@ -314,6 +316,78 @@ class InterviewSessionExpanded(BaseModel):
     proctoring_event_count: int = 0
     enrollment_audio_url: Optional[str] = None
     team_id: Optional[int] = None
+
+class UserAdminDetail(BaseModel):
+    id: int
+    email: str
+    full_name: str
+    role: str
+    profile_image: Optional[str] = None
+
+class QuestionAdminDetail(BaseModel):
+    id: int
+    paper_id: int
+    content: str
+    question_text: str
+    topic: str
+    difficulty: str
+    marks: int
+    response_type: str
+
+class CodingQuestionAdminDetail(BaseModel):
+    id: int
+    paper_id: int
+    title: str
+    problem_statement: str
+    examples: List[Any] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+    topic: str
+    difficulty: str
+    marks: int
+
+class QuestionPaperAdminDetail(BaseModel):
+    id: int
+    name: str
+    description: str
+    adminUser: Optional[str] = None  # Just Admin Name per latest request
+    question_count: int
+    total_marks: int
+    created_at: datetime
+    questions: List[QuestionAdminDetail] = []
+
+class CodingPaperAdminDetail(BaseModel):
+    id: int
+    name: str
+    description: str
+    adminUser: Optional[str] = None  # Just Admin Name per latest request
+    question_count: int
+    total_marks: int
+    created_at: datetime
+    questions: List[CodingQuestionAdminDetail] = []
+
+class InterviewSessionAdminDetail(BaseModel):
+    id: int
+    access_token: str
+    admin_user: Optional[UserAdminDetail] = None
+    candidate_user: Optional[UserAdminDetail] = None
+    paper: Optional[QuestionPaperAdminDetail] = None
+    coding_paper: Optional[CodingPaperAdminDetail] = None
+    schedule_time: datetime
+    duration_minutes: int
+    max_questions: int
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    status: str
+    total_score: Optional[float] = None
+    last_activity: datetime
+    warning_count: int
+    max_warnings: int
+    is_suspended: bool
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[datetime] = None
+    enrollment_audio_path: Optional[str] = None
+    is_completed: bool
 
 class UserDetailRead(BaseModel):
     id: int
