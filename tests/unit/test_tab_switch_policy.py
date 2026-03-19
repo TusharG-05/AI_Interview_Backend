@@ -64,7 +64,7 @@ def test_tab_switch_policy_scenarios(session, client, test_users, auth_headers):
         )
         assert response.status_code == 403
         data = response.json()["data"]
-        assert data["reason"] == "TAB_TIMEOUT"
+        assert data["reason"] == "tab_switch_timeout"
         assert data["is_suspended"] is True
 
     # Scenario 5: Try submitting work after termination
@@ -106,7 +106,7 @@ def test_third_tab_switch_immediate_termination(session, client, test_users, aut
     )
     assert response.status_code == 403
     data = response.json()["data"]
-    assert data["reason"] == "EXCESSIVE_TAB_SWITCH"
+    assert data["reason"] == "multiple_tab_switch"
     assert data["is_suspended"] is True
 
 def test_proactive_timeout_on_api_call(session, client, test_users, auth_headers):
@@ -143,4 +143,4 @@ def test_proactive_timeout_on_api_call(session, client, test_users, auth_headers
     
     session.refresh(interview)
     assert interview.is_suspended is True
-    assert interview.suspension_reason == "TAB_TIMEOUT"
+    assert interview.suspension_reason == "tab_switch_timeout"

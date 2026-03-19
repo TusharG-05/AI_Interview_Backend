@@ -60,6 +60,7 @@ def test_coding_paper_auto_creation_and_aggregation(client, session, auth_header
     session.commit()
 
     # Create Result and Answers
+    from app.models.db_models import CodingAnswers
     result = InterviewResult(interview_id=interview.id)
     session.add(result)
     session.commit()
@@ -75,9 +76,9 @@ def test_coding_paper_auto_creation_and_aggregation(client, session, auth_header
     # Answer coding question (score 5)
     # Get the coding question from paper
     cq = session.query(CodingQuestions).filter(CodingQuestions.paper_id == new_paper_id).first()
-    ans2 = Answers(
+    ans2 = CodingAnswers(
         interview_result_id=result.id,
-        coding_question_id=cq.id, 
+        coding_question_id=cq.id,
         candidate_answer="code...",
         score=5.0,
         feedback="Great"
@@ -98,17 +99,27 @@ def test_coding_paper_auto_creation_and_aggregation(client, session, auth_header
     assert result.result_status == "FAIL" 
     assert interview.total_score == 10.0
 
-    # Verify Results API
+    # Verify Results API (Nested Format)
     response = client.get(f"/api/admin/results/{interview.id}", headers=auth_headers)
     assert response.status_code == 200
     res_data = response.json()["data"]
     assert res_data["total_score"] == 10.0
-    assert len(res_data["interview_responses"]) == 2
     
-    # Check if both types are present
-    ans_types = [a.get("question") is not None for a in res_data["interview_responses"]]
-    assert True in ans_types # Standard
+    # Check session nesting
+    session_data = res_data["interview"]
+    assert "paper" in session_data
+    assert "coding_paper" in session_data
     
-    coding_ans = [a.get("coding_question") for a in res_data["interview_responses"] if a.get("coding_question") is not None]
-    assert len(coding_ans) == 1
-    assert coding_ans[0]["title"] == "Sum Array"
+    # Verify nesting in Paper (Standard)
+    assert len(session_data["paper"]["questions"]) == 1
+    std_q = session_data["paper"]["questions"][0]
+    assert std_q["content"] == "What is Python?"
+    assert std_q["answer"]["score"] == 5.0
+    
+    # Verify nesting in Coding Paper
+    assert len(session_data["coding_paper"]["questions"]) == 2
+    # The first question should have an answer, the second should not (based on test setup)
+    coding_q_with_ans = next(q for q in session_data["coding_paper"]["questions"] if q["answer"] is not None)
+    assert coding_q_with_ans["problem_statement"] == "Sum it"
+    assert coding_q_with_ans["title"] == "Sum Array"
+    assert coding_q_with_ans["answer"]["score"] == 5.0

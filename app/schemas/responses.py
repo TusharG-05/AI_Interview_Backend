@@ -323,6 +323,7 @@ class UserAdminDetail(BaseModel):
     full_name: str
     role: str
     profile_image: Optional[str] = None
+    team: Optional[TeamReadBasic] = None
 
 class QuestionAdminDetail(BaseModel):
     id: int

@@ -22,7 +22,8 @@ def test_upload_selfie_to_cloudinary(client: TestClient, session: Session, test_
         title="Test Interview for Selfie Upload",
         description="Testing Cloudinary upload",
         status=InterviewStatus.SCHEDULED,
-        access_token="test_token_selfie"
+        access_token="test_token_selfie",
+        schedule_time=datetime.now(timezone.utc)  # Add required schedule_time
     )
     session.add(interview)
     session.commit()

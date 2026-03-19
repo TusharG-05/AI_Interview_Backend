@@ -788,7 +788,7 @@ async def schedule_interview(
     # Coding paper is linked via FK on the session — no pre-assignment needed
     
     # Generate Link - Must match frontend route: /interview/:token
-    link = f"{FRONTEND_URL}/interview/{new_session.access_token}"
+    link = f"{FRONTEND_URL}/interview-access?token={new_session.access_token}"
     # Send Email Invitation Asynchronously (prevent UI hang without Redis)
     try:
         background_tasks.add_task(
@@ -867,7 +867,14 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             selectinload(InterviewSession.candidate)
         )
     ).all()
-    
+    if current_user.role == UserRole.SUPER_ADMIN:
+        sessions = session.exec(
+            select(InterviewSession)
+            .options(
+                selectinload(InterviewSession.admin),
+                selectinload(InterviewSession.candidate)
+            )
+        ).all()
     results = []
     for s in sessions:
         # Serialize users with role-based keys, handling NULL users
@@ -992,7 +999,13 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> Intervie
             email=session_obj.admin.email,
             full_name=session_obj.admin.full_name,
             role=str(session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else session_obj.admin.role),
-            profile_image=None # As per requested snippet profile_image: null
+            profile_image=None,
+            team=TeamReadBasic(
+                id=session_obj.admin.team.id,
+                name=session_obj.admin.team.name,
+                description=session_obj.admin.team.description,
+                created_at=session_obj.admin.team.created_at.isoformat() if session_obj.admin.team.created_at else ""
+            ) if session_obj.admin.team else None
         )
 
     # 2. Map Candidate User
@@ -1003,7 +1016,13 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> Intervie
             email=session_obj.candidate.email,
             full_name=session_obj.candidate.full_name,
             role=str(session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else session_obj.candidate.role),
-            profile_image=None
+            profile_image=None,
+            team=TeamReadBasic(
+                id=session_obj.candidate.team.id,
+                name=session_obj.candidate.team.name,
+                description=session_obj.candidate.team.description,
+                created_at=session_obj.candidate.team.created_at.isoformat() if session_obj.candidate.team.created_at else ""
+            ) if session_obj.candidate.team else None
         )
 
     # 3. Map Standard Question Paper
@@ -1111,7 +1130,7 @@ async def get_interview(
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    if interview_session.admin_id and interview_session.admin_id != current_user.id:
+    if interview_session.admin_id and interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(
             status_code=403, 
             detail="Not authorized to access this interview session"
@@ -1497,6 +1516,13 @@ async def get_result(
          raise HTTPException(status_code=404, detail="Result not found for this interview")
 
     # Build nested objects according to new AdminResultData schema
+    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
+    import json as _json
+
+    # Helper maps for answers lookup
+    std_answers_map = {ans.question_id: ans for ans in s.result.answers if ans.question_id}
+    coding_answers_map = {ans.coding_question_id: ans for ans in s.result.coding_answers if ans.coding_question_id}
+
     # 1. Admin
     admin_obj = None
     if s.admin:
@@ -1511,39 +1537,99 @@ async def get_result(
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
-        candidate_obj = serialize_user(s.candidate)  # Use serialize_user for consistency
+        candidate_obj = serialize_user(s.candidate)
         
-    # 3. Paper
+    # 3. Paper (Standard) with Nested Answers
     paper_obj = None
     if s.paper:
-        # For this endpoint, admin_user is expected to be a UserNested object per schema standardization
+        questions_with_answers = []
+        for q in s.paper.questions:
+            ans = std_answers_map.get(q.id)
+            ans_short = None
+            if ans:
+                ans_short = AnswerShort(
+                    id=ans.id,
+                    interview_result_id=ans.interview_result_id,
+                    candidate_answer=ans.candidate_answer or "",
+                    feedback=ans.feedback or "",
+                    score=ans.score or 0.0,
+                    audio_path=ans.audio_path or "",
+                    transcribed_text=ans.transcribed_text or "",
+                    timestamp=ans.timestamp or datetime.now(timezone.utc)
+                )
+            
+            # Parsing coding_content if it's a proxy question in standard paper
+            coding_content = None
+            if q.response_type == "code" and q.content:
+                try:
+                    coding_content = _json.loads(q.content)
+                except: pass
+
+            questions_with_answers.append(QuestionWithAnswer(
+                id=q.id, paper_id=q.paper_id, content=q.content or "",
+                question_text=q.question_text or q.content or "",
+                topic=q.topic or "General", answer=ans_short,
+                difficulty=str(q.difficulty), marks=q.marks,
+                response_type=str(q.response_type), coding_content=coding_content
+            ))
+            
         paper_obj = QuestionPaperData(
             id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
-            admin_user=serialize_user(s.paper.admin), created_at=s.paper.created_at,  # ← Always UserNested
-            question_count=len(s.paper.questions) if hasattr(s.paper, 'questions') else 0,
+            admin_user=serialize_user(s.paper.admin), created_at=s.paper.created_at,
+            question_count=len(questions_with_answers),
+            questions=questions_with_answers,
             total_marks=s.paper.total_marks
         )
         
-    # 3.1 Coding Paper
+    # 3.1 Coding Paper with Nested Answers
     coding_paper_obj = None
     if s.coding_paper:
+        coding_questions_with_answers = []
+        for q in s.coding_paper.questions:
+            ans = coding_answers_map.get(q.id)
+            ans_short = None
+            if ans:
+                ans_short = AnswerShort(
+                    id=ans.id,
+                    interview_result_id=ans.interview_result_id,
+                    candidate_answer=ans.candidate_answer or "",
+                    feedback=ans.feedback or "",
+                    score=ans.score or 0.0,
+                    audio_path=ans.audio_path or "",
+                    transcribed_text=ans.transcribed_text or "",
+                    timestamp=ans.timestamp or datetime.now(timezone.utc)
+                )
+
+            # Manual JSON field parsing since our schema list fields are strict
+            examples = q.examples
+            if isinstance(examples, str):
+                try: examples = _json.loads(examples)
+                except: examples = []
+            
+            constraints = q.constraints
+            if isinstance(constraints, str):
+                try: constraints = _json.loads(constraints)
+                except: constraints = []
+
+            coding_questions_with_answers.append(CodingQuestionWithAnswer(
+                id=q.id, paper_id=q.paper_id, title=q.title or "Coding Task",
+                problem_statement=q.problem_statement or "",
+                examples=examples or [], constraints=constraints or [],
+                starter_code=q.starter_code or "", answer=ans_short,
+                topic=q.topic or "Algorithms", difficulty=q.difficulty or "Medium",
+                marks=q.marks or 0
+            ))
+
         coding_paper_obj = CodingPaperNested(
             id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
-            admin_user=serialize_user(s.coding_paper.admin),  # ← Always UserNested
-            question_count=s.coding_paper.question_count,
+            admin_user=serialize_user(s.coding_paper.admin),
+            question_count=len(coding_questions_with_answers),
             total_marks=s.coding_paper.total_marks,
             created_at=s.coding_paper.created_at,
-            coding_questions=[
-                CodingQuestionNested(
-                    id=q.id, paper_id=q.paper_id, title=q.title,
-                    problem_statement=q.problem_statement, examples=q.examples,
-                    constraints=q.constraints, starter_code=q.starter_code or "",
-                    topic=q.topic, difficulty=q.difficulty, marks=q.marks
-                ) for q in s.coding_paper.questions
-            ] if hasattr(s.coding_paper, 'questions') else []
+            questions=coding_questions_with_answers
         )
         
-    # 4. Session Nested (mapped to interviewData)
+    # 4. Session Nested
     session_nested = InterviewSessionData(
         id=s.id, access_token=s.access_token,
         admin_user=admin_obj, candidate_user=candidate_obj, 
@@ -1563,112 +1649,10 @@ async def get_result(
         result_status=s.result.result_status if s.result else "PENDING"
     )
     
-    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
-    import json as _json
-
-    # 5. Standard Responses (mapped to interview_responses)
-    answers_nested = []
-    for ans in s.result.answers:
-        # Prepare AnswerShort
-        answer_data = AnswerShort(
-            id=ans.id,
-            interview_result_id=ans.interview_result_id,
-            candidate_answer=ans.candidate_answer or "",
-            feedback=ans.feedback or "",
-            score=ans.score or 0.0,
-            audio_path=ans.audio_path or "",
-            transcribed_text=ans.transcribed_text or "",
-            timestamp=ans.timestamp or datetime.now(timezone.utc)
-        )
-
-        # Prepare QuestionWithAnswer
-        if ans.question:
-            # Parse coding_content if it's a proxy question
-            coding_content = None
-            if ans.question.response_type == "code" and ans.question.content:
-                 try:
-                     coding_content = _json.loads(ans.question.content)
-                 except: pass
-
-            q_nested = QuestionWithAnswer(
-                id=ans.question.id,
-                paper_id=ans.question.paper_id,
-                content=ans.question.content or "",
-                question_text=ans.question.question_text or "",
-                topic=ans.question.topic or "",
-                answer=answer_data,
-                difficulty=str(ans.question.difficulty),
-                marks=ans.question.marks,
-                response_type=str(ans.question.response_type),
-                coding_content=coding_content
-            )
-        else:
-            # Fallback for orphaned answers
-            q_nested = QuestionWithAnswer(
-                id=ans.question_id or 0,
-                paper_id=0,
-                content="",
-                question_text="",
-                topic="",
-                answer=answer_data,
-                difficulty="",
-                marks=0,
-                response_type=""
-            )
-        
-        answers_nested.append(q_nested)
-        
-    # 6. Coding Responses (mapped to coding_responses)
-    coding_answers_nested = []
-    if s.result.coding_answers:
-        for cans in s.result.coding_answers:
-            # Prepare AnswerShort
-            answer_data = AnswerShort(
-                id=cans.id,
-                interview_result_id=cans.interview_result_id,
-                candidate_answer=cans.candidate_answer or "",
-                feedback=cans.feedback or "",
-                score=cans.score or 0.0,
-                audio_path=cans.audio_path or "",
-                transcribed_text=cans.transcribed_text or "",
-                timestamp=cans.timestamp or datetime.now(timezone.utc)
-            )
-
-            if cans.coding_question:
-                cq = cans.coding_question
-                cq_nested = CodingQuestionWithAnswer(
-                    id=cq.id,
-                    paper_id=cq.paper_id,
-                    title=cq.title or "",
-                    problem_statement=cq.problem_statement or "",
-                    examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
-                    constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
-                    starter_code=cq.starter_code or "",
-                    answer=answer_data,
-                    topic=cq.topic or "Algorithms",
-                    difficulty=cq.difficulty or "Medium",
-                    marks=cq.marks or 0
-                )
-            else:
-                cq_nested = CodingQuestionWithAnswer(
-                    id=cans.coding_question_id,
-                    paper_id=0,
-                    title="",
-                    problem_statement="",
-                    answer=answer_data,
-                    topic="",
-                    difficulty="",
-                    marks=0
-                )
-
-            coding_answers_nested.append(cq_nested)
-
-    # 7. Top Level Result
+    # 5. Final Result Assembler
     result_detail = AdminResultData(
         id=s.result.id,
         interview=session_nested,
-        interview_responses=answers_nested,
-        coding_responses=coding_answers_nested,
         total_score=s.result.total_score or 0.0,
         result_status=s.result.result_status or "PENDING",
         created_at=s.result.created_at or datetime.now(timezone.utc)

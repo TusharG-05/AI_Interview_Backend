@@ -4,7 +4,7 @@ from ..services import interview as interview_service
 from ..models.db_models import InterviewSession, InterviewResult, Answers, Questions, CandidateStatus
 from ..core.database import engine
 from ..core.logger import get_logger
-from ..utils import format_iso_datetime, calculate_total_score
+from ..utils import format_iso_datetime, calculate_total_score, calculate_total_marks
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 import logging
@@ -25,7 +25,16 @@ def process_session_results(interview_id: int, db: Session = None):
 
     logger.info(f"--- PROCESSING SESSION {interview_id} ---")
     try:
-        session = db.get(InterviewSession, interview_id)
+        from sqlalchemy.orm import selectinload
+        from ..models.db_models import QuestionPaper, CodingQuestionPaper
+        session = db.exec(
+            select(InterviewSession)
+            .where(InterviewSession.id == interview_id)
+            .options(
+                selectinload(InterviewSession.paper),
+                selectinload(InterviewSession.coding_paper),
+            )
+        ).first()
         if not session:
             logger.warning(f"Session {interview_id} not found for processing")
             return
@@ -109,18 +118,33 @@ def process_session_results(interview_id: int, db: Session = None):
 
         # ── Final Score Aggregation ──────────────────────────────────────
         db.refresh(result_obj)
+        from ..models.db_models import CodingAnswers
         fresh_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+        fresh_coding_answers = db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)).all()
+        
         all_scores = [r.score for r in fresh_answers if r.score is not None]
+        all_scores += [r.score for r in fresh_coding_answers if r.score is not None]
 
         # Use sum (not average) to match the real-time score accumulated per answer
         computed_score = calculate_total_score(all_scores)
         result_obj.total_score = computed_score
         
-        # Auto-evaluate result_status based on 30% threshold
-        if computed_score >= 30.0:
+        # Compute percentage against total marks from ALL assigned papers
+        # (not just attempted questions) — fixes early-termination scoring bug
+        total_marks = calculate_total_marks(session)
+        percentage = (computed_score / total_marks * 100) if total_marks > 0 else 0.0
+        
+        # Auto-evaluate result_status based on 70% threshold
+        if percentage >= 70.0:
             result_obj.result_status = "PASS"
         else:
             result_obj.result_status = "FAIL"
+        
+        logger.info(
+            f"Session {interview_id}: obtained={computed_score}, "
+            f"total_marks={total_marks}, percentage={percentage:.1f}%, "
+            f"status={result_obj.result_status}"
+        )
             
         session.total_score = computed_score
         
