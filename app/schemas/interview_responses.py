@@ -5,6 +5,41 @@ import json as _json
 from .user_schemas import UserNested
 from .team_schemas import TeamReadBasic
 
+class AnswerShort(BaseModel):
+    id: int
+    interview_result_id: int
+    candidate_answer: str
+    feedback: str
+    score: float
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
+    timestamp: datetime
+
+class QuestionWithAnswer(BaseModel):
+    id: int
+    paper_id: Optional[int] = None
+    content: str
+    question_text: str
+    topic: str
+    answer: Optional[AnswerShort] = None  # Nested & Optional (lowercase per request)
+    difficulty: str
+    marks: int
+    response_type: str
+    coding_content: Optional[dict] = None  # Added for admin results consistency
+
+class CodingQuestionWithAnswer(BaseModel):
+    id: int
+    paper_id: Optional[int] = None
+    title: str
+    problem_statement: str
+    examples: List[Any] = []
+    constraints: List[str] = []
+    starter_code: Optional[str] = None
+    answer: Optional[AnswerShort] = None  # Lowercase 'answer' per request
+    topic: str
+    difficulty: str
+    marks: int
+
 class QuestionNested(BaseModel):
     id: int
     paper_id: Optional[int] = None
@@ -23,7 +58,7 @@ class PaperNested(BaseModel):
     question_count: int
     total_marks: int
     created_at: datetime
-    questions: List[QuestionNested]
+    questions: List[QuestionWithAnswer]
 
 class CodingQuestionNested(BaseModel):
     id: int
@@ -61,7 +96,7 @@ class CodingPaperNested(BaseModel):
     question_count: int
     total_marks: int
     created_at: datetime
-    coding_questions: List[CodingQuestionNested] = []
+    questions: List[CodingQuestionWithAnswer] = []
 
 class LoginUserNested(BaseModel):
     id: int
@@ -98,8 +133,6 @@ class InterviewAccessResponse(BaseModel):
     allow_copy_paste: bool = False
     allow_question_navigate: bool = False
     result_status: Optional[str] = "PENDING"
-
-# --- End New Schemas ---
 
 class TabSwitchRequest(BaseModel):
     event_type: str  # "TAB_SWITCH" or "TAB_RETURN"
@@ -147,41 +180,6 @@ class AnswersData(BaseModel):
     audio_path: Optional[str] = None
     transcribed_text: Optional[str] = None
     timestamp: datetime
-
-class AnswerShort(BaseModel):
-    id: int
-    interview_result_id: int
-    candidate_answer: str
-    feedback: str
-    score: float
-    audio_path: Optional[str] = None
-    transcribed_text: Optional[str] = None
-    timestamp: datetime
-
-class QuestionWithAnswer(BaseModel):
-    id: int
-    paper_id: Optional[int] = None
-    content: str
-    question_text: str
-    topic: str
-    Answer: AnswerShort
-    difficulty: str
-    marks: int
-    response_type: str
-    coding_content: Optional[dict] = None  # Added for admin results consistency
-
-class CodingQuestionWithAnswer(BaseModel):
-    id: int
-    paper_id: Optional[int] = None
-    title: str
-    problem_statement: str
-    examples: List[Any] = []
-    constraints: List[str] = []
-    starter_code: Optional[str] = None
-    Answer: AnswerShort
-    topic: str
-    difficulty: str
-    marks: int
 
 class CodingQuestionBasic(BaseModel):
     id: int
@@ -263,10 +261,6 @@ class InterviewSessionData(BaseModel):
     tab_switch_timestamp: Optional[datetime] = None
     tab_warning_active: bool = False
     result_status: Optional[str] = "PENDING"
-
-# End of schemas
-
-# End of schemas
 
 class AdminResultData(BaseModel):
     id: int

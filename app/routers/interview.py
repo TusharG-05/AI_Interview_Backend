@@ -213,31 +213,58 @@ async def access_interview(
             team=_serialize_team_basic(session.candidate.team, session_db) if session.candidate.team else None
         )
 
+    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
+    import json as _json
+
+    # Pre-fetch existing answers if results exist
+    answers_map = {}
+    coding_answers_map = {}
+    if session.result:
+        for ans in session.result.answers:
+            answers_map[ans.question_id] = AnswerShort(
+                id=ans.id,
+                interview_result_id=ans.interview_result_id,
+                candidate_answer=ans.candidate_answer or "",
+                feedback=ans.feedback or "",
+                score=ans.score or 0.0,
+                audio_path=ans.audio_path or "",
+                transcribed_text=ans.transcribed_text or "",
+                timestamp=ans.timestamp
+            )
+        for cans in session.result.coding_answers:
+            coding_answers_map[cans.coding_question_id] = AnswerShort(
+                id=cans.id,
+                interview_result_id=cans.interview_result_id,
+                candidate_answer=cans.candidate_answer or "",
+                feedback=cans.feedback or "",
+                score=cans.score or 0.0,
+                audio_path=cans.audio_path or "",
+                transcribed_text=cans.transcribed_text or "",
+                timestamp=cans.timestamp
+            )
+
     # Map Standard Question Paper
     paper_data = None
     if session.paper:
         questions_list = [
-            QuestionNested(
+            QuestionWithAnswer(
                 id=q.id,
                 paper_id=q.paper_id,
                 content=q.content or "",
                 question_text=q.question_text or q.content or "",
                 topic=q.topic or "General",
+                answer=answers_map.get(q.id),
                 difficulty=q.difficulty or "Medium",
                 marks=q.marks or 1,
                 response_type=q.response_type or "audio"
             ) for q in session.paper.questions
         ]
         
-        paper_admin_data = None
-        if session.paper.admin:
-            paper_admin_data = serialize_user(session.paper.admin)
-            
         paper_data = PaperNested(
             id=session.paper.id,
             name=session.paper.name,
             description=session.paper.description or "",
-            admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
+            admin_user=serialize_user(session.admin) if session.admin else None,
             question_count=session.paper.question_count or len(questions_list),
             total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
             created_at=session.paper.created_at,
@@ -248,33 +275,30 @@ async def access_interview(
     coding_paper_data = None
     if session.coding_paper:
         coding_questions_list = [
-            CodingQuestionNested(
+            CodingQuestionWithAnswer(
                 id=cq.id,
                 paper_id=cq.paper_id,
                 title=cq.title or "",
                 problem_statement=cq.problem_statement or "",
-                examples=cq.examples or "[]",
-                constraints=cq.constraints or "[]",
+                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
+                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
                 starter_code=cq.starter_code or "",
+                answer=coding_answers_map.get(cq.id),
                 topic=cq.topic or "Algorithms",
                 difficulty=cq.difficulty or "Medium",
                 marks=cq.marks or 0
             ) for cq in session.coding_paper.questions
         ]
         
-        coding_admin_data = None
-        if session.coding_paper.admin:
-            coding_admin_data = serialize_user(session.coding_paper.admin)
-            
         coding_paper_data = CodingPaperNested(
             id=session.coding_paper.id,
             name=session.coding_paper.name,
             description=session.coding_paper.description or "",
-            admin_user=coding_admin_data,
+            admin_user=serialize_user(session.coding_paper.admin) if session.coding_paper.admin else None,
             question_count=session.coding_paper.question_count or len(coding_questions_list),
             total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session.coding_paper.created_at,
-            coding_questions=coding_questions_list
+            questions=coding_questions_list
         )
 
     now = datetime.now(timezone.utc)
@@ -1209,7 +1233,7 @@ async def submit_answer_code(
         examples=_json.loads(question.examples) if isinstance(question.examples, str) else (question.examples or []),
         constraints=_json.loads(question.constraints) if isinstance(question.constraints, str) else (question.constraints or []),
         starter_code=question.starter_code or "",
-        Answer=answer_data,
+        answer=answer_data,
         topic=question.topic or "Algorithms",
         difficulty=question.difficulty or "Medium",
         marks=question.marks or 0
@@ -1310,7 +1334,7 @@ async def submit_answer_text(
             examples=_json.loads(coding_q.examples) if isinstance(coding_q.examples, str) else (coding_q.examples or []),
             constraints=_json.loads(coding_q.constraints) if isinstance(coding_q.constraints, str) else (coding_q.constraints or []),
             starter_code=coding_q.starter_code or "",
-            Answer=answer_data,
+            answer=answer_data,
             topic=coding_q.topic or "Algorithms",
             difficulty=coding_q.difficulty or "Medium",
             marks=coding_q.marks or 0
@@ -1375,7 +1399,7 @@ async def submit_answer_text(
         content=question.content or "",
         question_text=question.question_text or "",
         topic=question.topic or "",
-        Answer=answer_data,
+        answer=answer_data,
         difficulty=str(question.difficulty),
         marks=question.marks,
         response_type=str(question.response_type)

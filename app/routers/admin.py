@@ -30,7 +30,8 @@ from ..schemas.responses import (
     InterviewDetailRead, UserDetailRead, CandidateStatusResponse, 
     LiveStatusItem, AnswerRead, InterviewSessionDetail, InterviewSessionExpanded,
     CodingQuestionRead, CodingPaperRead, CodingQuestionFull, CodingPaperFull,
-    TeamReadBasic
+    TeamReadBasic, UserAdminDetail, QuestionAdminDetail, CodingQuestionAdminDetail,
+    QuestionPaperAdminDetail, CodingPaperAdminDetail, InterviewSessionAdminDetail
 )
 from ..schemas.interview_result import (
     InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested,
@@ -979,7 +980,113 @@ async def get_live_status_dashboard(
     )
 
 
-@router.get("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionExpanded])
+def _serialize_interview_admin_detail(session_obj: InterviewSession) -> InterviewSessionAdminDetail:
+    """Helper to serialize InterviewSession into InterviewSessionAdminDetail."""
+    import json as _json
+    
+    # 1. Map Admin User
+    admin_data = None
+    if session_obj.admin:
+        admin_data = UserAdminDetail(
+            id=session_obj.admin.id,
+            email=session_obj.admin.email,
+            full_name=session_obj.admin.full_name,
+            role=str(session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else session_obj.admin.role),
+            profile_image=None # As per requested snippet profile_image: null
+        )
+
+    # 2. Map Candidate User
+    candidate_data = None
+    if session_obj.candidate:
+        candidate_data = UserAdminDetail(
+            id=session_obj.candidate.id,
+            email=session_obj.candidate.email,
+            full_name=session_obj.candidate.full_name,
+            role=str(session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else session_obj.candidate.role),
+            profile_image=None
+        )
+
+    # 3. Map Standard Question Paper
+    paper_data = None
+    if session_obj.paper:
+        questions_list = [
+            QuestionAdminDetail(
+                id=q.id,
+                paper_id=q.paper_id,
+                content=q.content or "",
+                question_text=q.question_text or "",
+                topic=q.topic or "",
+                difficulty=str(q.difficulty),
+                marks=q.marks or 0,
+                response_type=str(q.response_type)
+            ) for q in getattr(session_obj.paper, "questions", [])
+        ]
+        
+        paper_data = QuestionPaperAdminDetail(
+            id=session_obj.paper.id,
+            name=session_obj.paper.name,
+            description=session_obj.paper.description or "",
+            adminUser=session_obj.paper.admin.full_name if session_obj.paper.admin else None,
+            question_count=session_obj.paper.question_count or len(questions_list),
+            total_marks=session_obj.paper.total_marks or sum(q.marks for q in questions_list),
+            created_at=session_obj.paper.created_at,
+            questions=questions_list
+        )
+
+    # 4. Map Coding Question Paper
+    coding_paper_data = None
+    if session_obj.coding_paper:
+        coding_questions_list = [
+            CodingQuestionAdminDetail(
+                id=cq.id,
+                paper_id=cq.paper_id,
+                title=cq.title or "",
+                problem_statement=cq.problem_statement or "",
+                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
+                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
+                starter_code=cq.starter_code or "",
+                topic=cq.topic or "",
+                difficulty=str(cq.difficulty),
+                marks=cq.marks or 0
+            ) for cq in getattr(session_obj.coding_paper, "questions", [])
+        ]
+        
+        coding_paper_data = CodingPaperAdminDetail(
+            id=session_obj.coding_paper.id,
+            name=session_obj.coding_paper.name,
+            description=session_obj.coding_paper.description or "",
+            adminUser=session_obj.coding_paper.admin.full_name if session_obj.coding_paper.admin else None,
+            question_count=session_obj.coding_paper.question_count or len(coding_questions_list),
+            total_marks=session_obj.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
+            created_at=session_obj.coding_paper.created_at,
+            questions=coding_questions_list
+        )
+
+    return InterviewSessionAdminDetail(
+        id=session_obj.id,
+        access_token=session_obj.access_token,
+        admin_user=admin_data,
+        candidate_user=candidate_data,
+        paper=paper_data,
+        coding_paper=coding_paper_data,
+        schedule_time=session_obj.schedule_time,
+        duration_minutes=session_obj.duration_minutes,
+        max_questions=session_obj.max_questions,
+        start_time=session_obj.start_time,
+        end_time=session_obj.end_time,
+        status=str(session_obj.status.value if hasattr(session_obj.status, 'value') else session_obj.status),
+        total_score=session_obj.total_score,
+        last_activity=session_obj.last_activity,
+        warning_count=session_obj.warning_count or 0,
+        max_warnings=session_obj.max_warnings or 3,
+        is_suspended=session_obj.is_suspended or False,
+        suspension_reason=session_obj.suspension_reason,
+        suspended_at=session_obj.suspended_at,
+        enrollment_audio_path=session_obj.enrollment_audio_path,
+        is_completed=session_obj.is_completed or False
+    )
+
+@router.get("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionAdminDetail])
 async def get_interview(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1004,7 +1111,6 @@ async def get_interview(
     if not interview_session:
         raise HTTPException(status_code=404, detail="Interview session not found")
     
-    # Authorization: verify the session belongs to the requesting admin (handle NULL admin_id)
     if interview_session.admin_id and interview_session.admin_id != current_user.id:
         raise HTTPException(
             status_code=403, 
@@ -1012,129 +1118,17 @@ async def get_interview(
         )
     
     try:
-        # Serialize users with role-based keys, handling NULL users
-        admin_dict = serialize_user(interview_session.admin, fallback_role="admin") if interview_session.admin else None
-        candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate") if interview_session.candidate else None
-        
-        # Serialize paper with related data
-        paper_dict = None
-        if interview_session.paper:
-            paper_admin_dict = serialize_user(interview_session.paper.admin, fallback_role="admin") if interview_session.paper.admin else None
-            paper_questions = [
-                {
-                    "id": q.id,
-                    "content": q.content,
-                    "question_text": q.question_text,
-                    "topic": q.topic,
-                    "difficulty": q.difficulty,
-                    "marks": q.marks,
-                    "response_type": q.response_type
-                }
-                for q in getattr(interview_session.paper, "questions", [])
-            ]
-            
-            paper_dict = {
-                "id": interview_session.paper.id,
-                "name": interview_session.paper.name,
-                "description": interview_session.paper.description,
-                "admin_user": paper_admin_dict,
-                "question_count": interview_session.paper.question_count,
-                "questions": paper_questions,
-                "total_marks": interview_session.paper.total_marks,
-                "created_at": interview_session.paper.created_at.isoformat() if interview_session.paper.created_at else ""
-            }
-
-        # Serialize coding paper
-        coding_paper_dict = None
-        if interview_session.coding_paper:
-            coding_questions = []
-            for q in getattr(interview_session.coding_paper, "questions", []):
-                # Parse examples
-                examples = []
-                if isinstance(q.examples, str):
-                    try:
-                        examples = _json.loads(q.examples)
-                    except:
-                        examples = []
-                elif isinstance(q.examples, list):
-                    examples = q.examples
-                
-                # Parse constraints
-                constraints = []
-                if isinstance(q.constraints, str):
-                    try:
-                        constraints = _json.loads(q.constraints)
-                    except:
-                        constraints = []
-                elif isinstance(q.constraints, list):
-                    constraints = q.constraints
-
-                coding_questions.append({
-                    "id": q.id,
-                    "title": q.title,
-                    "problem_statement": q.problem_statement,
-                    "examples": examples or [],
-                    "constraints": constraints or [],
-                    "starter_code": q.starter_code,
-                    "topic": q.topic,
-                    "difficulty": q.difficulty,
-                    "marks": q.marks
-                })
-            
-            coding_paper_dict = {
-                "id": interview_session.coding_paper.id,
-                "name": interview_session.coding_paper.name,
-                "description": interview_session.coding_paper.description,
-                "admin_user": None,
-                "question_count": interview_session.coding_paper.question_count,
-                "questions": coding_questions,
-                "total_marks": interview_session.coding_paper.total_marks,
-                "created_at": interview_session.coding_paper.created_at.isoformat() if interview_session.coding_paper.created_at else ""
-            }
-        
-        # Build detailed response
-        detail_read = InterviewSessionExpanded(
-            id=interview_session.id,
-            access_token=interview_session.access_token,
-            admin_user=admin_dict,
-            candidate_user=candidate_dict,
-            paper=paper_dict,
-            coding_paper=coding_paper_dict,
-            interview_round=interview_session.interview_round.value if getattr(interview_session, "interview_round", None) else None,
-            schedule_time=interview_session.schedule_time.isoformat() if getattr(interview_session, "schedule_time", None) else "",
-            duration_minutes=getattr(interview_session, "duration_minutes", 0) or 0,
-            max_questions=getattr(interview_session, "max_questions", 0) or 0,
-            status=interview_session.status.value if getattr(interview_session, "status", None) else "SCHEDULED",
-            total_score=interview_session.total_score,
-            current_status=getattr(interview_session, "current_status", ""),
-            last_activity=interview_session.last_activity.isoformat() if getattr(interview_session, "last_activity", None) else "",
-            start_time=interview_session.start_time.isoformat() if getattr(interview_session, "start_time", None) else None,
-            end_time=interview_session.end_time.isoformat() if getattr(interview_session, "end_time", None) else None,
-            warning_count=getattr(interview_session, "warning_count", 0) or 0,
-            max_warnings=getattr(interview_session, "max_warnings", 3) or 3,
-            is_suspended=getattr(interview_session, "is_suspended", False) or False,
-            suspension_reason=getattr(interview_session, "suspension_reason", None),
-            suspended_at=interview_session.suspended_at.isoformat() if getattr(interview_session, "suspended_at", None) else None,
-            enrollment_audio_path=getattr(interview_session, "enrollment_audio_path", None),
-            is_completed=getattr(interview_session, "is_completed", False) or False,
-            allow_copy_paste=getattr(interview_session, "allow_copy_paste", False),
-            allow_question_navigate=getattr(interview_session, "allow_question_navigate", False),
-            response_count=len(interview_session.result.answers) if getattr(interview_session, "result", None) and getattr(interview_session.result, "answers", None) else 0,
-            proctoring_event_count=len(getattr(interview_session, "proctoring_events", [])),
-            enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if getattr(interview_session, "enrollment_audio_path", None) else None,
-            team_id=interview_session.candidate.team_id if interview_session.candidate else None
+        data = _serialize_interview_admin_detail(interview_session)
+        return ApiResponse(
+            status_code=200,
+            data=data,
+            message="Interview details retrieved successfully"
         )
     except Exception as e:
         logger.error(f"Serialization error in get_interview: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while preparing the interview details.")
-    
-    return ApiResponse(
-        status_code=200,
-        data=detail_read,
-        message="Interview details retrieved successfully"
-    )
 
-@router.patch("/interviews/{interview_id}", response_model=ApiResponse[InterviewDetailRead])
+@router.patch("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionAdminDetail])
 async def update_interview(
     interview_id: int,
     update_data: InterviewUpdate,
@@ -1250,31 +1244,10 @@ async def update_interview(
         raise HTTPException(status_code=500, detail="Failed to update interview. Please try again.")
     
     # Return updated interview details
-    admin_dict = serialize_user(interview_session.admin, fallback_role="admin")
-    candidate_dict = serialize_user(interview_session.candidate, fallback_role="candidate")
-    
-    detail_read = InterviewDetailRead(
-        id=interview_session.id,
-        admin_user=admin_dict,
-        candidate_user=candidate_dict,
-        paper_id=interview_session.paper_id,
-        paper_name=interview_session.paper.name if interview_session.paper else "Unknown",
-        schedule_time=interview_session.schedule_time.isoformat(),
-        duration_minutes=interview_session.duration_minutes,
-        status=interview_session.status.value,
-        total_score=interview_session.total_score,
-        start_time=interview_session.start_time.isoformat() if interview_session.start_time else None,
-        end_time=interview_session.end_time.isoformat() if interview_session.end_time else None,
-        access_token=interview_session.access_token,
-        response_count=len(interview_session.result.answers) if interview_session.result else 0,
-        proctoring_event_count=len(interview_session.proctoring_events),
-        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{interview_session.id}" if interview_session.enrollment_audio_path else None,
-        allow_copy_paste=interview_session.allow_copy_paste,
-        allow_question_navigate=interview_session.allow_question_navigate
-    )
+    data = _serialize_interview_admin_detail(interview_session)
     return ApiResponse(
         status_code=200,
-        data=detail_read,
+        data=data,
         message="Interview session updated successfully"
     )
 
@@ -1623,7 +1596,7 @@ async def get_result(
                 content=ans.question.content or "",
                 question_text=ans.question.question_text or "",
                 topic=ans.question.topic or "",
-                Answer=answer_data,
+                answer=answer_data,
                 difficulty=str(ans.question.difficulty),
                 marks=ans.question.marks,
                 response_type=str(ans.question.response_type),
@@ -1637,7 +1610,7 @@ async def get_result(
                 content="",
                 question_text="",
                 topic="",
-                Answer=answer_data,
+                answer=answer_data,
                 difficulty="",
                 marks=0,
                 response_type=""
@@ -1671,7 +1644,7 @@ async def get_result(
                     examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
                     constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
                     starter_code=cq.starter_code or "",
-                    Answer=answer_data,
+                    answer=answer_data,
                     topic=cq.topic or "Algorithms",
                     difficulty=cq.difficulty or "Medium",
                     marks=cq.marks or 0
@@ -1682,7 +1655,7 @@ async def get_result(
                     paper_id=0,
                     title="",
                     problem_statement="",
-                    Answer=answer_data,
+                    answer=answer_data,
                     topic="",
                     difficulty="",
                     marks=0
