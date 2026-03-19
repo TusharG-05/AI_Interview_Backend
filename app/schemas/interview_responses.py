@@ -58,8 +58,16 @@ class PaperNested(BaseModel):
     question_count: int
     total_marks: int
     created_at: datetime
-    questions: List[QuestionWithAnswer]
+    questions: List[QuestionWithAnswer] = []
 
+class PaperNestedWithoutAdmin(BaseModel):
+    id: int
+    name: str
+    description: str
+    question_count: int
+    total_marks: int
+    created_at: datetime
+    questions: List[QuestionWithAnswer] = []
 class CodingQuestionNested(BaseModel):
     id: int
     paper_id: Optional[int] = None
@@ -98,21 +106,29 @@ class CodingPaperNested(BaseModel):
     created_at: datetime
     questions: List[CodingQuestionWithAnswer] = []
 
+class CodingPaperNestedWithoutAdmin(BaseModel):
+    id: int
+    name: str
+    description: str
+    question_count: int
+    total_marks: int
+    created_at: datetime
+    questions: List[CodingQuestionWithAnswer] = []
+    
 class LoginUserNested(BaseModel):
     id: int
     email: str
     full_name: str
     role: str
     access_token: Optional[str] = None
-    team: Optional[TeamReadBasic] = None
 
 class InterviewAccessResponse(BaseModel):
     id: int
     access_token: str
-    admin_user: Optional[UserNested] = None  # Consistent UserNested type
-    candidate_user: Optional[UserNested] = None
-    paper: Optional[PaperNested] = None
-    coding_paper: Optional[CodingPaperNested] = None
+    admin_user: Optional[LoginUserNested] = None
+    candidate_user: Optional[LoginUserNested] = None
+    paper: Optional[PaperNestedWithoutAdmin] = None
+    coding_paper: Optional[CodingPaperNestedWithoutAdmin] = None
     schedule_time: datetime
     duration_minutes: int
     max_questions: int
@@ -166,7 +182,7 @@ class QuestionPaperData(BaseModel):
     description: str
     admin_user: Union[UserNested, int]  # Handles object or FK int depending on endpoint
     question_count: Optional[int] = None
-    questions: Optional[List[QuestionData]] = None
+    questions: Optional[List[QuestionWithAnswer]] = None
     total_marks: Optional[int] = None
     created_at: datetime
 
@@ -265,8 +281,6 @@ class InterviewSessionData(BaseModel):
 class AdminResultData(BaseModel):
     id: int
     interview: InterviewSessionData
-    interview_responses: List[QuestionWithAnswer] = []
-    coding_responses: List[CodingQuestionWithAnswer] = []
     total_score: float
     result_status: Optional[str] = "PENDING"
     created_at: datetime

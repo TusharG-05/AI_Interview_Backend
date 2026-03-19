@@ -195,6 +195,7 @@ async def upload_selfie(
         logger.error(f"Embedding generation failed: {e}")
         
     # 4. Finalize
+    current_user.profile_image_bytes = image_bytes
     session.add(current_user)
     
     try:

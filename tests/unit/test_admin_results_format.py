@@ -91,7 +91,9 @@ def test_print_admin_results_format(session, client):
     
     # Simple assertions to verify top-level requested keys exist
     data = response.json()["data"]
-    assert "interview" in data  # API returns 'interview' not 'interview_data'
+    assert "interview" in data
     assert "interview_responses" in data
     assert len(data["interview_responses"]) > 0
-    assert "question" in data["interview_responses"][0]  # API returns 'question' not 'question_id'
+    # The response is now flattened: content, question_text, topic, etc. are at the top level
+    assert "content" in data["interview_responses"][0]
+    assert "answer" in data["interview_responses"][0]

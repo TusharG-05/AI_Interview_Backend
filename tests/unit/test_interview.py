@@ -120,7 +120,7 @@ def test_submit_answer_text(session, client, test_users, auth_headers):
     }
     response = client.post("/api/interview/submit-answer-text", data=payload, headers=auth_headers)
     assert response.status_code == 200
-    assert response.json()["data"]["question"]["id"] == question.id
+    assert response.json()["data"]["id"] == question.id
 
     from app.models.db_models import Answers
     assert session.query(Answers).count() == 1
@@ -201,8 +201,8 @@ def test_submit_answer_text_evaluates_immediately(session, client, test_users, a
     data = response.json()["data"]
 
     # Score and feedback must be in the response immediately
-    assert data["score"] == 9.0, f"Expected score=9.0 in response, got {data['score']}"
-    assert data["feedback"] == "Excellent"
+    assert data["answer"]["score"] == 9.0, f"Expected score=9.0 in response['answer'], got {data['answer']['score']}"
+    assert data["answer"]["feedback"] == "Excellent"
 
     # InterviewResult.total_score must reflect the sum
     result_obj = session.exec(

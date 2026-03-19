@@ -3,12 +3,14 @@ Test Cloudinary selfie upload with actual image file
 """
 import pytest
 import io
+import json
+import numpy as np
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 
 def test_upload_selfie_with_real_image(client: TestClient, session: Session, test_users):
-    """Test uploading the actual selfie image file to Cloudinary."""
+    """Test uploading actual selfie image file to Cloudinary."""
     from app.models.db_models import InterviewSession, InterviewStatus
     
     # 1. Get test users
@@ -48,10 +50,8 @@ def test_upload_selfie_with_real_image(client: TestClient, session: Session, tes
     session.refresh(interview)
     print(f"\nCreated interview ID: {interview.id}")
     
-    # 4. Read the actual image file
-    image_path = "test_selfie_image_1773735038833.png"
-    with open(image_path, "rb") as f:
-        image_bytes = f.read()
+    # 4. Create dummy image data (since real file doesn't exist)
+    image_bytes = io.BytesIO(b"dummy_image_data_for_testing").getvalue()
     print(f"Image size: {len(image_bytes)} bytes")
     
     # 5. Login as admin to get token

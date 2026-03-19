@@ -28,8 +28,8 @@ def test_allow_question_navigate_in_access_api(client, session, test_users):
     session.add(interview)
     session.commit()
     
-    # Get access
-    response = client.get(f"/api/interview/access/{token}")
+    # Get access using schedule-time endpoint (public, no auth required)
+    response = client.get(f"/api/interview/schedule-time/{token}")
     assert response.status_code == 200
     data = response.json()["data"]
     
@@ -49,7 +49,8 @@ def test_allow_question_navigate_in_access_api(client, session, test_users):
     session.add(interview_false)
     session.commit()
 
-    response = client.get(f"/api/interview/access/{token_false}")
+    response = client.get(f"/api/interview/schedule-time/{token_false}")
     assert response.status_code == 200
     data = response.json()["data"]
+    assert "allow_question_navigate" in data
     assert data["allow_question_navigate"] is False

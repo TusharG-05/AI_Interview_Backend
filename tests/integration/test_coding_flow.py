@@ -115,7 +115,7 @@ def test_coding_interview_flow(client, session, auth_headers, test_users):
         }
         response = client.post("/api/interview/submit-answer-code", data=data_payload)
         assert response.status_code == 200
-        assert response.json()["data"]["score"] == 10.0
+        assert response.json()["data"]["answer"]["score"] == 10.0
         
         # Verify Answer and Result in DB
         answer = session.query(CodingAnswers).filter(CodingAnswers.coding_question_id == cq_id).first()

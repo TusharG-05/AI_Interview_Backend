@@ -13,9 +13,9 @@ from ..schemas.interview_responses import (
     InterviewAccessResponse, 
     TabSwitchRequest,
     UserNested, 
-    PaperNested, 
+    PaperNested, PaperNestedWithoutAdmin,
     QuestionNested, 
-    CodingPaperNested, 
+    CodingPaperNested, CodingPaperNestedWithoutAdmin,
     CodingQuestionNested,
     CodingQuestionBasic,
     AnswersData,
@@ -169,6 +169,7 @@ async def access_interview(
     """
     from sqlalchemy.orm import selectinload
     from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus
+    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, LoginUserNested
 
     # Query with all relationships preloaded to avoid N+1 issues
     session = session_db.exec(
@@ -187,33 +188,27 @@ async def access_interview(
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
         
-    # Map Administrator
     admin_data = None
     if session.admin:
-        from .teams import _serialize_team_basic
-        admin_data = UserNested(
+        admin_data = LoginUserNested(
             id=session.admin.id,
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token or "",
-            team=_serialize_team_basic(session.admin.team, session_db) if session.admin.team else None
+            access_token=session.admin.access_token or ""
         )
 
     # Map Candidate
     candidate_data = None
     if session.candidate:
-        from .teams import _serialize_team_basic
-        candidate_data = UserNested(
+        candidate_data = LoginUserNested(
             id=session.candidate.id,
             email=session.candidate.email,
             full_name=session.candidate.full_name,
             role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token or "",
-            team=_serialize_team_basic(session.candidate.team, session_db) if session.candidate.team else None
+            access_token=session.candidate.access_token or ""
         )
 
-    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
     import json as _json
 
     # Pre-fetch existing answers if results exist
@@ -260,11 +255,10 @@ async def access_interview(
             ) for q in session.paper.questions
         ]
         
-        paper_data = PaperNested(
+        paper_data = PaperNestedWithoutAdmin(
             id=session.paper.id,
             name=session.paper.name,
             description=session.paper.description or "",
-            admin_user=serialize_user(session.admin) if session.admin else None,
             question_count=session.paper.question_count or len(questions_list),
             total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
             created_at=session.paper.created_at,
@@ -290,11 +284,10 @@ async def access_interview(
             ) for cq in session.coding_paper.questions
         ]
         
-        coding_paper_data = CodingPaperNested(
+        coding_paper_data = CodingPaperNestedWithoutAdmin(
             id=session.coding_paper.id,
             name=session.coding_paper.name,
             description=session.coding_paper.description or "",
-            admin_user=serialize_user(session.coding_paper.admin) if session.coding_paper.admin else None,
             question_count=session.coding_paper.question_count or len(coding_questions_list),
             total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session.coding_paper.created_at,
@@ -920,7 +913,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                 status_code=200,
                 data={
                     "question_id": proxy_q.id,
-                    "coding_question": next_cq.id,
+                    "coding_question": next_cq,
                     "text": next_cq.title,
                     "audio_url": f"/interview/audio/question/{proxy_q.id}",
                     "response_type": "code",
@@ -1532,7 +1525,7 @@ async def log_tab_switch(
         if session_obj.tab_switch_count >= 3:
             # Immediate termination
             session_obj.is_suspended = True
-            session_obj.suspension_reason = "EXCESSIVE_TAB_SWITCH"
+            session_obj.suspension_reason = "multiple_tab_switch"
             session_obj.suspended_at = now
             session_obj.tab_warning_active = False # Deactivate warning as it's now a termination
             
@@ -1540,13 +1533,17 @@ async def log_tab_switch(
                 session=session_db,
                 interview_session=session_obj,
                 new_status=CandidateStatus.SUSPENDED,
-                metadata={"reason": "EXCESSIVE_TAB_SWITCH", "count": session_obj.tab_switch_count}
+                metadata={"reason": "multiple_tab_switch", "count": session_obj.tab_switch_count}
             )
+            # Ensure database is committed before raising exception
+            session_db.add(session_obj)
+            session_db.commit()
+
             raise HTTPException(
                 status_code=403,
                 detail={
                     "is_suspended": True,
-                    "reason": "EXCESSIVE_TAB_SWITCH",
+                    "reason": "multiple_tab_switch",
                     "message": "Interview terminated due to excessive tab switching."
                 }
             )
@@ -1565,7 +1562,7 @@ async def log_tab_switch(
             if elapsed > 30:
                 # Terminate
                 session_obj.is_suspended = True
-                session_obj.suspension_reason = "TAB_TIMEOUT"
+                session_obj.suspension_reason = "tab_switch_timeout"
                 session_obj.suspended_at = now
                 session_obj.tab_warning_active = False
                 
@@ -1573,13 +1570,17 @@ async def log_tab_switch(
                     session=session_db,
                     interview_session=session_obj,
                     new_status=CandidateStatus.SUSPENDED,
-                    metadata={"reason": "TAB_TIMEOUT", "elapsed_seconds": elapsed}
+                    metadata={"reason": "tab_switch_timeout", "elapsed_seconds": elapsed}
                 )
+                # Ensure database is committed before raising exception
+                session_db.add(session_obj)
+                session_db.commit()
+
                 raise HTTPException(
                     status_code=403,
                     detail={
                         "is_suspended": True,
-                        "reason": "TAB_TIMEOUT",
+                        "reason": "tab_switch_timeout",
                         "message": "Interview terminated due to tab-switch timeout."
                     }
                 )
@@ -1691,7 +1692,7 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
         if elapsed > 30:
             logger.warning(f"Session {session_obj.id}: Proactive termination due to tab-switch timeout ({elapsed}s)")
             session_obj.is_suspended = True
-            session_obj.suspension_reason = "TAB_TIMEOUT"
+            session_obj.suspension_reason = "tab_switch_timeout"
             session_obj.suspended_at = now
             session_obj.tab_warning_active = False
             
@@ -1700,7 +1701,7 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
                 session=db,
                 interview_session=session_obj,
                 new_status=CandidateStatus.SUSPENDED,
-                metadata={"reason": "TAB_TIMEOUT", "proactive": True, "elapsed_seconds": elapsed}
+                metadata={"reason": "tab_switch_timeout", "proactive": True, "elapsed_seconds": elapsed}
             )
             db.add(session_obj)
             db.commit()

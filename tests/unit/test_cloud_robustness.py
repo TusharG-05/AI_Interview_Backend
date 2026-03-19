@@ -63,6 +63,7 @@ def test_face_recognizer_builds_sface_even_on_cloud(mock_getenv):
 
 @patch("app.services.interview.os.getenv")
 @patch("app.services.interview.InferenceClient")
+@patch("app.services.interview.groq_client", None)
 def test_llm_fallback_to_hf(mock_hf_client, mock_getenv):
     mock_getenv.side_effect = lambda k, default=None: {
         "USE_MODAL": "false",
