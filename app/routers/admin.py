@@ -1089,6 +1089,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> Intervie
         candidate_user=candidate_data,
         paper=paper_data,
         coding_paper=coding_paper_data,
+        interview_round=str(session_obj.interview_round.value if hasattr(session_obj.interview_round, 'value') else session_obj.interview_round) if session_obj.interview_round else None,
         schedule_time=session_obj.schedule_time,
         duration_minutes=session_obj.duration_minutes,
         max_questions=session_obj.max_questions,

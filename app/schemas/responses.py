@@ -374,6 +374,7 @@ class InterviewSessionAdminDetail(BaseModel):
     candidate_user: Optional[UserAdminDetail] = None
     paper: Optional[QuestionPaperAdminDetail] = None
     coding_paper: Optional[CodingPaperAdminDetail] = None
+    interview_round: Optional[str] = None
     schedule_time: datetime
     duration_minutes: int
     max_questions: int
