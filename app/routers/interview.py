@@ -190,23 +190,27 @@ async def access_interview(
         
     admin_data = None
     if session.admin:
+        from .teams import _serialize_team_basic
         admin_data = LoginUserNested(
             id=session.admin.id,
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token or ""
+            access_token=session.admin.access_token or "",
+            team=_serialize_team_basic(session.admin.team, session_db) if session.admin.team else None
         )
 
     # Map Candidate
     candidate_data = None
     if session.candidate:
+        from .teams import _serialize_team_basic
         candidate_data = LoginUserNested(
             id=session.candidate.id,
             email=session.candidate.email,
             full_name=session.candidate.full_name,
             role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token or ""
+            access_token=session.candidate.access_token or "",
+            team=_serialize_team_basic(session.candidate.team, session_db) if session.candidate.team else None
         )
 
     import json as _json
@@ -832,19 +836,31 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                 )
             ).all()
 
-            # Answered coding questions (tracked via proxy Questions rows tagged with topic="coding_proxy")
-            answered_proxy_ids = set(answered_ids)  # already collected above
+            # Answered coding questions: check BOTH proxy Answers rows AND the CodingAnswers table directly.
+            # submit-answer-code stores to CodingAnswers (not Answers), so we must check both.
+            answered_proxy_ids = set(answered_ids)  # already collected from Answers table above
 
-            # Find answered coding question IDs via proxy Questions title match isn't reliable;
-            # instead we tag proxy rows uniquely: question_text = f"__coding__{cq.id}"
+            # 1. Proxy-based: proxy rows tagged with question_text = f"__coding__{cq.id}"
             answered_coding_cq_ids = set()
             for qid in answered_proxy_ids:
                 proxy = session_db.get(Questions, qid)
-                if proxy and proxy.question_text.startswith("__coding__"):
+                if proxy and proxy.question_text and proxy.question_text.startswith("__coding__"):
                     try:
                         answered_coding_cq_ids.add(int(proxy.question_text.split("__coding__")[1]))
                     except (ValueError, IndexError):
                         pass
+
+            # 2. Direct: check CodingAnswers table for this interview result
+            from ..models.db_models import CodingAnswers, InterviewResult
+            interview_result = session_db.exec(
+                select(InterviewResult).where(InterviewResult.interview_id == interview_id)
+            ).first()
+            if interview_result:
+                direct_coding_answers = session_db.exec(
+                    select(CodingAnswers).where(CodingAnswers.interview_result_id == interview_result.id)
+                ).all()
+                for ca in direct_coding_answers:
+                    answered_coding_cq_ids.add(ca.coding_question_id)
 
             # Pick the next un-answered coding question
             next_cq = next(
@@ -913,6 +929,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                 status_code=200,
                 data={
                     "question_id": proxy_q.id,
+                    "coding_question_id": next_cq.id,  # The REAL CodingQuestions ID — use this for submit-answer-code
                     "coding_question": next_cq,
                     "text": next_cq.title,
                     "audio_url": f"/interview/audio/question/{proxy_q.id}",
