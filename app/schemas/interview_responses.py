@@ -100,7 +100,7 @@ class CodingPaperNested(BaseModel):
     id: int
     name: str
     description: str
-    admin_user: Optional[UserNested] = None
+    admin_user: Optional[Union[UserNested, int]] = None
     question_count: int
     total_marks: int
     created_at: datetime
@@ -121,6 +121,7 @@ class LoginUserNested(BaseModel):
     full_name: str
     role: str
     access_token: Optional[str] = None
+    team: Optional[TeamReadBasic] = None
 
 class InterviewAccessResponse(BaseModel):
     id: int
@@ -251,26 +252,27 @@ class AnswersDataAdmin(BaseModel):
 class InterviewSessionData(BaseModel):
     id: int
     access_token: str
+    invite_link: Optional[str] = None
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
-    paper: Optional[QuestionPaperData] = None
-    coding_paper: Optional[CodingPaperNested] = None
-    schedule_time: datetime
-    duration_minutes: int
-    max_questions: int
+    paper: Optional[PaperNestedWithoutAdmin] = None
+    coding_paper: Optional[CodingPaperNestedWithoutAdmin] = None
+    schedule_time: Optional[datetime] = None
+    duration_minutes: int = 1440
+    max_questions: Optional[int] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    status: str
+    status: str = "SCHEDULED"
     total_score: Optional[float] = None
-    current_status: str
-    last_activity: datetime
-    warning_count: int
-    max_warnings: int
-    is_suspended: bool
+    current_status: Optional[str] = ""
+    last_activity: Optional[datetime] = None
+    warning_count: int = 0
+    max_warnings: int = 3
+    is_suspended: bool = False
     suspension_reason: Optional[str] = None
     suspended_at: Optional[datetime] = None
     enrollment_audio_path: Optional[str] = None
-    is_completed: bool
+    is_completed: bool = False
     allow_copy_paste: bool = False
     allow_question_navigate: bool = False
     tab_switch_count: int = 0
@@ -282,5 +284,6 @@ class AdminResultData(BaseModel):
     id: int
     interview: InterviewSessionData
     total_score: float
+    max_marks: float
     result_status: Optional[str] = "PENDING"
     created_at: datetime

@@ -37,6 +37,7 @@ from ..schemas.interview_result import (
     InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested,
     CodingPaperNested, CodingQuestionNested
 )
+from ..schemas.interview_responses import PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin
 from ..schemas.api_response import ApiResponse, create_response
 from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
@@ -1386,6 +1387,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
             selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.paper),
             selectinload(InterviewSession.coding_paper)
         )
     ).all()
@@ -1415,18 +1417,23 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         # 3. Paper
         paper_obj = None
         if s.paper:
-            paper_obj = QuestionPaperNested(
-                id=s.paper.id, name=s.paper.name, description=s.paper.description, 
-                admin_user=serialize_user(s.paper.admin) if s.paper.admin else s.paper.admin_user, created_at=s.paper.created_at
+            p_total = s.paper.total_marks if s.paper.total_marks else sum(q.marks or 0 for q in s.paper.questions)
+            paper_obj = PaperNestedWithoutAdmin(
+                id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
+                question_count=s.paper.question_count or len(s.paper.questions), 
+                total_marks=p_total,
+                created_at=s.paper.created_at
             )
             
         # 3.1 Coding Paper
         coding_paper_obj = None
         if s.coding_paper:
-            coding_paper_obj = CodingPaperNested(
-                id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description,
-                admin_user=serialize_user(s.coding_paper.admin) if s.coding_paper.admin else s.coding_paper.admin_user, created_at=s.coding_paper.created_at,
-                question_count=s.coding_paper.question_count, total_marks=s.coding_paper.total_marks
+            cp_total = s.coding_paper.total_marks if s.coding_paper.total_marks else sum(q.marks or 0 for q in s.coding_paper.questions)
+            coding_paper_obj = CodingPaperNestedWithoutAdmin(
+                id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
+                question_count=s.coding_paper.question_count or len(s.coding_paper.questions), 
+                total_marks=cp_total,
+                created_at=s.coding_paper.created_at
             )
             
         # 4. Session Nested
@@ -1460,11 +1467,13 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         )
             
         # 5. Top Level Result
+        max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
         results.append(InterviewResultBrief(
             id=s.result.id,
             interview=session_nested,
             result_status=s.result.result_status or "PENDING",
-            total_score=s.result.total_score,
+            total_score=s.result.total_score or 0.0,
+            max_marks=float(max_marks),
             created_at=s.result.created_at
         ))
 
@@ -1573,12 +1582,13 @@ async def get_result(
                 response_type=str(q.response_type), coding_content=coding_content
             ))
             
-        paper_obj = QuestionPaperData(
+        p_total = s.paper.total_marks if s.paper.total_marks else sum(q.marks or 0 for q in s.paper.questions)
+        paper_obj = PaperNestedWithoutAdmin(
             id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
-            admin_user=serialize_user(s.paper.admin), created_at=s.paper.created_at,
             question_count=len(questions_with_answers),
             questions=questions_with_answers,
-            total_marks=s.paper.total_marks
+            total_marks=p_total,
+            created_at=s.paper.created_at
         )
         
     # 3.1 Coding Paper with Nested Answers
@@ -1620,11 +1630,11 @@ async def get_result(
                 marks=q.marks or 0
             ))
 
-        coding_paper_obj = CodingPaperNested(
+        cp_total = s.coding_paper.total_marks if s.coding_paper.total_marks else sum(q.marks or 0 for q in s.coding_paper.questions)
+        coding_paper_obj = CodingPaperNestedWithoutAdmin(
             id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
-            admin_user=serialize_user(s.coding_paper.admin),
             question_count=len(coding_questions_with_answers),
-            total_marks=s.coding_paper.total_marks,
+            total_marks=cp_total,
             created_at=s.coding_paper.created_at,
             questions=coding_questions_with_answers
         )
@@ -1650,10 +1660,12 @@ async def get_result(
     )
     
     # 5. Final Result Assembler
+    max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
     result_detail = AdminResultData(
         id=s.result.id,
         interview=session_nested,
         total_score=s.result.total_score or 0.0,
+        max_marks=float(max_marks),
         result_status=s.result.result_status or "PENDING",
         created_at=s.result.created_at or datetime.now(timezone.utc)
     )

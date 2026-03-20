@@ -5,9 +5,10 @@ from datetime import datetime
 from .user_schemas import UserNested
 from .interview_responses import (
     QuestionPaperData as QuestionPaperNested,
-    QuestionNested,
+    QuestionNested,PaperNestedWithoutAdmin,
     CodingQuestionNested,
-    CodingPaperNested
+    CodingPaperNested,
+    CodingPaperNestedWithoutAdmin
 )
 
 class InterviewSessionNested(BaseModel):
@@ -16,14 +17,14 @@ class InterviewSessionNested(BaseModel):
     invite_link: Optional[str] = None
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
-    question_paper: Optional[QuestionPaperNested] = None
-    coding_paper: Optional[CodingPaperNested] = None
+    question_paper: Optional[PaperNestedWithoutAdmin] = None
+    coding_paper: Optional[CodingPaperNestedWithoutAdmin] = None
     schedule_time: Optional[datetime] = None
     duration_minutes: int = 1440
     max_questions: Optional[int] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    status: str
+    status: str = "SCHEDULED"
     total_score: Optional[float] = None
     current_status: Optional[str] = None
     last_activity: Optional[datetime] = None
