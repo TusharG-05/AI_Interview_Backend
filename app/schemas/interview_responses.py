@@ -15,17 +15,38 @@ class AnswerShort(BaseModel):
     transcribed_text: Optional[str] = None
     timestamp: datetime
 
+class ProctoringEventRead(BaseModel):
+    id: Optional[int] = None
+    warning_count: int
+    max_warnings: int = 3
+    is_suspended: bool = False
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+    allow_copy_paste: bool = False
+    allow_question_navigation: bool = False
+
 class QuestionWithAnswer(BaseModel):
     id: int
     paper_id: Optional[int] = None
     content: str
     question_text: str
     topic: str
-    answer: Optional[AnswerShort] = None  # Nested & Optional (lowercase per request)
+    answer: Optional[AnswerShort] = None
     difficulty: str
     marks: int
     response_type: str
-    coding_content: Optional[dict] = None  # Added for admin results consistency
+    coding_content: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def populate_coding_content(self) -> "QuestionWithAnswer":
+        if self.response_type == "code" and self.coding_content is None and self.content:
+            try:
+                parsed = _json.loads(self.content)
+                if isinstance(parsed, dict) and "title" in parsed:
+                    self.coding_content = parsed
+            except: pass
+        return self
 
 class CodingQuestionWithAnswer(BaseModel):
     id: int
@@ -35,22 +56,22 @@ class CodingQuestionWithAnswer(BaseModel):
     examples: List[Any] = []
     constraints: List[str] = []
     starter_code: Optional[str] = None
-    answer: Optional[AnswerShort] = None  # Lowercase 'answer' per request
+    answer: Optional[AnswerShort] = None
     topic: str
     difficulty: str
     marks: int
 
-class QuestionNested(BaseModel):
+class PaperNestedWithAdminId(BaseModel):
     id: int
-    paper_id: Optional[int] = None
-    content: str
-    question_text: str
-    topic: str
-    difficulty: str
-    marks: int
-    response_type: str
+    name: str
+    description: str
+    admin_user: Optional[int] = None
+    question_count: int
+    total_marks: int
+    created_at: datetime
+    questions: List[QuestionWithAnswer] = []
 
-class PaperNested(BaseModel):
+class CodingPaperNestedWithAdmin(BaseModel):
     id: int
     name: str
     description: str
@@ -58,63 +79,9 @@ class PaperNested(BaseModel):
     question_count: int
     total_marks: int
     created_at: datetime
-    questions: List[QuestionWithAnswer] = []
-
-class PaperNestedWithoutAdmin(BaseModel):
-    id: int
-    name: str
-    description: str
-    question_count: int
-    total_marks: int
-    created_at: datetime
-    questions: List[QuestionWithAnswer] = []
-class CodingQuestionNested(BaseModel):
-    id: int
-    paper_id: Optional[int] = None
-    title: str
-    problem_statement: str
-    examples: List[Any] = []
-    constraints: List[str] = []
-    starter_code: str
-    topic: str
-    difficulty: str
-    marks: int
-
-    @model_validator(mode="before")
-    @classmethod
-    def parse_json_fields(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            data = dict(data)
-            for field in ("examples", "constraints"):
-                raw = data.get(field)
-                if isinstance(raw, str):
-                    try:
-                        data[field] = _json.loads(raw)
-                    except:
-                        data[field] = [] if field == "examples" else []
-                elif raw is None:
-                    data[field] = [] if field == "examples" else []
-        return data
-
-class CodingPaperNested(BaseModel):
-    id: int
-    name: str
-    description: str
-    admin_user: Optional[Union[UserNested, int]] = None
-    question_count: int
-    total_marks: int
-    created_at: datetime
     questions: List[CodingQuestionWithAnswer] = []
+    team_id: Optional[int] = None
 
-class CodingPaperNestedWithoutAdmin(BaseModel):
-    id: int
-    name: str
-    description: str
-    question_count: int
-    total_marks: int
-    created_at: datetime
-    questions: List[CodingQuestionWithAnswer] = []
-    
 class LoginUserNested(BaseModel):
     id: int
     email: str
@@ -128,8 +95,8 @@ class InterviewAccessResponse(BaseModel):
     access_token: str
     admin_user: Optional[LoginUserNested] = None
     candidate_user: Optional[LoginUserNested] = None
-    paper: Optional[PaperNestedWithoutAdmin] = None
-    coding_paper: Optional[CodingPaperNestedWithoutAdmin] = None
+    paper: Optional[PaperNestedWithAdminId] = None
+    coding_paper: Optional[CodingPaperNestedWithAdmin] = None
     schedule_time: datetime
     duration_minutes: int
     max_questions: int
@@ -149,141 +116,97 @@ class InterviewAccessResponse(BaseModel):
     tab_warning_active: bool = False
     allow_copy_paste: bool = False
     allow_question_navigate: bool = False
-    result_status: Optional[str] = "PENDING"
-
-class TabSwitchRequest(BaseModel):
-    event_type: str  # "TAB_SWITCH" or "TAB_RETURN"
-
-class QuestionData(BaseModel):
-    id: int
-    paper_id: Optional[int] = None
-    content: str
-    question_text: str
-    topic: str
-    difficulty: str
-    marks: int
-    response_type: str
-    coding_content: Optional[dict] = None  # Populated for response_type='code' questions
-
-    @model_validator(mode="after")
-    def populate_coding_content(self) -> "QuestionData":
-        """If this is a code-type question with JSON content, parse it into coding_content."""
-        if self.response_type == "code" and self.coding_content is None and self.content:
-            try:
-                parsed = _json.loads(self.content)
-                if isinstance(parsed, dict) and "title" in parsed:
-                    self.coding_content = parsed
-            except (_json.JSONDecodeError, TypeError):
-                pass
-        return self
-
-class QuestionPaperData(BaseModel):
-    id: int
-    name: str
-    description: str
-    admin_user: Union[UserNested, int]  # Handles object or FK int depending on endpoint
-    question_count: Optional[int] = None
-    questions: Optional[List[QuestionWithAnswer]] = None
-    total_marks: Optional[int] = None
-    created_at: datetime
-
-class AnswersData(BaseModel):
-    id: int
-    interview_result_id: int
-    question: QuestionData
-    candidate_answer: str
-    feedback: str
-    score: float
-    audio_path: Optional[str] = None
-    transcribed_text: Optional[str] = None
-    timestamp: datetime
-
-class CodingQuestionBasic(BaseModel):
-    id: int
-    paper_id: int
-    title: str
-    problem_statement: str
-    examples: List[dict] = []
-    constraints: List[str] = []
-    starter_code: Optional[str] = None
-    topic: str
-    difficulty: str
-    marks: int
-
-    @model_validator(mode="before")
-    @classmethod
-    def parse_json_fields(cls, data: Any) -> Any:
-        """Parse JSON-encoded examples and constraints strings into Python lists."""
-        if isinstance(data, dict):
-            # Already a dict, handle potential string fields within it
-            data = dict(data)
-            for field in ("examples", "constraints"):
-                raw = data.get(field)
-                if isinstance(raw, str):
-                    try:
-                        data[field] = _json.loads(raw)
-                    except (_json.JSONDecodeError, TypeError):
-                        data[field] = []
-        return data
-
-class CodingAnswersData(BaseModel):
-    id: int
-    interview_result_id: int
-    coding_question: CodingQuestionBasic
-    candidate_answer: str
-    feedback: str
-    score: float
-    audio_path: Optional[str] = None
-    transcribed_text: Optional[str] = None
-    timestamp: datetime
-
-class AnswersDataAdmin(BaseModel):
-    id: int
-    interview_result_id: int
-    question: Optional[QuestionData] = None  # Lowercase q specifically requested for admin results
-    coding_question: Optional[CodingQuestionNested] = None
-    candidate_answer: str
-    feedback: str
-    score: float
-    audio_path: Optional[str] = None
-    transcribed_text: Optional[str] = None
-    timestamp: datetime
+    result_status: str = "PENDING"
 
 class InterviewSessionData(BaseModel):
     id: int
     access_token: str
-    invite_link: Optional[str] = None
+    invite_link: str
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
-    paper: Optional[PaperNestedWithoutAdmin] = None
-    coding_paper: Optional[CodingPaperNestedWithoutAdmin] = None
+    paper: Optional[PaperNestedWithAdminId] = None
+    coding_paper: Optional[CodingPaperNestedWithAdmin] = None
     schedule_time: Optional[datetime] = None
     duration_minutes: int = 1440
     max_questions: Optional[int] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    status: str = "SCHEDULED"
-    total_score: Optional[float] = None
-    current_status: Optional[str] = ""
+    status: str
+    response_count: int = 0
     last_activity: Optional[datetime] = None
-    warning_count: int = 0
-    max_warnings: int = 3
-    is_suspended: bool = False
-    suspension_reason: Optional[str] = None
-    suspended_at: Optional[datetime] = None
+    result_status: str = "PENDING"
+    max_marks: float = 0.0
+    total_score: float = 0.0
     enrollment_audio_path: Optional[str] = None
+    enrollment_audio_url: Optional[str] = None
     is_completed: bool = False
-    allow_copy_paste: bool = False
-    allow_question_navigate: bool = False
-    tab_switch_count: int = 0
-    tab_switch_timestamp: Optional[datetime] = None
-    tab_warning_active: bool = False
-    result_status: Optional[str] = "PENDING"
+    proctoring_event: Optional[ProctoringEventRead] = None
 
-class AdminResultData(BaseModel):
+def remove_none_values(obj: Any) -> Any:
+    if isinstance(obj, list):
+        return [remove_none_values(i) for i in obj if i is not None]
+    elif isinstance(obj, dict):
+        return {k: remove_none_values(v) for k, v in obj.items() if v is not None}
+    return obj
+
+# Compatibility Aliases
+QuestionNested = QuestionWithAnswer
+CodingQuestionNested = CodingQuestionWithAnswer
+PaperNested = PaperNestedWithAdminId
+QuestionPaperData = PaperNestedWithAdminId
+CodingPaperNested = CodingPaperNestedWithAdmin
+AnswersDataAdmin = AnswerShort
+
+class QuestionData(BaseModel):
     id: int
-    interview: InterviewSessionData
-    total_score: float
-    max_marks: float
-    result_status: Optional[str] = "PENDING"
+    paper_id: Optional[int] = None
+    content: str
+
+class QuestionPaperNested(BaseModel):
+    id: int
+    name: str
+
+class CodingQuestionBasic(BaseModel):
+    id: int
+    title: str
+    problem_statement: str
+    difficulty: str
+    marks: int
+
+class PaperNestedWithoutAdmin(BaseModel):
+    id: int
+    name: str
+    description: str
+    question_count: int
+    total_marks: int
     created_at: datetime
+    questions: List[QuestionWithAnswer] = []
+
+class CodingPaperNestedWithoutAdmin(BaseModel):
+    id: int
+    name: str
+    description: str
+    question_count: int
+    total_marks: int
+    created_at: datetime
+    questions: List[CodingQuestionWithAnswer] = []
+
+class AnswersData(BaseModel):
+    id: int
+    interview_result_id: int
+    candidate_answer: str
+    feedback: str
+    score: float
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
+    timestamp: datetime
+
+class CodingAnswersData(BaseModel):
+    id: int
+    interview_result_id: int
+    candidate_answer: str
+    feedback: str
+    score: float
+    audio_path: Optional[str] = None
+    transcribed_text: Optional[str] = None
+    timestamp: datetime

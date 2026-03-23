@@ -263,8 +263,8 @@ echo "━━━ 4. USERS CRUD ━━━"
 
 UNIQUE_CRUD_EMAIL="e2e_crud_user_$(date +%s)@test.com"
 RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/admin/users" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
-  -d "{\"email\":\"$UNIQUE_CRUD_EMAIL\",\"password\":\"test123\",\"full_name\":\"CRUD Test User\",\"role\":\"CANDIDATE\"}")
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "email=$UNIQUE_CRUD_EMAIL" -F "password=test123" -F "full_name=CRUD Test User" -F "role=CANDIDATE")
 split_response "$RESP"
 check "POST /admin/users (create)" "200 201" "$CODE" "$BODY"
 CRUD_USER_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
@@ -350,7 +350,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         # Upload selfie
         RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/interview/upload-selfie" \
           -H "Authorization: Bearer $CAND_TOKEN" \
-          -F "interview_id=$INT_ID" \
+          -F "candidate_id=$CAND_ID" \
           -F "file=@/tmp/api_test/selfie.jpg;type=image/jpeg")
         split_response "$RESP"
         check "POST /interview/upload-selfie" "200" "$CODE" "$BODY"
@@ -438,8 +438,8 @@ if [ -n "$RESULT_INT" ]; then
     split_response "$RESP"
     check "GET /admin/results/$RESULT_INT (detail)" "200" "$CODE" "$BODY"
 
-    # Get response ID from answers
-    RESP_ID=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; ans=d.get('answers',[]); print(ans[0]['id'] if ans else '')" 2>/dev/null || echo "")
+    # Get individual response ID from questions
+    RESP_ID=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; questions=d.get('paper',{}).get('questions',[]); answers=[q['answer'] for q in questions if q.get('answer')]; print(answers[0]['id'] if answers else '')" 2>/dev/null || echo "")
 
     if [ -n "$RESP_ID" ]; then
         RESP=$(curl -s --max-time 60 -w "\n%{http_code}" "$BASE/admin/interviews/response/$RESP_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
@@ -516,6 +516,15 @@ RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools
   -F "audio=@/tmp/api_test/audio.wav;type=audio/wav")
 split_response "$RESP"
 check "POST /interview/tools/speech-to-text" "200" "$CODE" "$BODY"
+
+# STT Evaluate
+RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/sttEvaluate" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "audio=@/tmp/api_test/audio.wav;type=audio/wav" \
+  -F "question_text=What is Python?" \
+  -F "expected_answer=Python is a programming language")
+split_response "$RESP"
+check "POST /interview/tools/sttEvaluate" "200 500" "$CODE" "$BODY"
 
 # Question audio (for existing question)
 if [ -n "$Q_ID" ]; then

@@ -49,7 +49,7 @@ def test_audio_service_skips_local_on_cloud(mock_getenv, dummy_wav):
     service = AudioService()
     result = asyncio_run(service.speech_to_text(dummy_wav))
     
-    assert "[STT Error: Cloud Environment detected. Skipping heavy local STT fallback.]" == result
+    assert "[STT Error: Cloud Environment detected. Skipping local STT fallback.]" == result
 
 @patch("app.services.face.os.getenv")
 def test_face_recognizer_builds_sface_even_on_cloud(mock_getenv):

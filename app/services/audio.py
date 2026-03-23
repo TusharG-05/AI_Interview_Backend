@@ -1,5 +1,6 @@
 import os
 import asyncio
+from pathlib import Path
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -120,13 +121,13 @@ class AudioService:
             from huggingface_hub import InferenceClient
             client = InferenceClient(token=hf_token)
             
-            logger.info("Attempting HF Inference API for STT...")
-            # Passing the path directly allows the client to detect content type
-            # Added 60s timeout to prevent hanging on slow HF Inference requests
+            logger.info(f"Attempting HF Inference API for STT: {audio_path}")
+            
+            # CRITICAL: Use Path object to ensure huggingface-hub correctly detects file type
+            # Passing raw string can sometimes cause 'Content type None not supported' errors.
             result = client.automatic_speech_recognition(
-                audio=audio_path,
-                model="openai/whisper-large-v3-turbo",
-                timeout=60
+                audio=Path(audio_path),
+                model="openai/whisper-large-v3-turbo"
             )
             text = result.get("text", "").strip()
             logger.info(f"HF Inference STT successful: {text[:50]}...")
@@ -135,23 +136,64 @@ class AudioService:
             logger.error(f"HF Inference STT Error: {e}")
             return ""
 
-    async def speech_to_text(self, audio_path):
+    async def _ensure_local_path(self, audio_path: str) -> tuple[str, bool]:
+        """
+        Ensures the audio exists locally. If it's a URL, downloads it to a temp file.
+        Returns (local_path, is_temporary)
+        """
+        if not audio_path:
+            return "", False
+            
+        if audio_path.startswith(("http://", "https://")):
+            import tempfile
+            import requests
+            try:
+                # Use a specific extension based on URL if possible, otherwise .wav
+                ext = ".wav"
+                if ".mp3" in audio_path.lower(): ext = ".mp3"
+                elif ".webm" in audio_path.lower(): ext = ".webm"
+                
+                temp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                response = requests.get(audio_path, timeout=10)
+                response.raise_for_status()
+                temp.write(response.content)
+                temp.close()
+                return temp.name, True
+            except Exception as e:
+                logger.error(f"Failed to download audio from {audio_path}: {e}")
+                return "", False
+        
+        # Already local
         if not os.path.exists(audio_path):
+            return "", False
+        return audio_path, False
+
+    async def speech_to_text(self, audio_path: str) -> str:
+        """
+        Transcribes audio using a multi-layered fallback approach:
+        1. Modal (Best accuracy/speed if enabled)
+        2. Hugging Face Inference API (Fallback)
+        3. Local Whisper (Final fallback, disabled on cloud to prevent OOM)
+        """
+        local_path, is_temp = await self._ensure_local_path(audio_path)
+        if not local_path:
             return ""
 
         last_error = None
+        text = ""
 
         try:
-            # 1. Try Modal if enabled
-            if USE_MODAL:
+            # 1. Try Modal if enabled (Runtime check for testability)
+            use_modal_runtime = os.getenv("USE_MODAL", "false").lower() == "true"
+            if use_modal_runtime:
                 modal_cls = get_modal_transcribe()
                 if modal_cls:
                     try:
-                        logger.info(f"Using Modal for STT: {audio_path}")
+                        logger.info(f"Using Modal for STT: {local_path}")
                         loop = asyncio.get_running_loop()
                         
                         def _modal_call():
-                            with open(audio_path, "rb") as f:
+                            with open(local_path, "rb") as f:
                                 audio_bytes = f.read()
                             # Instantiate class and call remote method
                             result = modal_cls().transcribe.remote(audio_bytes, self.stt_model_size)
@@ -160,7 +202,8 @@ class AudioService:
                             return result.get("text", "")
                         
                         text = await loop.run_in_executor(None, _modal_call)
-                        if text: return text
+                        if text:
+                            return text
                     except Exception as e:
                         last_error = f"Modal STT failed: {str(e)}"
                         logger.warning(last_error)
@@ -170,8 +213,9 @@ class AudioService:
             if hf_text:
                 return hf_text
 
-            # 3. Local Fallback (Only if NOT on HF Spaces)
-            if not os.getenv("SPACE_ID"):
+            # 3. Local Fallback (Disabled on HF Spaces to prevent OOM)
+            is_cloud = os.getenv("SPACE_ID") is not None
+            if not is_cloud:
                 logger.info("Falling back to local STT...")
                 model = self.stt_model
                 if model:
@@ -189,16 +233,21 @@ class AudioService:
                     text = await loop.run_in_executor(None, _transcribe)
                     return text if text else "[Silence/No Speech Detected]"
             else:
-                msg = "Cloud Environment detected. Skipping heavy local STT fallback."
-                logger.error(msg)
+                msg = "Cloud Environment detected. Skipping local STT fallback."
+                logger.warning(msg)
                 if not last_error:
                     last_error = msg
 
-            return f"[STT Error: {last_error or 'Services unavailable'}]"
+            # If all failed, return the accumulated last error
+            return f"[STT Error: {last_error or 'All STT services failed'}]"
             
         except Exception as e:
             logger.error(f"Overall STT Error: {e}")
             return ""
+        finally:
+            if is_temp and local_path and os.path.exists(local_path):
+                try: os.remove(local_path)
+                except: pass
 
     async def text_to_speech(self, text, output_path):
         """Converts text to speech using edge-tts."""
@@ -245,8 +294,13 @@ class AudioService:
         Verifies if the speaker in test_audio matches the enrollment_audio.
         Returns (is_match, score)
         """
-        if not enrollment_audio or not test_audio or not os.path.exists(enrollment_audio) or not os.path.exists(test_audio):
+        local_enroll, temp_enroll = await self._ensure_local_path(enrollment_audio)
+        local_test, temp_test = await self._ensure_local_path(test_audio)
+        
+        if not local_enroll or not local_test:
             logger.warning(f"Speaker Verification skipped: missing files ({enrollment_audio}, {test_audio})")
+            if temp_enroll: os.remove(local_enroll)
+            if temp_test: os.remove(local_test)
             return True, 1.0 # Default to match if files missing to avoid blocking
             
         try:
@@ -265,7 +319,7 @@ class AudioService:
             # 2. Perform verification
             # SpeechBrain's EncoderClassifier has a verify_files method
             # It returns (score, prediction) where prediction is a tensor of booleans
-            score, prediction = model.verify_files(enrollment_audio, test_audio)
+            score, prediction = model.verify_files(local_enroll, local_test)
             
             match = bool(prediction[0])
             similarity = float(score[0])
@@ -276,6 +330,13 @@ class AudioService:
         except Exception as e:
             logger.error(f"Speaker Verification Error: {e}")
             return True, 1.0 # Default to match on error
+        finally:
+            if temp_enroll and local_enroll and os.path.exists(local_enroll):
+                try: os.remove(local_enroll)
+                except: pass
+            if temp_test and local_test and os.path.exists(local_test):
+                try: os.remove(local_test)
+                except: pass
 
     def cleanup_audio(self, *paths):
         """Removes specified audio files from disk."""
