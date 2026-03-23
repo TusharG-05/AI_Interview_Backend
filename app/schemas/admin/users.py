@@ -37,3 +37,10 @@ class CreateUserRequest(BaseModel):
     password: str
     role: str = "candidate"
     team_id: Optional[int] = None
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
+    team_id: Optional[int] = None

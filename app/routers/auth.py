@@ -11,10 +11,11 @@ from ..auth.security import (
     create_access_token, 
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from ..schemas.requests import UserCreate, LoginRequest
-from ..schemas.responses import Token, UserRead
-from ..schemas.api_response import ApiResponse
-from ..schemas.user_schemas import serialize_user
+from ..schemas.auth.login import LoginRequest, TokenResponse as Token, MeResponse as UserRead
+from ..schemas.auth.registration import RegisterRequest as UserCreate
+from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.user import serialize_user
+
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
 from ..models.db_models import User, UserRole, InterviewSession, Team

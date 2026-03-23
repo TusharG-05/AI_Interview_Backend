@@ -8,8 +8,8 @@ from ..core.database import get_db as get_session
 from ..models.db_models import User, UserRole
 from ..auth.dependencies import get_current_user
 
-from ..schemas.api_response import ApiResponse
-from ..schemas.responses import ResumeResponse
+from ..schemas.shared.api_response import ApiResponse
+from ..schemas.resume.extract import ResumeResponse
 
 router = APIRouter(prefix="/resume", tags=["Resume Management"])
 

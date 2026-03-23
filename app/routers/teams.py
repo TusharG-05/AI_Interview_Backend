@@ -6,9 +6,11 @@ from sqlalchemy.exc import IntegrityError
 from ..core.database import get_db as get_session
 from ..models.db_models import Team, QuestionPaper, User
 from ..auth.dependencies import get_super_admin_user, get_admin_user
-from ..schemas.requests import TeamCreate, TeamUpdate
-from ..schemas.responses import TeamRead, TeamReadBasic, PaperRead, QuestionRead
-from ..schemas.api_response import ApiResponse
+from ..schemas.teams.management import TeamCreateRequest as TeamCreate, TeamUpdateRequest as TeamUpdate
+from ..schemas.teams.management import TeamDetailResponse as TeamRead
+from ..schemas.shared.team import TeamReadBasic
+from ..schemas.admin.papers import GetPaperResponse as PaperRead, AdminQuestionRead as QuestionRead
+from ..schemas.shared.api_response import ApiResponse
 from ..core.logger import get_logger
 from ..utils import format_iso_datetime
 

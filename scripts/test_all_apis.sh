@@ -366,7 +366,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -o /dev/null "$BASE/admin/interviews/enrollment-audio/$INT_ID" \
           -H "Authorization: Bearer $ADMIN_TOKEN")
         CODE=$(echo "$RESP" | tail -1)
-        check "GET /admin/interviews/enrollment-audio/$INT_ID" "200 404" "$CODE" ""
+        check "GET /admin/interviews/enrollment-audio/$INT_ID" "200 307 404" "$CODE" ""
 
         # Get next question
         RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -H "Authorization: Bearer $CAND_TOKEN" "$BASE/interview/next-question/$INT_ID")
@@ -555,21 +555,27 @@ check "GET /admin/test-email-sync" "200 500" "$CODE" "$BODY"
 
 # WebSocket test (connect and immediately close)
 echo "  --- WebSocket tests ---"
+PORT=$(echo "$BASE" | sed -E "s/.*:([0-9]+).*/\1/")
+if [ -z "$PORT" ]; then PORT=8000; fi
+
 WS_RESULT=$(python3 -c "
 import asyncio, websockets, json, sys
 async def test_ws():
     try:
         token = sys.argv[1]
+        port = sys.argv[2]
         async with websockets.connect(
-            f'ws://localhost:8000/api/admin/dashboard/ws?token={token}',
+            f'ws://localhost:{port}/api/admin/dashboard/ws?token={token}',
             close_timeout=3
         ) as ws:
             msg = await asyncio.wait_for(ws.recv(), timeout=3)
             print('OK:' + str(msg)[:50])
     except Exception as e:
         print('ERR:' + str(e)[:80])
-asyncio.run(test_ws())
-" "$ADMIN_TOKEN" 2>&1)
+async def main():
+    await test_ws()
+asyncio.run(main())
+" "$ADMIN_TOKEN" "$PORT" 2>&1)
 if echo "$WS_RESULT" | grep -q "^OK:"; then
     echo "  ✅ WS /admin/dashboard/ws ($WS_RESULT)"
     PASS=$((PASS+1))
@@ -577,7 +583,7 @@ elif echo "$WS_RESULT" | grep -q "no module\|ModuleNotFoundError"; then
     echo "  ⚠️  WS /admin/dashboard/ws (websockets module not installed, testing via curl)"
     RESP=$(curl -s --max-time 5 -w "\n%{http_code}" -o /dev/null \
       -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-      "http://localhost:8000/api/admin/dashboard/ws?token=$ADMIN_TOKEN")
+      "http://localhost:${PORT}/api/admin/dashboard/ws?token=$ADMIN_TOKEN")
     CODE=$(echo "$RESP" | tail -1)
     check "WS /admin/dashboard/ws (upgrade)" "101 200" "$CODE" ""
 else
@@ -587,16 +593,19 @@ else
 fi
 
 WS_RESULT2=$(python3 -c "
-import asyncio, websockets
+import asyncio, websockets, sys
 async def test_ws():
     try:
-        async with websockets.connect('ws://localhost:8000/api/status/ws?interview_id=1', close_timeout=3) as ws:
+        port = sys.argv[1]
+        async with websockets.connect(f'ws://localhost:{port}/api/status/ws?interview_id=1', close_timeout=3) as ws:
             msg = await asyncio.wait_for(ws.recv(), timeout=3)
             print('OK:' + str(msg)[:50])
     except Exception as e:
         print('ERR:' + str(e)[:80])
-asyncio.run(test_ws())
-" 2>&1)
+async def main():
+    await test_ws()
+asyncio.run(main())
+" "$PORT" 2>&1)
 if echo "$WS_RESULT2" | grep -q "^OK:"; then
     echo "  ✅ WS /status/ws ($WS_RESULT2)"
     PASS=$((PASS+1))

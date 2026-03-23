@@ -4,32 +4,17 @@ from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CandidateStatus, UserRole
-from ..schemas.requests import AnswerRequest
-from ..schemas.interview_result import QuestionPaperNested
+from ..schemas.interview.questions import AnswerRequest
+
 from ..services import interview as interview_service
 from ..services.audio import AudioService
 from ..services.cloudinary_service import CloudinaryService
-from ..schemas.interview_responses import (
-    InterviewSessionData, 
-    InterviewAccessResponse, 
-    TabSwitchRequest,
-    UserNested, 
-    PaperNested, PaperNestedWithoutAdmin,
-    QuestionNested, 
-    CodingPaperNested, CodingPaperNestedWithoutAdmin,
-    CodingQuestionNested,
-    CodingQuestionBasic,
-    AnswersData,
-    QuestionData,
-    CodingAnswersData,
-    PaperNested,
-    CodingPaperNested,
-    QuestionPaperData,
-    QuestionWithAnswer,
-    CodingQuestionWithAnswer,
-)
-from ..schemas.user_schemas import serialize_user
-from ..schemas.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.user import UserNested, LoginUserNested
+from ..schemas.interview.access import AccessInterviewResponse as InterviewAccessResponse, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, QuestionWithAnswer, CodingQuestionWithAnswer, AnswerShort
+from ..schemas.interview.questions import NextQuestionResponse, CodingQuestionBasic
+from ..schemas.interview.status import TabSwitchRequest, PingResponse, KeepAliveRequest
+
 from ..auth.dependencies import get_current_user
 from pydantic import BaseModel
 import os
@@ -171,7 +156,8 @@ async def access_interview(
     """
     from sqlalchemy.orm import selectinload
     from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus
-    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, LoginUserNested
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
+    from ..schemas.shared.user import LoginUserNested
 
     # Query with all relationships preloaded to avoid N+1 issues
     session = session_db.exec(
@@ -190,6 +176,54 @@ async def access_interview(
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
         
+    # Validation Logic
+    now = datetime.now(timezone.utc)
+    schedule_time = session.schedule_time
+    if schedule_time.tzinfo is None:
+        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+
+    if session.status == InterviewStatus.CANCELLED:
+        raise HTTPException(status_code=403, detail="Interview is cancelled")
+
+    is_finished = session.is_completed or session.status == InterviewStatus.COMPLETED
+    if is_finished:
+        raise HTTPException(status_code=403, detail="This interview has already been completed.")
+    
+    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
+    if is_expired:
+        if session.status != InterviewStatus.EXPIRED:
+            session.status = InterviewStatus.EXPIRED
+            session_db.add(session)
+            session_db.commit()
+        raise HTTPException(status_code=403, detail="This interview link has expired.")
+         
+    enforce_tab_timeout(session_db, session)
+
+    if session.current_status == CandidateStatus.INVITED:
+        record_status_change(
+            session=session_db,
+            interview_session=session,
+            new_status=CandidateStatus.LINK_ACCESSED
+        )
+    
+    return_msg = "Access Granted"
+    if now < schedule_time:
+        return_msg = "Interview not yet started. Please wait."
+    # Return detailed session state to satisfy frontend requirements
+    return ApiResponse(
+        status_code=200,
+        data=_serialize_interview_access_detail(session),
+        message=return_msg
+    )
+
+def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
+    """Helper to serialize InterviewSession into InterviewAccessResponse."""
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin
+    from ..schemas.shared.user import LoginUserNested
+    import json as _json
+
+    # Map Admin
     admin_data = None
     if session.admin:
         admin_data = LoginUserNested(
@@ -213,9 +247,7 @@ async def access_interview(
             team={"id": session.candidate.team.id, "name": session.candidate.team.name} if session.candidate.team else None
         )
 
-    import json as _json
-
-    # Pre-fetch existing answers if results exist
+    # Pre-fetch existing answers
     answers_map = {}
     coding_answers_map = {}
     if session.result:
@@ -253,12 +285,11 @@ async def access_interview(
                 question_text=q.question_text or q.content or "",
                 topic=q.topic or "General",
                 answer=answers_map.get(q.id),
-                difficulty=q.difficulty or "Medium",
+                difficulty=str(q.difficulty.value if hasattr(q.difficulty, 'value') else q.difficulty),
                 marks=q.marks or 1,
-                response_type=q.response_type or "audio"
+                response_type=str(q.response_type.value if hasattr(q.response_type, 'value') else q.response_type)
             ) for q in session.paper.questions
         ]
-        
         paper_data = PaperNestedWithoutAdmin(
             id=session.paper.id,
             name=session.paper.name,
@@ -283,11 +314,10 @@ async def access_interview(
                 starter_code=cq.starter_code or "",
                 answer=coding_answers_map.get(cq.id),
                 topic=cq.topic or "Algorithms",
-                difficulty=cq.difficulty or "Medium",
+                difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
                 marks=cq.marks or 0
             ) for cq in session.coding_paper.questions
         ]
-        
         coding_paper_data = CodingPaperNestedWithoutAdmin(
             id=session.coding_paper.id,
             name=session.coding_paper.name,
@@ -299,62 +329,16 @@ async def access_interview(
         )
 
     now = datetime.now(timezone.utc)
-    
-    # 1. Consolidated Validation Check (User Request)
-    schedule_time = session.schedule_time
-    if schedule_time.tzinfo is None:
-        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
-
-    # Check for Cancelled status first (separate case)
-    if session.status == InterviewStatus.CANCELLED:
-        raise HTTPException(status_code=403, detail="Interview is cancelled")
-
-    # Catch Expired (Calculated or Status) or Completed (Flag or Status)
-    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
-    is_finished = session.is_completed or session.status == InterviewStatus.COMPLETED
-
-    if is_finished:
-        raise HTTPException(status_code=403, detail="This interview has already been completed.")
-    
-    if is_expired:
-        # If it just expired now, update status in DB for record keeping
-        if session.status != InterviewStatus.EXPIRED:
-            session.status = InterviewStatus.EXPIRED
-            session_db.add(session)
-            session_db.commit()
-            
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
-         
-    # Check for tab-switch timeout
-    enforce_tab_timeout(session_db, session)
-
-    # 4. Track link access status change
-    from ..services.status_manager import record_status_change
-    if session.current_status == CandidateStatus.INVITED:
-        record_status_change(
-            session=session_db,
-            interview_session=session,
-            new_status=CandidateStatus.LINK_ACCESSED
-        )
-    
-    # 5. Determine status strings (Preserve Case for exact match if needed, but using .lower() as originally requested might be what "Renaming fields" includes?)
-    # User said: "Renaming fields is allowed. Example: admin_id -> admin... However the object structures inside them must remain identical."
-    # And specifically: "Status: scheduled | live | completed | expired | cancelled" in the first prompt.
-    # Actually, the user's second prompt said: "A previous refactor modified the response structure... and introduced breaking changes... restore... keeping RENAMED fields".
-    # This implies I should keep the field names I just changed (admin, candidate, etc.) but restore the internal object structure.
-    # The status values themselves (scheduled vs SCHEDULED) are data, but usually frontend maps these.
-    # I'll stick to the requested lowercase statuses from the FIRST prompt unless told otherwise, but I'll ensure they are present.
-    
     status_str = session.status.value.lower() if hasattr(session.status, 'value') else str(session.status).lower()
     current_status_str = session.current_status.value.lower() if hasattr(session.current_status, 'value') else str(session.current_status).lower()
     
-    message = "Access Granted"
+    schedule_time = session.schedule_time
+    if schedule_time.tzinfo is None:
+        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
     if now < schedule_time:
-        current_status_str = "wait" 
-        message = "Interview not yet started. Please wait."
+        current_status_str = "wait"
 
-    response_data = InterviewAccessResponse(
+    return InterviewAccessResponse(
         id=session.id,
         access_token=session.access_token,
         admin_user=admin_data,
@@ -362,12 +346,12 @@ async def access_interview(
         paper=paper_data,
         coding_paper=coding_paper_data,
         schedule_time=session.schedule_time,
-        duration_minutes=session.duration_minutes,
+        duration_minutes=session.duration_minutes or 1440,
         max_questions=session.max_questions,
         start_time=session.start_time,
         end_time=session.end_time,
         status=status_str,
-        total_score=session.total_score,
+        total_score=session.total_score or 0.0,
         current_status=current_status_str,
         last_activity=session.last_activity or now,
         warning_count=session.warning_count or 0,
@@ -380,13 +364,7 @@ async def access_interview(
         tab_warning_active=session.tab_warning_active or False,
         allow_copy_paste=session.allow_copy_paste or False,
         allow_question_navigate=session.allow_question_navigate or False,
-        result_status="PENDING" # Default for access endpoint as per original schema
-    )
-
-    return ApiResponse(
-        status_code=200,
-        data=response_data,
-        message=message
+        result_status="PENDING"
     )
 
 
@@ -612,12 +590,49 @@ async def upload_selfie_session(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Received empty file")
     
-    # 4. Check for stored embeddings
+    # 4. Check for stored embeddings (Auto-enroll if missing)
     if not candidate.face_embedding:
-        raise HTTPException(
-            status_code=400, 
-            detail="No enrollment selfie found for this candidate. Please ensure candidate uploaded selfie during registration."
-        )
+        _logger.info(f"Auto-enrolling candidate {candidate_id} since no reference embedding found.")
+        # Save to temp for DeepFace
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(image_bytes)
+            tmp_path = tmp.name
+        
+        try:
+            embeddings_map = {}
+            # SFace (Priority)
+            try:
+                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                if sface_objs:
+                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
+            except Exception as e:
+                _logger.warning(f"SFace enrollment failed: {e}")
+
+            # ArcFace
+            try:
+                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                if arc_objs:
+                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+            except Exception as e:
+                _logger.warning(f"ArcFace enrollment failed: {e}")
+
+            if not embeddings_map:
+                raise HTTPException(status_code=400, detail="Failed to generate face embeddings for enrollment. Please ensure a clear face is visible.")
+            
+            candidate.face_embedding = json.dumps(embeddings_map)
+            # Use original filename or dummy for profile_image if needed
+            candidate.profile_image = f"enrolled_{candidate.id}.jpg"
+            session_db.add(candidate)
+            session_db.commit()
+            
+            return ApiResponse(
+                status_code=200,
+                data={"verified": True, "score": 1.0, "message": "Face enrolled successfully."},
+                message="Face enrolled as reference."
+            )
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
     
         # 5. Generate embeddings from uploaded selfie
     try:
@@ -808,8 +823,8 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     # simplified:
     answered_ids = []
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
-    if result:
-        answered_ids = [a.question_id for a in result.answers]
+    if result and result.answers:
+        answered_ids = [a.question_id for a in result.answers if a.question_id]
     
     # 2. Check if this session has assigned questions (Campaign mode)
     has_assignments = session_db.exec(
@@ -1256,7 +1271,7 @@ async def submit_answer_code(
         logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
     session_db.refresh(answer)
 
-    from ..schemas.interview_responses import AnswerShort, CodingQuestionWithAnswer
+    from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
     
     import json as _json
     answer_data = AnswerShort(
@@ -1357,7 +1372,7 @@ async def submit_answer_text(
         _evaluate_and_update_score(session_db, answer, coding_q.problem_statement or coding_q.title or "", session, result)
         session_db.refresh(answer)
 
-        from ..schemas.interview_responses import AnswerShort, CodingQuestionWithAnswer
+        from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
         import json as _json
 
         answer_data = AnswerShort(
@@ -1425,7 +1440,7 @@ async def submit_answer_text(
     _evaluate_and_update_score(session_db, answer, question.question_text or question.content or "", session, result)
     session_db.refresh(answer)
 
-    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer
     
     answer_data = AnswerShort(
         id=answer.id,
@@ -1514,13 +1529,13 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
 
 
 
-@router.post("/{interview_id}/tab-switch", response_model=ApiResponse[dict])
+@router.post("/{interview_id}/tab-switch", response_model=ApiResponse[InterviewAccessResponse])
 async def log_tab_switch(
     interview_id: int,
-    request: TabSwitchRequest,
+    request: TabSwitchRequest = TabSwitchRequest(), 
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
-) -> ApiResponse[InterviewSessionData]:
+) -> ApiResponse[InterviewAccessResponse]:
     """
     Logs a tab switch event during the interview.
     Increments warning count and notifies admins.
@@ -1647,7 +1662,7 @@ async def log_tab_switch(
     session_db.commit()
     session_db.refresh(session_obj)
 
-    # Build InterviewSessionData for consistent response
+    # Build InterviewAccessResponse for consistent response
     # candidate_data = None
     # if session_obj.candidate:
     #     candidate_data = UserNested(
@@ -1689,7 +1704,7 @@ async def log_tab_switch(
     #         created_at=session_obj.paper.created_at or datetime.now(timezone.utc)
     #     )
 
-    # result_data = InterviewSessionData(
+    # result_data = InterviewAccessResponse(
     #     id=session_obj.id,
     #     access_token=session_obj.access_token,
     #     admin_user=serialize_user(session_obj.admin) if session_obj.admin else None,  # ← Always UserNested
@@ -1719,12 +1734,7 @@ async def log_tab_switch(
 
     return ApiResponse(
         status_code=200 if not session_obj.is_suspended else 403,
-        data={
-            "tab_switch_count": session_obj.tab_switch_count,
-            "tab_warning_active": session_obj.tab_warning_active,
-            "is_suspended": session_obj.is_suspended,
-            "reason": session_obj.suspension_reason
-        },
+        data=_serialize_interview_access_detail(session_obj),
         message=return_msg
     )
 

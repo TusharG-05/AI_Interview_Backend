@@ -6,12 +6,12 @@ from ..core.database import get_db as get_session
 import random
 from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions, InterviewStatus, CandidateStatus
 from ..services.status_manager import record_status_change
-from ..schemas.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
 
-from ..schemas.requests import UserUpdate
-from ..schemas.responses import HistoryItem
+from ..schemas.admin.users import UserUpdate
+from ..schemas.candidate.history import HistoryItem, ListUpcomingInterviewsResponse, UpcomingInterviewItem
 from ..auth.dependencies import get_current_user
 from ..core.logger import get_logger
 logger = get_logger(__name__)

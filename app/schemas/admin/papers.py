@@ -47,6 +47,22 @@ class CreatePaperWithQuestionsRequest(BaseModel):
     questions: List[QuestionCreateData] = []
     total_marks: Optional[int] = None
 
+from pydantic import Field
+
 class UpdatePaperRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+class GeneratePaperRequest(BaseModel):
+    ai_prompt: str = Field(..., min_length=5)
+    years_of_experience: int = Field(..., ge=0, le=40)
+    num_questions: int = Field(..., ge=1, le=50)
+    paper_name: Optional[str] = None
+
+class UpdateQuestionRequest(BaseModel):
+    content: Optional[str] = None
+    question_text: Optional[str] = None
+    topic: Optional[str] = None
+    difficulty: Optional[str] = None
+    marks: Optional[int] = None
+    response_type: Optional[str] = None

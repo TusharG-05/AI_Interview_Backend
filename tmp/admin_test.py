@@ -20,20 +20,18 @@ from fastapi_limiter.depends import RateLimiter
 logger = get_logger(__name__)
 
 from ..schemas.admin.users import CreateUserRequest, UserRead, GetUserDetailResponse
-from ..schemas.admin.papers import GeneratePaperRequest, GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, UpdateQuestionRequest, AdminQuestionRead, QuestionCreateData
+from ..schemas.admin.papers import GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, AdminQuestionRead as QuestionRead, QuestionCreateData
 from ..schemas.admin.interviews import ScheduleInterviewRequest, UpdateInterviewRequest, InterviewLinkResponse
-from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested
-from ..schemas.shared.team import TeamReadBasic
+from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest
 from ..schemas.admin.coding import CodingQuestionFull, CodingPaperFull, GenerateCodingPaperRequest, CodingPaperCreateRequest, CodingPaperUpdateRequest, CodingQuestionCreateRequest, CodingQuestionUpdateRequest
 from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail
-InterviewSessionDetail = AdminInterviewSessionDetail
 from ..schemas.shared.api_response import ApiResponse
-from ..schemas.shared.user import UserNested, serialize_user
+from ..schemas.shared.user import UserNested
 
 
 
 
-
+from ..schemas.user_schemas import serialize_user, serialize_user_flat
 import os
 import shutil
 import uuid
@@ -42,11 +40,6 @@ from datetime import datetime, timedelta, timezone
 import time
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
-
-def create_response(api_response: ApiResponse):
-    """Wrapper for ApiResponse to ensure forward compatibility with FastAPI response processing."""
-    return api_response
-
 nlp_service = NLPService()
 email_service = EmailService()
 
@@ -76,7 +69,7 @@ async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
 
 # --- Question Paper & Question Management ---
 
-@router.get("/papers", response_model=ApiResponse[List[GetPaperResponse]])
+@router.get("/papers", response_model=ApiResponse[List[PaperRead]])
 async def list_papers(
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
@@ -84,10 +77,10 @@ async def list_papers(
     """List all question papers created by the admin."""
     stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
     papers = session.exec(stmt).all()
-    papers_data = [GetPaperResponse(
+    papers_data = [PaperRead(
         id=p.id, name=p.name, description=p.description, 
         question_count=len(p.questions), 
-        questions=[AdminQuestionRead(
+        questions=[QuestionRead(
             id=q.id, content=q.content, question_text=q.question_text,
             topic=q.topic, difficulty=q.difficulty, marks=q.marks,
             response_type=q.response_type
@@ -103,15 +96,15 @@ async def list_papers(
 
 from pydantic import BaseModel, Field
 
-class CreatePaperRequest(BaseModel):
+class PaperCreate(BaseModel):
     name: str = Field(..., min_length=1, description="Name of the question paper")
     description: Optional[str] = None
 
 
 
-@router.post("/papers", response_model=ApiResponse[GetPaperResponse], status_code=201)
+@router.post("/papers", response_model=ApiResponse[PaperRead], status_code=201)
 async def create_paper(
-    paper_data: CreatePaperRequest,
+    paper_data: PaperCreate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -129,7 +122,7 @@ async def create_paper(
         session.rollback()
         logger.error(f"Failed to create paper: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create paper. Please try again.")
-    paper_read = GetPaperResponse(
+    paper_read = PaperRead(
         id=new_paper.id, name=new_paper.name, description=new_paper.description, 
         question_count=0, questions=[], created_at=new_paper.created_at.isoformat(),
         created_by=serialize_user(current_user)
@@ -140,75 +133,7 @@ async def create_paper(
         message="Question paper created successfully"
     )
 
-@router.post("/upload-doc", response_model=ApiResponse[dict])
-async def upload_questions_doc(
-    paper_id: int,
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
-):
-    """
-    Upload a document (.pdf, .docx, .txt, .xlsx) to extract questions and add them to a paper.
-    """
-    import uuid
-    import os
-    # 1. Save file temporarily
-    file_id = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename)[1]
-    temp_path = f"/tmp/{file_id}{ext}"
-    
-    with open(temp_path, "wb") as f:
-        f.write(await file.read())
-    
-    try:
-        # 2. Extract questions
-        extracted_data = nlp_service.extract_qa_from_file(temp_path, questions_only=True)
-        
-        if not extracted_data:
-            return ApiResponse(
-                status_code=400,
-                message="No questions could be extracted from the document."
-            )
-            
-        # 3. Add to paper
-        paper = session.get(QuestionPaper, paper_id)
-        if not paper:
-            raise HTTPException(status_code=404, detail="Paper not found")
-            
-        from ..models.db_models import Questions
-        added_count = 0
-        for item in extracted_data:
-            q_text = item.get("question", "").strip()
-            if not q_text: continue
-            
-            new_q = Questions(
-                paper_id=paper_id,
-                question_text=q_text,
-                content=q_text,
-                topic="Extracted",
-                difficulty="Medium",
-                marks=5,
-                response_type="audio"
-            )
-            session.add(new_q)
-            added_count += 1
-            
-        session.commit()
-        
-        return ApiResponse(
-            status_code=200,
-            data={"extracted_count": len(extracted_data), "added_to_paper": added_count},
-            message=f"Successfully extracted and added {added_count} questions."
-        )
-        
-    except Exception as e:
-        logger.error(f"Error in upload_questions_doc: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-@router.get("/papers/{paper_id}", response_model=ApiResponse[GetPaperResponse])
+@router.get("/papers/{paper_id}", response_model=ApiResponse[PaperRead])
 async def get_paper(
     paper_id: int,
     current_user: User = Depends(get_admin_user),
@@ -218,10 +143,10 @@ async def get_paper(
     paper = session.get(QuestionPaper, paper_id)
     if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Paper not found")
-    paper_read = GetPaperResponse(
+    paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions),
-        questions=[AdminQuestionRead(
+        questions=[QuestionRead(
             id=q.id, content=q.content, question_text=q.question_text,
             topic=q.topic, difficulty=q.difficulty, marks=q.marks,
             response_type=q.response_type
@@ -235,10 +160,10 @@ async def get_paper(
         message="Question paper retrieved successfully"
     )
 
-@router.patch("/papers/{paper_id}", response_model=ApiResponse[GetPaperResponse])
+@router.patch("/papers/{paper_id}", response_model=ApiResponse[PaperRead])
 async def update_paper(
     paper_id:int,
-    paper_update: UpdatePaperRequest,
+    paper_update: PaperUpdate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -261,10 +186,10 @@ async def update_paper(
         session.rollback()
         logger.error(f"Failed to update paper {paper_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to update paper. Please try again.")
-    paper_read = GetPaperResponse(
+    paper_read = PaperRead(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions),
-        questions=[AdminQuestionRead(
+        questions=[QuestionRead(
             id=q.id, content=q.content, question_text=q.question_text,
             topic=q.topic, difficulty=q.difficulty, marks=q.marks,
             response_type=q.response_type
@@ -311,10 +236,10 @@ async def delete_paper(
     )
 
 
-@router.post("/papers/{paper_id}/questions", response_model=ApiResponse[AdminQuestionRead], status_code=201)
+@router.post("/papers/{paper_id}/questions", response_model=ApiResponse[Questions], status_code=201)
 async def add_question_to_paper(
     paper_id: int,
-    q_data: QuestionCreateData,
+    q_data: QuestionCreate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -366,7 +291,7 @@ async def list_paper_questions(
 
 # --- AI Question Paper Generation ---
 
-@router.post("/generate-paper", response_model=ApiResponse[GetPaperResponse], status_code=201)
+@router.post("/generate-paper", response_model=ApiResponse[PaperRead], status_code=201)
 async def generate_paper(
     request_data: GeneratePaperRequest,
     current_user: User = Depends(get_admin_user),
@@ -465,14 +390,14 @@ async def generate_paper(
         raise HTTPException(status_code=500, detail="Failed to save generated questions. Please try again.")
 
     # Build response
-    paper_read = GetPaperResponse(
+    paper_read = PaperRead(
         id=new_paper.id,
         name=new_paper.name,
         description=new_paper.description,
         question_count=new_paper.question_count,
         total_marks=new_paper.total_marks,
         questions=[
-            AdminQuestionRead(
+            QuestionRead(
                 id=q.id,
                 content=q.content,
                 question_text=q.question_text,
@@ -510,14 +435,6 @@ async def generate_coding_paper(
     """
     from ..services.interview import generate_coding_questions_from_prompt
     import json as _json
-    from ..schemas.admin.results import (
-        GetInterviewResultResponse as AdminResultData,
-        AdminAnswerAnswerShort as AnswerShort,
-        AdminQuestionWithAnswer as QuestionWithAnswer,
-        AdminPaperNested as PaperNestedWithAdminId,
-        AdminPaperNested as CodingPaperNestedWithAdmin,
-        AdminProctoringEvent as ProctoringEventRead
-    )
 
     # Validate difficulty_mix
     valid_mixes = {"easy", "medium", "hard", "mixed"}
@@ -672,7 +589,7 @@ async def list_all_questions(
         message="Questions retrieved successfully"
     )
 
-@router.get("/questions/{q_id}", response_model=ApiResponse[AdminQuestionRead])
+@router.get("/questions/{q_id}", response_model=ApiResponse[Questions])
 async def get_question(
     q_id: int,
     current_user: User = Depends(get_admin_user),
@@ -691,10 +608,10 @@ async def get_question(
         message="Question retrieved successfully"
     )
 
-@router.patch("/questions/{q_id}", response_model=ApiResponse[AdminQuestionRead])
+@router.patch("/questions/{q_id}", response_model=ApiResponse[Questions])
 async def update_question(
     q_id: int,
-    q_update: UpdateQuestionRequest,
+    q_update: QuestionUpdate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -740,7 +657,7 @@ async def update_question(
 
 @router.post("/interviews/schedule", response_model=ApiResponse[InterviewLinkResponse], status_code=201)
 async def schedule_interview(
-    schedule_data: ScheduleInterviewRequest, 
+    schedule_data: InterviewScheduleCreate, 
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_admin_user), 
     session: Session = Depends(get_session)
@@ -889,8 +806,6 @@ async def schedule_interview(
     interview_detail = InterviewSessionDetail(
         id=new_session.id,
         access_token=new_session.access_token,
-        admin_id=new_session.admin_id,
-        candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
         coding_paper_id=new_session.coding_paper_id,
         interview_round=new_session.interview_round.value if new_session.interview_round else None,
@@ -912,9 +827,7 @@ async def schedule_interview(
         is_completed=new_session.is_completed or False,
         allow_copy_paste=new_session.allow_copy_paste,
         allow_question_navigate=new_session.allow_question_navigate,
-        team_id=candidate.team_id,
-        admin_user=admin_dict,
-        candidate_user=candidate_dict
+        team_id=candidate.team_id
     )
 
     link_response = InterviewLinkResponse(
@@ -932,7 +845,7 @@ async def schedule_interview(
         message="Interview scheduled successfully"
     )
 
-@router.get("/interviews", response_model=ApiResponse[List[AdminInterviewSessionDetail]])
+@router.get("/interviews", response_model=ApiResponse[List[SessionRead]])
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
     # Only show sessions created by this admin (including those where admin is NULL)
@@ -961,23 +874,17 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
         admin_dict = serialize_user(s.admin, fallback_role="admin")
         candidate_dict = serialize_user(s.candidate, fallback_role="candidate")
         
-        results.append(AdminInterviewSessionDetail(
+        results.append(SessionRead(
             id=s.id,
-            access_token=s.access_token,
             admin_user=admin_dict,
             candidate_user=candidate_dict,
             status=s.status.value,
-            schedule_time=format_iso_datetime(s.schedule_time),
-            total_score=s.total_score,
+            scheduled_at=format_iso_datetime(s.schedule_time),
+            score=s.total_score,
             allow_copy_paste=s.allow_copy_paste or False,
             allow_question_navigate=s.allow_question_navigate or False,
             interview_round=s.interview_round.value if s.interview_round else None,
-            team_id=s.candidate.team_id if s.candidate else None,
-            duration_minutes=s.duration_minutes,
-            warning_count=s.warning_count,
-            max_warnings=s.max_warnings,
-            is_suspended=s.is_suspended,
-            is_completed=s.is_completed
+            team_id=s.candidate.team_id if s.candidate else None
         ))
     return ApiResponse(
         status_code=200,
@@ -1073,22 +980,14 @@ async def get_live_status_dashboard(
     )
 
 
-def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInterviewResultResponse:
-    """Helper to serialize InterviewSession into GetInterviewResultResponse."""
+def _serialize_interview_admin_detail(session_obj: InterviewSession) -> InterviewSessionAdminDetail:
+    """Helper to serialize InterviewSession into InterviewSessionAdminDetail."""
     import json as _json
-    from ..schemas.admin.results import (
-        GetInterviewResultResponse as AdminResultData,
-        AdminAnswerAnswerShort as AnswerShort,
-        AdminQuestionWithAnswer as QuestionWithAnswer,
-        AdminPaperNested as PaperNestedWithAdminId,
-        AdminPaperNested as CodingPaperNestedWithAdmin,
-        AdminProctoringEvent as ProctoringEventRead
-    )
     
     # 1. Map Admin User
     admin_data = None
     if session_obj.admin:
-        admin_data = UserRead(
+        admin_data = UserAdminDetail(
             id=session_obj.admin.id,
             email=session_obj.admin.email,
             full_name=session_obj.admin.full_name,
@@ -1097,15 +996,15 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
             team=TeamReadBasic(
                 id=session_obj.admin.team.id,
                 name=session_obj.admin.team.name,
-                description=session_obj.admin.team.description or "",
-                created_at=session_obj.admin.team.created_at.isoformat() if hasattr(session_obj.admin.team, "created_at") and session_obj.admin.team.created_at else ""
+                description=session_obj.admin.team.description,
+                created_at=session_obj.admin.team.created_at.isoformat() if session_obj.admin.team.created_at else ""
             ) if session_obj.admin.team else None
         )
 
     # 2. Map Candidate User
     candidate_data = None
     if session_obj.candidate:
-        candidate_data = UserRead(
+        candidate_data = UserAdminDetail(
             id=session_obj.candidate.id,
             email=session_obj.candidate.email,
             full_name=session_obj.candidate.full_name,
@@ -1123,7 +1022,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
     paper_data = None
     if session_obj.paper:
         questions_list = [
-            QuestionWithAnswer(
+            QuestionAdminDetail(
                 id=q.id,
                 paper_id=q.paper_id,
                 content=q.content or "",
@@ -1135,7 +1034,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
             ) for q in getattr(session_obj.paper, "questions", [])
         ]
         
-        paper_data = GetPaperResponse(
+        paper_data = QuestionPaperAdminDetail(
             id=session_obj.paper.id,
             name=session_obj.paper.name,
             description=session_obj.paper.description or "",
@@ -1150,83 +1049,57 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
     coding_paper_data = None
     if session_obj.coding_paper:
         coding_questions_list = [
-            QuestionWithAnswer(
+            CodingQuestionAdminDetail(
                 id=cq.id,
                 paper_id=cq.paper_id,
-                content=cq.problem_statement or "",
-                question_text=cq.title or "",
+                title=cq.title or "",
+                problem_statement=cq.problem_statement or "",
+                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
+                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
+                starter_code=cq.starter_code or "",
                 topic=cq.topic or "",
                 difficulty=str(cq.difficulty),
-                marks=cq.marks or 0,
-                response_type="coding"
+                marks=cq.marks or 0
             ) for cq in getattr(session_obj.coding_paper, "questions", [])
         ]
         
-        coding_paper_data = PaperNestedWithAdminId(
+        coding_paper_data = CodingPaperAdminDetail(
             id=session_obj.coding_paper.id,
             name=session_obj.coding_paper.name,
             description=session_obj.coding_paper.description or "",
-            admin_user=session_obj.coding_paper.admin.id if session_obj.coding_paper.admin else None,
+            adminUser=session_obj.coding_paper.admin.full_name if session_obj.coding_paper.admin else None,
             question_count=session_obj.coding_paper.question_count or len(coding_questions_list),
             total_marks=session_obj.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session_obj.coding_paper.created_at,
             questions=coding_questions_list
         )
 
-    # 5. Build Final Response Object
-    # Create proctoring event with id
-    proctoring_event = None
-    if session_obj.proctoring_events:
-        # Get the first proctoring event or create a summary one
-        proctoring_event = ProctoringEventRead(
-            id=session_obj.proctoring_events[0].id if session_obj.proctoring_events else session_obj.id,
-            warning_count=session_obj.warning_count or 0,
-            max_warnings=session_obj.max_warnings or 3,
-            is_suspended=session_obj.is_suspended or False,
-            suspension_reason=session_obj.suspension_reason,
-            suspended_at=session_obj.suspended_at,
-            allow_copy_paste=session_obj.allow_copy_paste or False,
-            allow_question_navigation=session_obj.allow_question_navigate or False
-        )
-    else:
-        # Create proctoring event from session data
-        proctoring_event = ProctoringEventRead(
-            id=session_obj.id,
-            warning_count=session_obj.warning_count or 0,
-            max_warnings=session_obj.max_warnings or 3,
-            is_suspended=session_obj.is_suspended or False,
-            suspension_reason=session_obj.suspension_reason,
-            suspended_at=session_obj.suspended_at,
-            allow_copy_paste=session_obj.allow_copy_paste or False,
-            allow_question_navigation=session_obj.allow_question_navigate or False
-        )
-
-    return GetInterviewResultResponse(
+    return InterviewSessionAdminDetail(
         id=session_obj.id,
         access_token=session_obj.access_token,
-        admin_user=admin_data if admin_data else None,
-        candidate_user=candidate_data if candidate_data else None,
-        paper=paper_data if paper_data else None,
-        coding_paper=coding_paper_data if coding_paper_data else None,
+        admin_user=admin_data,
+        candidate_user=candidate_data,
+        paper=paper_data,
+        coding_paper=coding_paper_data,
         interview_round=str(session_obj.interview_round.value if hasattr(session_obj.interview_round, 'value') else session_obj.interview_round) if session_obj.interview_round else None,
         schedule_time=session_obj.schedule_time,
-        duration_minutes=session_obj.duration_minutes or 1440,
+        duration_minutes=session_obj.duration_minutes,
         max_questions=session_obj.max_questions,
         start_time=session_obj.start_time,
         end_time=session_obj.end_time,
         status=str(session_obj.status.value if hasattr(session_obj.status, 'value') else session_obj.status),
-        response_count=len(session_obj.result.answers) if session_obj.result else 0,
+        total_score=session_obj.total_score,
         last_activity=session_obj.last_activity,
-        result_status=getattr(session_obj.result, 'result_status', 'PENDING') if session_obj.result else 'PENDING',
-        max_marks=(paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0),
-        total_score=session_obj.total_score or 0.0,
+        warning_count=session_obj.warning_count or 0,
+        max_warnings=session_obj.max_warnings or 3,
+        is_suspended=session_obj.is_suspended or False,
+        suspension_reason=session_obj.suspension_reason,
+        suspended_at=session_obj.suspended_at,
         enrollment_audio_path=session_obj.enrollment_audio_path,
-        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{session_obj.id}" if session_obj.enrollment_audio_path else None,
-        is_completed=session_obj.is_completed or False,
-        proctoring_event=proctoring_event
+        is_completed=session_obj.is_completed or False
     )
 
-@router.get("/interviews/{interview_id}", response_model=ApiResponse[GetInterviewResultResponse])
+@router.get("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionAdminDetail])
 async def get_interview(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1268,10 +1141,10 @@ async def get_interview(
         logger.error(f"Serialization error in get_interview: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while preparing the interview details.")
 
-@router.patch("/interviews/{interview_id}", response_model=ApiResponse[GetInterviewResultResponse])
+@router.patch("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionAdminDetail])
 async def update_interview(
     interview_id: int,
-    update_data: UpdateInterviewRequest,
+    update_data: InterviewUpdate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -1494,7 +1367,7 @@ async def list_candidates(
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=ApiResponse[List[GetResultsResponse]])
+@router.get("/users/results", response_model=ApiResponse[List[InterviewResultBrief]])
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
     
@@ -1505,7 +1378,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         .options(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
-            selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers).selectinload(CodingAnswers.coding_question),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
             selectinload(InterviewSession.admin),
             selectinload(InterviewSession.paper),
             selectinload(InterviewSession.coding_paper)
@@ -1563,7 +1436,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             invite_link=f"{FRONTEND_URL}/interview/{s.access_token}",
             admin_user=admin_obj,
             candidate_user=candidate_obj,
-            paper=paper_obj,
+            question_paper=paper_obj,
             coding_paper=coding_paper_obj,
             schedule_time=s.schedule_time,
             duration_minutes=s.duration_minutes or 1440,
@@ -1585,30 +1458,15 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             is_completed=s.is_completed or False,
             result_status=s.result.result_status if s.result else "PENDING"
         )
-        # 5. Aggregate Feedback & Top Level Result
-      
-
-        # 5. Aggregate Feedback from all question types
-        all_feedbacks = []
-        if s.result:
-            for aws in s.result.answers:
-                if aws.feedback:
-                    q_text = aws.question.question_text if aws.question else "Question"
-                    all_feedbacks.append(f"{q_text}: {aws.feedback}")
-            for caws in s.result.coding_answers:
-                if caws.feedback:
-                    cq_text = caws.coding_question.title if caws.coding_question else "Coding Question"
-                    all_feedbacks.append(f"{cq_text}: {caws.feedback}")
-        
-        aggregated_feedback = "\n\n".join(all_feedbacks)
-
-        results.append(GetResultsResponse(
+            
+        # 5. Top Level Result
+        max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
+        results.append(InterviewResultBrief(
             id=s.result.id,
-            interview_session_id=s.id,
-            interview_session=session_nested,
+            interview=session_nested,
             result_status=s.result.result_status or "PENDING",
             total_score=s.result.total_score or 0.0,
-            feedback=aggregated_feedback,
+            max_marks=float(max_marks),
             created_at=s.result.created_at
         ))
 
@@ -1618,7 +1476,11 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All results retrieved successfully"
     )
 
-
+from ..schemas.interview_responses import (
+    AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, 
+    QuestionPaperData, CodingAnswersData, CodingQuestionBasic, QuestionWithAnswer, CodingQuestionWithAnswer,
+    PaperNestedWithAdminId, CodingPaperNestedWithAdmin, ProctoringEventRead, remove_none_values
+)
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[dict])
 async def get_result(
@@ -1657,17 +1519,8 @@ async def get_result(
          raise HTTPException(status_code=404, detail="Result not found for this interview")
 
     # Build nested objects according to new AdminResultData schema
+    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
     import json as _json
-    from ..schemas.admin.results import (
-        GetInterviewResultResponse as AdminResultData,
-        AdminAnswerAnswerShort as AnswerShort,
-        AdminQuestionWithAnswer as QuestionWithAnswer,
-        CodingQuestionWithAnswer,
-        AdminPaperNested as PaperNestedWithAdminId,
-        AdminPaperNested as CodingPaperNestedWithAdmin,
-        AdminProctoringEvent as ProctoringEventRead,
-        InterviewSessionNested as InterviewSessionData
-    )
 
     # Helper maps for answers lookup
     std_answers_map = {ans.question_id: ans for ans in s.result.answers if ans.question_id}
@@ -1734,8 +1587,7 @@ async def get_result(
             question_count=len(questions_with_answers),
             questions=questions_with_answers,
             total_marks=p_total,
-            created_at=s.paper.created_at,
-            team_id=s.paper.admin.team_id if s.paper.admin else None
+            created_at=s.paper.created_at
         )
         
     # 3.1 Coding Paper with Nested Answers
@@ -1785,8 +1637,7 @@ async def get_result(
             question_count=len(coding_questions_with_answers),
             total_marks=cp_total,
             created_at=s.coding_paper.created_at,
-            questions=coding_questions_with_answers,
-            team_id=s.coding_paper.admin.team_id if s.coding_paper.admin else None
+            questions=coding_questions_with_answers
         )
         
     # 4. Final Response Assembler
@@ -1822,7 +1673,7 @@ async def get_result(
         proctoring_event=proctoring
     )
 
-    data_dict = result_detail.model_dump(exclude_none=True)
+    data_dict = remove_none_values(result_detail.model_dump())
 
     return ApiResponse(
         status_code=200,
@@ -1833,7 +1684,7 @@ async def get_result(
 @router.patch("/results/{interview_id}", response_model=ApiResponse[dict])
 async def update_result(
     interview_id: int,
-    update_data: UpdateResultRequest,
+    update_data: ResultUpdate,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -2231,7 +2082,7 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
         message="Users retrieved successfully"
     )
 
-@router.get("/users/{user_id}", response_model=ApiResponse[GetUserDetailResponse])
+@router.get("/users/{user_id}", response_model=ApiResponse[UserDetailRead])
 async def get_user(
     user_id: int,
     current_user: User = Depends(get_admin_user),
@@ -2258,7 +2109,7 @@ async def get_user(
 
     return ApiResponse(
         status_code=200,
-        data=GetUserDetailResponse(
+        data=UserDetailRead(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
@@ -2274,7 +2125,7 @@ async def get_user(
         message="User details retrieved successfully"
     )
 
-@router.patch("/users/{user_id}", response_model=ApiResponse[GetUserDetailResponse])
+@router.patch("/users/{user_id}", response_model=ApiResponse[UserDetailRead])
 async def update_user(
     user_id: int,
     email: Optional[str] = Form(None),
@@ -2372,7 +2223,7 @@ async def update_user(
 
     return create_response(ApiResponse(
         status_code=200,
-        data=GetUserDetailResponse(
+        data=UserDetailRead(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
@@ -2527,7 +2378,7 @@ def shutdown(current_user: User = Depends(get_admin_user)):
 # --- Candidate Status Tracking ---
 
 
-@router.get("/interviews/{interview_id}/status", response_model=ApiResponse[GetCandidateStatusResponse])
+@router.get("/interviews/{interview_id}/status", response_model=ApiResponse[CandidateStatusResponse])
 async def get_candidate_status(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -2573,7 +2424,7 @@ async def get_candidate_status(
     
     return ApiResponse(
         status_code=200,
-        data=GetCandidateStatusResponse(**status_data),
+        data=CandidateStatusResponse(**status_data),
         message="Candidate status retrieved successfully"
     )
 
