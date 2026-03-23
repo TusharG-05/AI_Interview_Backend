@@ -65,20 +65,20 @@ class AccessInterviewResponse(BaseModel):
     coding_paper: Optional[CodingPaperNestedWithoutAdmin] = None
     schedule_time: datetime
     duration_minutes: int
-    max_questions: int
+    max_questions: Optional[int] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     status: str
     total_score: Optional[float] = None
     current_status: str
     last_activity: datetime
-    warning_count: int
-    max_warnings: int
-    is_suspended: bool
+    warning_count: int = 0
+    max_warnings: int = 3
+    is_suspended: bool = False
     suspension_reason: Optional[str] = None
     suspended_at: Optional[datetime] = None
     enrollment_audio_path: Optional[str] = None
-    is_completed: bool
+    is_completed: bool = False
     tab_warning_active: bool = False
     allow_copy_paste: bool = False
     allow_question_navigate: bool = False

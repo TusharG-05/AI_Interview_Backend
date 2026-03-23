@@ -23,3 +23,7 @@ class CodingQuestionBasic(BaseModel):
 
     class Config:
         from_attributes = True
+
+class AnswerRequest(BaseModel):
+    question: str
+    answer: str

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ..services.camera import CameraService
 from ..core.config import local_llm
-from ..schemas.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse
 from ..core.database import engine
 from sqlmodel import text
 import os

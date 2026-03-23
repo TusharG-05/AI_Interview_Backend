@@ -44,13 +44,15 @@ class AdminInterviewSessionDetail(BaseModel):
     allow_copy_paste: bool = False
     allow_question_navigate: bool = False
     max_warnings: int
-    is_suspended: bool
+    is_suspended: bool = False
     suspension_reason: Optional[str] = None
     suspended_at: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     coding_paper_id: Optional[int] = None
     team_id: Optional[int] = None
+    admin_user: Optional[UserNested] = None
+    candidate_user: Optional[UserNested] = None
 
     class Config:
         from_attributes = True

@@ -1,6 +1,6 @@
 from typing import Optional
 from pydantic import BaseModel
-from ..shared.user import UserRole
+from ...models.db_models import UserRole
 
 class RegisterRequest(BaseModel):
     email: str

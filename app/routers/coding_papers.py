@@ -14,10 +14,17 @@ from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import CodingQuestionPaper, CodingQuestions, InterviewSession, User, Team
 from ..auth.dependencies import get_admin_user
-from ..schemas.api_response import ApiResponse
-from ..schemas.requests import CodingPaperCreate, CodingPaperUpdate, CodingQuestionCreate, CodingQuestionUpdate
-from ..schemas.responses import CodingPaperFull, CodingQuestionFull
-from ..schemas.user_schemas import serialize_user
+from ..schemas.shared.api_response import ApiResponse
+from ..schemas.admin.coding import (
+    CodingPaperFull, 
+    CodingQuestionFull,
+    CodingPaperCreateRequest as CodingPaperCreate,
+    CodingPaperUpdateRequest as CodingPaperUpdate,
+    CodingQuestionCreateRequest as CodingQuestionCreate,
+    CodingQuestionUpdateRequest as CodingQuestionUpdate
+)
+from ..schemas.shared.user import serialize_user
+
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)

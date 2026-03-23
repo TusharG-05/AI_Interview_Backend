@@ -11,7 +11,7 @@ This service handles:
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 from sqlmodel import Session, select
-from ..schemas.user_schemas import serialize_user
+
 from ..models.db_models import (
     InterviewSession, 
     StatusTimeline, 
@@ -21,6 +21,7 @@ from ..models.db_models import (
     InterviewResult
 )
 import json
+from ..schemas.shared.user import serialize_user
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)

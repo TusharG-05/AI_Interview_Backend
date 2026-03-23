@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from ..services.camera import CameraService
-from ..schemas.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse
 import time
 import asyncio
 import json
