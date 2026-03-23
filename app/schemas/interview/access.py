@@ -42,19 +42,28 @@ class PaperNestedWithoutAdmin(BaseModel):
     id: int
     name: str
     description: str = ""
+    adminUser: Optional[int] = None
     question_count: int = 0
     total_marks: int = 0
     created_at: datetime
     questions: List[QuestionWithAnswer] = []
 
+    class Config:
+        from_attributes = True
+
 class CodingPaperNestedWithoutAdmin(BaseModel):
     id: int
     name: str
     description: str = ""
+    admin_user: Optional[UserNested] = None
     question_count: int = 0
     total_marks: int = 0
     created_at: datetime
+    team_id: Optional[int] = None
     questions: List[CodingQuestionWithAnswer] = []
+
+    class Config:
+        from_attributes = True
 
 class AccessInterviewResponse(BaseModel):
     id: int
@@ -69,20 +78,29 @@ class AccessInterviewResponse(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     status: str
-    total_score: Optional[float] = None
-    current_status: str
+    interview_round: Optional[str] = None
+    response_count: int = 0
     last_activity: datetime
+    result_status: str = "PENDING"
+    max_marks: float = 0.0
+    total_score: Optional[float] = None
+    enrollment_audio_path: Optional[str] = None
+    enrollment_audio_url: Optional[str] = None
+    is_completed: bool = False
+    proctoring_event: Optional["ProctoringEvent"] = None
+
+    class Config:
+        from_attributes = True
+
+class ProctoringEvent(BaseModel):
+    id: int
     warning_count: int = 0
     max_warnings: int = 3
     is_suspended: bool = False
     suspension_reason: Optional[str] = None
     suspended_at: Optional[datetime] = None
-    enrollment_audio_path: Optional[str] = None
-    is_completed: bool = False
-    tab_warning_active: bool = False
     allow_copy_paste: bool = False
-    allow_question_navigate: bool = False
-    result_status: str = "PENDING"
+    allow_question_navigation: bool = False
 
     class Config:
         from_attributes = True
