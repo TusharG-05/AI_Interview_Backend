@@ -219,7 +219,7 @@ async def access_interview(
 
 def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
     """Helper to serialize InterviewSession into InterviewAccessResponse."""
-    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
     from ..schemas.shared.user import LoginUserNested
     import json as _json
 
@@ -294,6 +294,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
             id=session.paper.id,
             name=session.paper.name,
             description=session.paper.description or "",
+            adminUser=session.paper.admin_user if session.paper.admin else None,
             question_count=session.paper.question_count or len(questions_list),
             total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
             created_at=session.paper.created_at,
@@ -318,25 +319,49 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 marks=cq.marks or 0
             ) for cq in session.coding_paper.questions
         ]
+        
+        # Map admin user for coding paper
+        coding_admin_user = None
+        if session.coding_paper.admin:
+            coding_admin_user = LoginUserNested(
+                id=session.coding_paper.admin.id,
+                email=session.coding_paper.admin.email,
+                full_name=session.coding_paper.admin.full_name,
+                role=session.coding_paper.admin.role.value if hasattr(session.coding_paper.admin.role, 'value') else str(session.coding_paper.admin.role),
+                access_token=session.coding_paper.admin.access_token or "",
+                team={"id": session.coding_paper.admin.team.id, "name": session.coding_paper.admin.team.name} if session.coding_paper.admin.team else None
+            )
+        
         coding_paper_data = CodingPaperNestedWithoutAdmin(
             id=session.coding_paper.id,
             name=session.coding_paper.name,
             description=session.coding_paper.description or "",
+            admin_user=coding_admin_user,
             question_count=session.coding_paper.question_count or len(coding_questions_list),
             total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session.coding_paper.created_at,
+            team_id=session.coding_paper.team_id,
             questions=coding_questions_list
         )
 
+    # Create proctoring event
+    proctoring_event = ProctoringEvent(
+        id=session.id,
+        warning_count=session.warning_count or 0,
+        max_warnings=session.max_warnings or 3,
+        is_suspended=session.is_suspended or False,
+        suspension_reason=session.suspension_reason,
+        suspended_at=session.suspended_at,
+        allow_copy_paste=session.allow_copy_paste or False,
+        allow_question_navigation=session.allow_question_navigate or False
+    )
+
     now = datetime.now(timezone.utc)
     status_str = session.status.value.lower() if hasattr(session.status, 'value') else str(session.status).lower()
-    current_status_str = session.current_status.value.lower() if hasattr(session.current_status, 'value') else str(session.current_status).lower()
     
-    schedule_time = session.schedule_time
-    if schedule_time.tzinfo is None:
-        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    if now < schedule_time:
-        current_status_str = "wait"
+    # Calculate response count and max marks
+    response_count = (len(session.result.answers) if session.result else 0) + (len(session.result.coding_answers) if session.result else 0)
+    max_marks = (paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0)
 
     return InterviewAccessResponse(
         id=session.id,
@@ -351,20 +376,16 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         start_time=session.start_time,
         end_time=session.end_time,
         status=status_str,
-        total_score=session.total_score or 0.0,
-        current_status=current_status_str,
+        interview_round=str(session.interview_round.value if hasattr(session.interview_round, 'value') else session.interview_round) if session.interview_round else None,
+        response_count=response_count,
         last_activity=session.last_activity or now,
-        warning_count=session.warning_count or 0,
-        max_warnings=session.max_warnings or 3,
-        is_suspended=session.is_suspended or False,
-        suspension_reason=session.suspension_reason,
-        suspended_at=session.suspended_at,
+        result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
+        max_marks=max_marks,
+        total_score=session.total_score or 0.0,
         enrollment_audio_path=session.enrollment_audio_path,
+        enrollment_audio_url=f"/api/interview/enrollment-audio/{session.id}" if session.enrollment_audio_path else None,
         is_completed=session.is_completed or False,
-        tab_warning_active=session.tab_warning_active or False,
-        allow_copy_paste=session.allow_copy_paste or False,
-        allow_question_navigate=session.allow_question_navigate or False,
-        result_status="PENDING"
+        proctoring_event=proctoring_event
     )
 
 
