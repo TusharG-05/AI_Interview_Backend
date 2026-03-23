@@ -8,6 +8,7 @@ from ..schemas.requests import AnswerRequest
 from ..schemas.interview_result import QuestionPaperNested
 from ..services import interview as interview_service
 from ..services.audio import AudioService
+from ..services.cloudinary_service import CloudinaryService
 from ..schemas.interview_responses import (
     InterviewSessionData, 
     InterviewAccessResponse, 
@@ -43,6 +44,7 @@ from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
 logger = logging.getLogger(__name__)
 audio_service = AudioService()
+cloudinary_service = CloudinaryService()
 
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
@@ -176,8 +178,8 @@ async def access_interview(
         select(InterviewSession)
         .where(InterviewSession.access_token == token)
         .options(
-            selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.candidate).selectinload(User.team),
+            selectinload(InterviewSession.admin).selectinload(User.team),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.admin),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions),
@@ -190,27 +192,25 @@ async def access_interview(
         
     admin_data = None
     if session.admin:
-        from .teams import _serialize_team_basic
         admin_data = LoginUserNested(
             id=session.admin.id,
             email=session.admin.email,
             full_name=session.admin.full_name,
             role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
             access_token=session.admin.access_token or "",
-            team=_serialize_team_basic(session.admin.team, session_db) if session.admin.team else None
+            team={"id": session.admin.team.id, "name": session.admin.team.name} if session.admin.team else None
         )
 
     # Map Candidate
     candidate_data = None
     if session.candidate:
-        from .teams import _serialize_team_basic
         candidate_data = LoginUserNested(
             id=session.candidate.id,
             email=session.candidate.email,
             full_name=session.candidate.full_name,
             role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
             access_token=session.candidate.access_token or "",
-            team=_serialize_team_basic(session.candidate.team, session_db) if session.candidate.team else None
+            team={"id": session.candidate.team.id, "name": session.candidate.team.name} if session.candidate.team else None
         )
 
     import json as _json
@@ -314,14 +314,17 @@ async def access_interview(
     is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
     is_finished = session.is_completed or session.status == InterviewStatus.COMPLETED
 
-    if is_expired or is_finished:
+    if is_finished:
+        raise HTTPException(status_code=403, detail="This interview has already been completed.")
+    
+    if is_expired:
         # If it just expired now, update status in DB for record keeping
-        if is_expired and session.status != InterviewStatus.EXPIRED:
+        if session.status != InterviewStatus.EXPIRED:
             session.status = InterviewStatus.EXPIRED
             session_db.add(session)
             session_db.commit()
             
-        raise HTTPException(status_code=403, detail="Interview is completed.")
+        raise HTTPException(status_code=403, detail="This interview link has expired.")
          
     # Check for tab-switch timeout
     enforce_tab_timeout(session_db, session)
@@ -354,7 +357,7 @@ async def access_interview(
     response_data = InterviewAccessResponse(
         id=session.id,
         access_token=session.access_token,
-        admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
+        admin_user=admin_data,
         candidate_user=candidate_data,
         paper=paper_data,
         coding_paper=coding_paper_data,
@@ -428,11 +431,11 @@ async def get_schedule_time(
     display_message = "Interview schedule time retrieved successfully."
 
     if session.status == InterviewStatus.CANCELLED:
-        display_message = "This interview has been cancelled."
+        raise HTTPException(status_code=403, detail="This interview has been cancelled.")
     elif session.is_completed or session.status == InterviewStatus.COMPLETED:
-        display_message = "This interview has already been completed."
+        raise HTTPException(status_code=403, detail="This interview has already been completed.")
     elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        display_message = "This interview link has expired."
+        raise HTTPException(status_code=403, detail="This interview link has expired.")
     elif session.status == InterviewStatus.LIVE:
         display_message = "This interview is currently in progress (attempted)."
     elif now < schedule_time:
@@ -482,6 +485,24 @@ async def start_session_logic(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404)
     
+    from ..models.db_models import InterviewStatus
+    
+    # 1. Consolidated Validation Check
+    now = datetime.now(timezone.utc)
+    schedule_time = session.schedule_time
+    if schedule_time.tzinfo is None:
+        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+
+    if session.status == InterviewStatus.CANCELLED:
+        raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+    
+    if session.is_completed or session.status == InterviewStatus.COMPLETED:
+        raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        
+    if now > expiration_time or session.status == InterviewStatus.EXPIRED:
+        raise HTTPException(status_code=403, detail="This interview link has expired.")
+    
     # Check if suspended
     if session.is_suspended:
         raise HTTPException(
@@ -528,7 +549,9 @@ async def start_session_logic(
             # Cleanup only after processing
             audio_service.cleanup_audio(enrollment_path)
             
-            session.enrollment_audio_path = enrollment_path
+            # Upload to Cloudinary
+            cloudinary_url = cloudinary_service.upload_audio(content)
+            session.enrollment_audio_path = cloudinary_url
             
             # Track enrollment completion
             record_status_change(
@@ -1118,6 +1141,18 @@ async def submit_answer_audio(
         if transcribed_text:
             answer.transcribed_text = transcribed_text
             answer.candidate_answer = transcribed_text
+            
+            # Upload to Cloudinary after processing local analysis
+            try:
+                with open(audio_path, "rb") as f:
+                    audio_content = f.read()
+                cloudinary_url = cloudinary_service.upload_audio(audio_content)
+                answer.audio_path = cloudinary_url
+                # Cleanup local file
+                audio_service.cleanup_audio(audio_path)
+            except Exception as cloud_exc:
+                logger.error(f"Cloudinary upload failed for answer {answer.id}: {cloud_exc}")
+
             session_db.add(answer)
             session_db.commit()
             session_db.refresh(answer)
@@ -1770,6 +1805,61 @@ async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User 
     except Exception as e:
         logger.error(f"Standalone speech to text failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Speech to text conversion failed.")
+
+@router.post("/tools/sttEvaluate", response_model=ApiResponse[dict])
+async def stt_evaluate_tool(
+    audio: UploadFile = File(...),
+    question_text: str = Form(...),
+    expected_answer: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Standalone tool to convert speech to text AND evaluate it against a question.
+    """
+    try:
+        # 1. Save and Transcribe
+        temp_filename = f"temp_stteval_{uuid.uuid4().hex}.wav"
+        content = await audio.read()
+        temp_path = f"app/assets/audio/standalone/{temp_filename}"
+        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+        
+        audio_service.save_audio_blob(content, temp_path)
+        
+        # Perform STT
+        transcribed_text = await audio_service.speech_to_text(temp_path)
+        
+        # Cleanup audio immediately if transcribed
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        if not transcribed_text:
+            return ApiResponse(
+                status_code=400,
+                data={},
+                message="Speech transcription failed or returned empty text."
+            )
+            
+        # 2. Evaluate
+        # We pass the question_text as the context for evaluation
+        evaluation = interview_service.evaluate_answer_content(
+            question=question_text,
+            answer=transcribed_text
+        )
+        
+        # If expected_answer was provided, we return it as well in the data
+        return ApiResponse(
+            status_code=200,
+            data={
+                "transcribed_text": transcribed_text,
+                "evaluation": evaluation,
+                "expected_answer": expected_answer
+            },
+            message="Speech evaluated successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"sttEvaluate tool failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="sttEvaluate tool failed.")
 
 @router.get("/tts")
 async def standalone_tts(text: str, background_tasks: BackgroundTasks):

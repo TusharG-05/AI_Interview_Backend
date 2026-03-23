@@ -1,0 +1,59 @@
+2026-03-23 13:49:42,150 [INFO] app.server: PRE-INIT: static_ffmpeg initialized.
+2026-03-23 13:49:42,151 [INFO] app.server: PRE-INIT: Initializing database...
+2026-03-23 13:49:53,260 [INFO] alembic.runtime.plugins: setup plugin alembic.autogenerate.schemas
+2026-03-23 13:49:53,260 [INFO] alembic.runtime.plugins: setup plugin alembic.autogenerate.tables
+2026-03-23 13:49:53,260 [INFO] alembic.runtime.plugins: setup plugin alembic.autogenerate.types
+2026-03-23 13:49:53,261 [INFO] alembic.runtime.plugins: setup plugin alembic.autogenerate.constraints
+2026-03-23 13:49:53,261 [INFO] alembic.runtime.plugins: setup plugin alembic.autogenerate.defaults
+2026-03-23 13:49:53,261 [INFO] alembic.runtime.plugins: setup plugin alembic.autogenerate.comments
+INFO:     Database: Running migrations (alembic upgrade head) on URL: postgresql+psycopg2:...
+INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+2026-03-23 13:50:01.695420: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-03-23 13:50:01.695947: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-03-23 13:50:01.744032: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+2026-03-23 13:50:01.744036: I tensorflow/core/platform/cpu_feature_guard.cc:210] This TensorFlow binary is optimized to use available CPU instructions in performance-critical operations.
+To enable the following instructions: AVX2 AVX512F AVX512_VNNI FMA, in other operations, rebuild TensorFlow with the appropriate compiler flags.
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint save hook for _speechbrain_save
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint load hook for _speechbrain_load
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint save hook for save
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint load hook for load
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint save hook for _save
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint load hook for _recover
+INFO  [speechbrain.utils.fetching] Fetch hyperparams.yaml: Using file found at '/home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/hyperparams.yaml'
+DEBUG [speechbrain.utils.fetching] Fetch: Source and destination '/home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/custom.py' are identical, returning assuming this is intended
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint save hook for _save
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint load hook for _load
+DEBUG [speechbrain.utils.checkpoints] Registered parameter transfer hook for _load
+/home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/.venv/lib/python3.11/site-packages/speechbrain/utils/autocast.py:188: FutureWarning: `torch.cuda.amp.custom_fwd(args...)` is deprecated. Please use `torch.amp.custom_fwd(args..., device_type='cuda')` instead.
+  wrapped_fwd = torch.cuda.amp.custom_fwd(fwd, cast_inputs=cast_inputs)
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint save hook for save
+DEBUG [speechbrain.utils.checkpoints] Registered checkpoint load hook for load_if_possible
+DEBUG [speechbrain.utils.parameter_transfer] Collecting files (or symlinks) for pretraining in /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain.
+INFO  [speechbrain.utils.fetching] Fetch embedding_model.ckpt: Using file found at '/home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/embedding_model.ckpt'
+DEBUG [speechbrain.utils.parameter_transfer] Set local path in self.paths["embedding_model"] = /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/embedding_model.ckpt
+INFO  [speechbrain.utils.fetching] Fetch mean_var_norm_emb.ckpt: Using file found at '/home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/mean_var_norm_emb.ckpt'
+DEBUG [speechbrain.utils.parameter_transfer] Set local path in self.paths["mean_var_norm_emb"] = /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/mean_var_norm_emb.ckpt
+INFO  [speechbrain.utils.fetching] Fetch classifier.ckpt: Using file found at '/home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/classifier.ckpt'
+DEBUG [speechbrain.utils.parameter_transfer] Set local path in self.paths["classifier"] = /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/classifier.ckpt
+INFO  [speechbrain.utils.fetching] Fetch label_encoder.txt: Using file found at '/home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/label_encoder.ckpt'
+DEBUG [speechbrain.utils.parameter_transfer] Set local path in self.paths["label_encoder"] = /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/label_encoder.ckpt
+INFO  [speechbrain.utils.parameter_transfer] Loading pretrained files for: embedding_model, mean_var_norm_emb, classifier, label_encoder
+DEBUG [speechbrain.utils.parameter_transfer] Redirecting (loading from local path): embedding_model -> /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/embedding_model.ckpt
+DEBUG [speechbrain.utils.parameter_transfer] Redirecting (loading from local path): mean_var_norm_emb -> /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/mean_var_norm_emb.ckpt
+DEBUG [speechbrain.utils.parameter_transfer] Redirecting (loading from local path): classifier -> /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/classifier.ckpt
+DEBUG [speechbrain.utils.parameter_transfer] Redirecting (loading from local path): label_encoder -> /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/label_encoder.ckpt
+DEBUG [speechbrain.dataio.encoder] Loaded categorical encoding from /home/harpreet/Documents/face_gaze_detection (1)/face_gaze_detection/models/speechbrain/label_encoder.ckpt
+2026-03-23 13:50:07.091240: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+2026-03-23 13:50:07.096270: I tensorflow/core/util/port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+W0000 00:00:1774254009.228831   30233 face_landmarker_graph.cc:174] Sets FaceBlendshapesGraph acceleration to xnnpack by default.
+W0000 00:00:1774254009.228834   30232 face_landmarker_graph.cc:174] Sets FaceBlendshapesGraph acceleration to xnnpack by default.
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+W0000 00:00:1774254009.234817   30250 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1774254009.234885   30234 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1774254009.245061   30241 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1774254009.249782   30244 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.

@@ -3,7 +3,7 @@ import json as _json
 from sqlalchemy import func
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
@@ -1486,10 +1486,11 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
 
 from ..schemas.interview_responses import (
     AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, 
-    QuestionPaperData, CodingAnswersData, CodingQuestionBasic, QuestionWithAnswer, CodingQuestionWithAnswer
+    QuestionPaperData, CodingAnswersData, CodingQuestionBasic, QuestionWithAnswer, CodingQuestionWithAnswer,
+    PaperNestedWithAdminId, CodingPaperNestedWithAdmin, ProctoringEventRead, remove_none_values
 )
 
-@router.get("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
+@router.get("/results/{interview_id}", response_model=ApiResponse[dict])
 async def get_result(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1536,18 +1537,21 @@ async def get_result(
     # 1. Admin
     admin_obj = None
     if s.admin:
-        from .teams import _serialize_team_basic
         admin_obj = UserNested(
             id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-            access_token=s.admin.access_token,
-            team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
+            access_token=s.admin.access_token or "",
+            team={"id": s.admin.team.id, "name": s.admin.team.name} if s.admin.team else None
         )
          
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
-        candidate_obj = serialize_user(s.candidate)
+        candidate_obj = UserNested(
+            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name,
+            role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
+            team={"id": s.candidate.team.id, "name": s.candidate.team.name} if hasattr(s.candidate, "team") and s.candidate.team else None
+        )
         
     # 3. Paper (Standard) with Nested Answers
     paper_obj = None
@@ -1563,29 +1567,31 @@ async def get_result(
                     candidate_answer=ans.candidate_answer or "",
                     feedback=ans.feedback or "",
                     score=ans.score or 0.0,
-                    audio_path=ans.audio_path or "",
+                    audio_path=ans.audio_path or "", 
                     transcribed_text=ans.transcribed_text or "",
                     timestamp=ans.timestamp or datetime.now(timezone.utc)
                 )
-            
+
             # Parsing coding_content if it's a proxy question in standard paper
             coding_content = None
             if q.response_type == "code" and q.content:
                 try:
                     coding_content = _json.loads(q.content)
-                except: pass
+                except:
+                    pass
 
             questions_with_answers.append(QuestionWithAnswer(
                 id=q.id, paper_id=q.paper_id, content=q.content or "",
                 question_text=q.question_text or q.content or "",
                 topic=q.topic or "General", answer=ans_short,
-                difficulty=str(q.difficulty), marks=q.marks,
+                difficulty=str(q.difficulty), marks=q.marks or 0,
                 response_type=str(q.response_type), coding_content=coding_content
             ))
-            
+
         p_total = s.paper.total_marks if s.paper.total_marks else sum(q.marks or 0 for q in s.paper.questions)
-        paper_obj = PaperNestedWithoutAdmin(
+        paper_obj = PaperNestedWithAdminId(
             id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
+            admin_user=s.paper.admin_id, 
             question_count=len(questions_with_answers),
             questions=questions_with_answers,
             total_marks=p_total,
@@ -1601,17 +1607,14 @@ async def get_result(
             ans_short = None
             if ans:
                 ans_short = AnswerShort(
-                    id=ans.id,
-                    interview_result_id=ans.interview_result_id,
+                    id=ans.id, interview_result_id=ans.interview_result_id,
                     candidate_answer=ans.candidate_answer or "",
-                    feedback=ans.feedback or "",
-                    score=ans.score or 0.0,
+                    feedback=ans.feedback or "", score=ans.score or 0.0,
                     audio_path=ans.audio_path or "",
                     transcribed_text=ans.transcribed_text or "",
                     timestamp=ans.timestamp or datetime.now(timezone.utc)
                 )
 
-            # Manual JSON field parsing since our schema list fields are strict
             examples = q.examples
             if isinstance(examples, str):
                 try: examples = _json.loads(examples)
@@ -1632,52 +1635,61 @@ async def get_result(
             ))
 
         cp_total = s.coding_paper.total_marks if s.coding_paper.total_marks else sum(q.marks or 0 for q in s.coding_paper.questions)
-        coding_paper_obj = CodingPaperNestedWithoutAdmin(
+        coding_paper_obj = CodingPaperNestedWithAdmin(
             id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
+            admin_user=UserNested(
+                id=s.coding_paper.admin.id, email=s.coding_paper.admin.email, 
+                full_name=s.coding_paper.admin.full_name,
+                role=s.coding_paper.admin.role.value if hasattr(s.coding_paper.admin.role, 'value') else str(s.coding_paper.admin.role)
+            ) if s.coding_paper.admin else None,
             question_count=len(coding_questions_with_answers),
             total_marks=cp_total,
             created_at=s.coding_paper.created_at,
             questions=coding_questions_with_answers
         )
         
-    # 4. Session Nested
-    session_nested = InterviewSessionData(
-        id=s.id, access_token=s.access_token,
+    # 4. Final Response Assembler
+    response_count = (len(s.result.answers) if s.result else 0) + (len(s.result.coding_answers) if s.result else 0)
+    max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
+    
+    proctoring = ProctoringEventRead(
+        warning_count=s.warning_count or 0,
+        max_warnings=s.max_warnings or 3,
+        is_suspended=s.is_suspended or False,
+        suspension_reason=s.suspension_reason,
+        suspended_at=s.suspended_at,
+        allow_copy_paste=s.allow_copy_paste or False,
+        allow_question_navigation=s.allow_question_navigate or False
+    )
+
+    result_detail = InterviewSessionData(
+        id=s.id, access_token=s.access_token, invite_link=f"{FRONTEND_URL}/interview/{s.access_token}",
         admin_user=admin_obj, candidate_user=candidate_obj, 
         paper=paper_obj, coding_paper=coding_paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
-        status=s.status.value if hasattr(s.status, 'value') else str(s.status),
-        total_score=s.total_score,
-        current_status=s.current_status.value if hasattr(s.current_status, 'value') else str(s.current_status),
-        last_activity=s.last_activity, warning_count=s.warning_count or 0,
-        max_warnings=s.max_warnings or 3, is_suspended=s.is_suspended or False,
-        suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
-        enrollment_audio_path=s.enrollment_audio_path,
-        is_completed=s.is_completed or False,
-        allow_copy_paste=s.allow_copy_paste or False,
-        allow_question_navigate=s.allow_question_navigate or False,
-        result_status=s.result.result_status if s.result else "PENDING"
-    )
-    
-    # 5. Final Result Assembler
-    max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
-    result_detail = AdminResultData(
-        id=s.result.id,
-        interview=session_nested,
-        total_score=s.result.total_score or 0.0,
+        status=s.status.value if hasattr(s.status, 'value') else str(s.status).lower(),
+        interview_round="Round 1", # Default value, can be updated later if needed
+        response_count=response_count,
+        last_activity=s.last_activity,
+        result_status=s.result.result_status if s.result else "PENDING",
         max_marks=float(max_marks),
-        result_status=s.result.result_status or "PENDING",
-        created_at=s.result.created_at or datetime.now(timezone.utc)
+        total_score=float(s.result.total_score if s.result else 0.0),
+        enrollment_audio_path=s.enrollment_audio_path,
+        enrollment_audio_url=s.enrollment_audio_path, # Direct Cloudinary URL
+        is_completed=s.is_completed or False,
+        proctoring_event=proctoring
     )
+
+    data_dict = remove_none_values(result_detail.model_dump())
 
     return ApiResponse(
         status_code=200,
-        data=result_detail,
+        data=data_dict,
         message="Result details retrieved successfully"
     )
 
-@router.patch("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
+@router.patch("/results/{interview_id}", response_model=ApiResponse[dict])
 async def update_result(
     interview_id: int,
     update_data: ResultUpdate,
@@ -1868,12 +1880,15 @@ async def get_response_audio(
        (response.interview_result.session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
+    if response.audio_path.startswith(("http://", "https://")):
+        return RedirectResponse(url=response.audio_path)
+        
     if not os.path.exists(response.audio_path):
         raise HTTPException(status_code=404, detail="Audio file missing on server")
         
     return FileResponse(
         response.audio_path,
-        media_type="audio/wav",
+        media_type="audio/wav", # Adjust if needed, but wav is standard for our recording uploads
         content_disposition_type="inline"
     )
 
@@ -1892,6 +1907,9 @@ async def get_enrollment_audio(
     if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
+    if interview_session.enrollment_audio_path.startswith(("http://", "https://")):
+        return RedirectResponse(url=interview_session.enrollment_audio_path)
+
     if not os.path.exists(interview_session.enrollment_audio_path):
         raise HTTPException(status_code=404, detail="Enrollment audio file missing on server")
         
