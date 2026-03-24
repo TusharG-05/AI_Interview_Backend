@@ -4,8 +4,8 @@ Standardized API Response Models
 Provides consistent response format across all endpoints.
 """
 
-from typing import TypeVar, Generic, Optional, Any
-from pydantic import BaseModel
+from typing import TypeVar, Generic, Optional, Any, Dict
+from pydantic import BaseModel, ConfigDict
 from fastapi.responses import JSONResponse
 
 T = TypeVar('T')
@@ -44,6 +44,10 @@ class ApiResponse(BaseModel, Generic[T]):
             data['success'] = 200 <= status_code < 300
         super().__init__(**data)
 
+    def model_dump(self, **kwargs):
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(**kwargs)
+
 
 class ApiErrorResponse(BaseModel):
     """
@@ -74,6 +78,10 @@ class ApiErrorResponse(BaseModel):
             status_code = data.get('status_code', 500)
             data['success'] = 200 <= status_code < 300
         super().__init__(**data)
+
+    def model_dump(self, **kwargs):
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(**kwargs)
 
 
 def create_response(api_response: ApiResponse | ApiErrorResponse) -> JSONResponse:
