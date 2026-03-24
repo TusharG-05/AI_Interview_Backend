@@ -9,7 +9,7 @@ class UserRead(BaseModel):
     full_name: str
     role: str
     resume_url: Optional[str] = None
-    profile_image_url: Optional[str] = None
+    profile_image: Optional[str] = None
     team: Optional[TeamReadBasic] = None
 
     class Config:
@@ -25,7 +25,7 @@ class GetUserDetailResponse(BaseModel):
     created_interviews_count: int = 0
     participated_interviews_count: int = 0
     resume_url: Optional[str] = None
-    profile_image_url: Optional[str] = None
+    profile_image: Optional[str] = None
     team: Optional[TeamReadBasic] = None
 
     class Config:
