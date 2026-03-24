@@ -175,6 +175,12 @@ async def access_interview(
     
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
+
+    if session.is_suspended:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"This interview has been suspended. Reason: {session.suspension_reason}" if session.suspension_reason else "This interview has been suspended."
+        )
         
     # Validation Logic
     now = datetime.now(timezone.utc)
@@ -199,6 +205,12 @@ async def access_interview(
         raise HTTPException(status_code=403, detail="This interview link has expired.")
          
     enforce_tab_timeout(session_db, session)
+    
+    if session.is_suspended:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"This interview has been suspended. Reason: {session.suspension_reason}" if session.suspension_reason else "This interview has been suspended."
+        )
 
     if session.current_status == CandidateStatus.INVITED:
         record_status_change(
