@@ -57,7 +57,6 @@ class AdminPaperNested(BaseModel):
     id: int
     name: str
     description: Optional[str] = ""
-    admin_user: Optional[Union[int, UserNested]] = None
     question_count: int = 0
     total_marks: float = 0.0
     created_at: datetime
@@ -68,7 +67,7 @@ class AdminPaperNested(BaseModel):
         from_attributes = True
 
 class AdminProctoringEvent(BaseModel):
-    id: int
+    id: Optional[int] = None
     warning_count: int = 0
     max_warnings: int = 3
     is_suspended: bool = False

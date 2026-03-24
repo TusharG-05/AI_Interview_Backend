@@ -1728,9 +1728,8 @@ async def get_result(
             ))
 
         p_total = s.paper.total_marks if s.paper.total_marks else sum(q.marks or 0 for q in s.paper.questions)
-        paper_obj = PaperNestedWithAdminId(
-            id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
-            admin_user=s.paper.admin_id, 
+        paper_obj = PaperNestedWithoutAdmin(
+            id=s.paper.id, name=s.paper.name, description=s.paper.description or "",  
             question_count=len(questions_with_answers),
             questions=questions_with_answers,
             total_marks=p_total,
@@ -2044,7 +2043,6 @@ async def get_enrollment_audio(
     if not interview_session or not interview_session.enrollment_audio_path:
         raise HTTPException(status_code=404, detail="Enrollment audio not found")
         
-    # Authorization: Only admin who created the interview OR super admin
     # Authorization: Only admin who created the interview OR super admin
     # Relaxed: Allow if admin_id is None (unassigned)
     is_owner = interview_session.admin_id == current_user.id
