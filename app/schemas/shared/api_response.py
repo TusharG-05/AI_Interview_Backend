@@ -9,8 +9,16 @@ class ApiResponse(BaseModel, Generic[T]):
     message: str = "Success"
     success: bool = True
 
+    def model_dump(self, **kwargs):
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(**kwargs)
+
 class ApiErrorResponse(BaseModel):
     status_code: int = 400
     message: str = "Error"
     data: Optional[Any] = None
     success: bool = False
+
+    def model_dump(self, **kwargs):
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(**kwargs)
