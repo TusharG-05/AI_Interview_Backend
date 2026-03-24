@@ -9,7 +9,6 @@ class UserNested(BaseModel):
     role: str
     access_token: Optional[str] = None
     profile_image: Optional[str] = None
-    profile_image_url: Optional[str] = None
     team: Optional[TeamReadBasic] = None
 
     class Config:
@@ -30,7 +29,6 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
             "full_name": fallback_name or "Deleted User",
             "role": fallback_role,
             "profile_image": None,
-            "profile_image_url": None,
             "resume_url": None,
             "team": None
         }
@@ -51,7 +49,6 @@ def serialize_user(user: Optional[User], fallback_name: Optional[str] = None, fa
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "profile_image_url": f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or hasattr(user, 'profile_image') and user.profile_image else None,
         "resume_url": getattr(user, 'resume_path', None),
         "team": team_data
     }
@@ -73,7 +70,6 @@ def serialize_user_flat(user: User) -> Dict[str, Any]:
         "full_name": user.full_name,
         "role": role_key,
         "profile_image": user.profile_image,
-        "profile_image_url": f"/api/candidate/profile-image/{user.id}" if user.profile_image_bytes or user.profile_image else None,
         "resume_url": getattr(user, 'resume_path', None),
         "team": team_data
     }

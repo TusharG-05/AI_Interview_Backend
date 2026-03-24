@@ -1093,7 +1093,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
             email=session_obj.admin.email,
             full_name=session_obj.admin.full_name,
             role=str(session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else session_obj.admin.role),
-            profile_image=None,
+            profile_image=session_obj.admin.profile_image,
             team=TeamReadBasic(
                 id=session_obj.admin.team.id,
                 name=session_obj.admin.team.name,
@@ -1110,7 +1110,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
             email=session_obj.candidate.email,
             full_name=session_obj.candidate.full_name,
             role=str(session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else session_obj.candidate.role),
-            profile_image=None,
+            profile_image=session_obj.candidate.profile_image,
             team=TeamReadBasic(
                 id=session_obj.candidate.team.id,
                 name=session_obj.candidate.team.name,
@@ -2206,7 +2206,7 @@ async def create_user(
             full_name=new_user.full_name,
             role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
             resume_url=new_user.resume_path,
-            profile_image_url=new_user.profile_image, 
+            profile_image=new_user.profile_image, 
             team=team_data
         ),
         message="User created with profile image and biometric embeddings."
@@ -2226,7 +2226,7 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
             resume_url=u.resume_path if u.resume_path else None,
-            profile_image_url=u.profile_image if u.profile_image_bytes or u.profile_image else None,
+            profile_image=u.profile_image,
             team=team_data
         ))
         
@@ -2273,7 +2273,7 @@ async def get_user(
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
             resume_url=user.resume_path if user.resume_path else None,
-            profile_image_url=user.profile_image if user.profile_image_bytes or user.profile_image else None,
+            profile_image=user.profile_image,
             team=team_data
         ),
         message="User details retrieved successfully"
@@ -2387,7 +2387,7 @@ async def update_user(
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
             resume_url=user.resume_path if user.resume_path else None,
-            profile_image_url=user.profile_image if user.profile_image_bytes or user.profile_image else None,
+            profile_image=user.profile_image,
             team=team_data
         ),
         message="User updated successfully"
