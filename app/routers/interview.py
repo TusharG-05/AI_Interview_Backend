@@ -34,6 +34,177 @@ cloudinary_service = CloudinaryService()
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
 
+def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
+    """Helper to serialize InterviewSession into InterviewAccessResponse."""
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
+    from ..schemas.shared.user import LoginUserNested
+    import json as _json
+
+    # Map Admin
+    admin_data = None
+    if session.admin:
+        admin_data = LoginUserNested(
+            id=session.admin.id,
+            email=session.admin.email,
+            full_name=session.admin.full_name,
+            role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
+            access_token=session.admin.access_token or "",
+            team={"id": session.admin.team.id, "name": session.admin.team.name} if session.admin.team else None
+        )
+
+    # Map Candidate
+    candidate_data = None
+    if session.candidate:
+        candidate_data = LoginUserNested(
+            id=session.candidate.id,
+            email=session.candidate.email,
+            full_name=session.candidate.full_name,
+            role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
+            access_token=session.candidate.access_token or "",
+            team={"id": session.candidate.team.id, "name": session.candidate.team.name} if session.candidate.team else None
+        )
+
+    # Pre-fetch existing answers
+    answers_map = {}
+    coding_answers_map = {}
+    if session.result:
+        for ans in session.result.answers:
+            answers_map[ans.question_id] = AnswerShort(
+                id=ans.id,
+                interview_result_id=ans.interview_result_id,
+                candidate_answer=ans.candidate_answer or "",
+                feedback=ans.feedback or "",
+                score=ans.score or 0.0,
+                audio_path=ans.audio_path or "",
+                transcribed_text=ans.transcribed_text or "",
+                timestamp=ans.timestamp
+            )
+        for cans in session.result.coding_answers:
+            coding_answers_map[cans.coding_question_id] = AnswerShort(
+                id=cans.id,
+                interview_result_id=cans.interview_result_id,
+                candidate_answer=cans.candidate_answer or "",
+                feedback=cans.feedback or "",
+                score=cans.score or 0.0,
+                audio_path=cans.audio_path or "",
+                transcribed_text=cans.transcribed_text or "",
+                timestamp=cans.timestamp
+            )
+
+    # Map Standard Question Paper
+    paper_data = None
+    if session.paper:
+        questions_list = [
+            QuestionWithAnswer(
+                id=q.id,
+                paper_id=q.paper_id,
+                content=q.content or "",
+                question_text=q.question_text or q.content or "",
+                topic=q.topic or "General",
+                answer=answers_map.get(q.id),
+                difficulty=str(q.difficulty.value if hasattr(q.difficulty, 'value') else q.difficulty),
+                marks=q.marks or 1,
+                response_type=str(q.response_type.value if hasattr(q.response_type, 'value') else q.response_type)
+            ) for q in session.paper.questions
+        ]
+        paper_data = PaperNestedWithoutAdmin(
+            id=session.paper.id,
+            name=session.paper.name,
+            description=session.paper.description or "",
+            # admin_user=session.paper.admin_user if session.paper.admin else None,
+            question_count=session.paper.question_count or len(questions_list),
+            total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
+            created_at=session.paper.created_at,
+            questions=questions_list
+        )
+
+    # Map Coding Question Paper
+    coding_paper_data = None
+    if session.coding_paper:
+        coding_questions_list = [
+            CodingQuestionWithAnswer(
+                id=cq.id,
+                paper_id=cq.paper_id,
+                title=cq.title or "",
+                problem_statement=cq.problem_statement or "",
+                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
+                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
+                starter_code=cq.starter_code or "",
+                answer=coding_answers_map.get(cq.id),
+                topic=cq.topic or "Algorithms",
+                difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
+                marks=cq.marks or 0
+            ) for cq in session.coding_paper.questions
+        ]
+        
+        # Map admin user for coding paper
+        coding_admin_user = None
+        if session.coding_paper.admin:
+            coding_admin_user = LoginUserNested(
+                id=session.coding_paper.admin.id,
+                email=session.coding_paper.admin.email,
+                full_name=session.coding_paper.admin.full_name,
+                role=session.coding_paper.admin.role.value if hasattr(session.coding_paper.admin.role, 'value') else str(session.coding_paper.admin.role),
+                access_token=session.coding_paper.admin.access_token or "",
+                team={"id": session.coding_paper.admin.team.id, "name": session.coding_paper.admin.team.name} if session.coding_paper.admin.team else None
+            )
+        
+        coding_paper_data = CodingPaperNestedWithoutAdmin(
+            id=session.coding_paper.id,
+            name=session.coding_paper.name,
+            description=session.coding_paper.description or "",
+            # admin_user=coding_admin_user,
+            question_count=session.coding_paper.question_count or len(coding_questions_list),
+            total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
+            created_at=session.coding_paper.created_at,
+            team_id=session.coding_paper.team_id,
+            questions=coding_questions_list
+        )
+
+    # Create proctoring event
+    proctoring_event = ProctoringEvent(
+        id=session.id,
+        warning_count=session.warning_count or 0,
+        max_warnings=session.max_warnings or 3,
+        is_suspended=session.is_suspended or False,
+        suspension_reason=session.suspension_reason,
+        suspended_at=session.suspended_at,
+        allow_copy_paste=session.allow_copy_paste or False,
+        allow_question_navigation=session.allow_question_navigate or False
+    )
+
+    now = datetime.now(timezone.utc)
+    status_str = session.status.value.lower() if hasattr(session.status, 'value') else str(session.status).lower()
+    
+    # Calculate response count and max marks
+    response_count = (len(session.result.answers) if session.result else 0) + (len(session.result.coding_answers) if session.result else 0)
+    max_marks = (paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0)
+
+    return InterviewAccessResponse(
+        id=session.id,
+        access_token=session.access_token,
+        admin_user=admin_data,
+        candidate_user=candidate_data,
+        paper=paper_data,
+        coding_paper=coding_paper_data,
+        schedule_time=session.schedule_time,
+        duration_minutes=session.duration_minutes or 1440,
+        max_questions=session.max_questions,
+        start_time=session.start_time,
+        end_time=session.end_time,
+        status=status_str,
+        interview_round=str(session.interview_round.value if hasattr(session.interview_round, 'value') else session.interview_round) if session.interview_round else None,
+        response_count=response_count,
+        last_activity=session.last_activity or now,
+        result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
+        max_marks=max_marks,
+        total_score=session.total_score or 0.0,
+        enrollment_audio_path=session.enrollment_audio_path,
+        is_completed=session.is_completed or False,
+        tab_switch_count=session.tab_switch_count or 0,
+        tab_warning_active=session.tab_warning_active or False,
+        proctoring_event=proctoring_event
+    )
 
 def _evaluate_and_update_score(
     db: Session,
@@ -229,177 +400,6 @@ async def access_interview(
         message=return_msg
     )
 
-def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
-    """Helper to serialize InterviewSession into InterviewAccessResponse."""
-    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
-    from ..schemas.shared.user import LoginUserNested
-    import json as _json
-
-    # Map Admin
-    admin_data = None
-    if session.admin:
-        admin_data = LoginUserNested(
-            id=session.admin.id,
-            email=session.admin.email,
-            full_name=session.admin.full_name,
-            role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token or "",
-            team={"id": session.admin.team.id, "name": session.admin.team.name} if session.admin.team else None
-        )
-
-    # Map Candidate
-    candidate_data = None
-    if session.candidate:
-        candidate_data = LoginUserNested(
-            id=session.candidate.id,
-            email=session.candidate.email,
-            full_name=session.candidate.full_name,
-            role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token or "",
-            team={"id": session.candidate.team.id, "name": session.candidate.team.name} if session.candidate.team else None
-        )
-
-    # Pre-fetch existing answers
-    answers_map = {}
-    coding_answers_map = {}
-    if session.result:
-        for ans in session.result.answers:
-            answers_map[ans.question_id] = AnswerShort(
-                id=ans.id,
-                interview_result_id=ans.interview_result_id,
-                candidate_answer=ans.candidate_answer or "",
-                feedback=ans.feedback or "",
-                score=ans.score or 0.0,
-                audio_path=ans.audio_path or "",
-                transcribed_text=ans.transcribed_text or "",
-                timestamp=ans.timestamp
-            )
-        for cans in session.result.coding_answers:
-            coding_answers_map[cans.coding_question_id] = AnswerShort(
-                id=cans.id,
-                interview_result_id=cans.interview_result_id,
-                candidate_answer=cans.candidate_answer or "",
-                feedback=cans.feedback or "",
-                score=cans.score or 0.0,
-                audio_path=cans.audio_path or "",
-                transcribed_text=cans.transcribed_text or "",
-                timestamp=cans.timestamp
-            )
-
-    # Map Standard Question Paper
-    paper_data = None
-    if session.paper:
-        questions_list = [
-            QuestionWithAnswer(
-                id=q.id,
-                paper_id=q.paper_id,
-                content=q.content or "",
-                question_text=q.question_text or q.content or "",
-                topic=q.topic or "General",
-                answer=answers_map.get(q.id),
-                difficulty=str(q.difficulty.value if hasattr(q.difficulty, 'value') else q.difficulty),
-                marks=q.marks or 1,
-                response_type=str(q.response_type.value if hasattr(q.response_type, 'value') else q.response_type)
-            ) for q in session.paper.questions
-        ]
-        paper_data = PaperNestedWithoutAdmin(
-            id=session.paper.id,
-            name=session.paper.name,
-            description=session.paper.description or "",
-            admin_user=session.paper.admin_user if session.paper.admin else None,
-            question_count=session.paper.question_count or len(questions_list),
-            total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
-            created_at=session.paper.created_at,
-            questions=questions_list
-        )
-
-    # Map Coding Question Paper
-    coding_paper_data = None
-    if session.coding_paper:
-        coding_questions_list = [
-            CodingQuestionWithAnswer(
-                id=cq.id,
-                paper_id=cq.paper_id,
-                title=cq.title or "",
-                problem_statement=cq.problem_statement or "",
-                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
-                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
-                starter_code=cq.starter_code or "",
-                answer=coding_answers_map.get(cq.id),
-                topic=cq.topic or "Algorithms",
-                difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
-                marks=cq.marks or 0
-            ) for cq in session.coding_paper.questions
-        ]
-        
-        # Map admin user for coding paper
-        coding_admin_user = None
-        if session.coding_paper.admin:
-            coding_admin_user = LoginUserNested(
-                id=session.coding_paper.admin.id,
-                email=session.coding_paper.admin.email,
-                full_name=session.coding_paper.admin.full_name,
-                role=session.coding_paper.admin.role.value if hasattr(session.coding_paper.admin.role, 'value') else str(session.coding_paper.admin.role),
-                access_token=session.coding_paper.admin.access_token or "",
-                team={"id": session.coding_paper.admin.team.id, "name": session.coding_paper.admin.team.name} if session.coding_paper.admin.team else None
-            )
-        
-        coding_paper_data = CodingPaperNestedWithoutAdmin(
-            id=session.coding_paper.id,
-            name=session.coding_paper.name,
-            description=session.coding_paper.description or "",
-            admin_user=coding_admin_user,
-            question_count=session.coding_paper.question_count or len(coding_questions_list),
-            total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
-            created_at=session.coding_paper.created_at,
-            team_id=session.coding_paper.team_id,
-            questions=coding_questions_list
-        )
-
-    # Create proctoring event
-    proctoring_event = ProctoringEvent(
-        id=session.id,
-        warning_count=session.warning_count or 0,
-        max_warnings=session.max_warnings or 3,
-        is_suspended=session.is_suspended or False,
-        suspension_reason=session.suspension_reason,
-        suspended_at=session.suspended_at,
-        allow_copy_paste=session.allow_copy_paste or False,
-        allow_question_navigation=session.allow_question_navigate or False
-    )
-
-    now = datetime.now(timezone.utc)
-    status_str = session.status.value.lower() if hasattr(session.status, 'value') else str(session.status).lower()
-    
-    # Calculate response count and max marks
-    response_count = (len(session.result.answers) if session.result else 0) + (len(session.result.coding_answers) if session.result else 0)
-    max_marks = (paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0)
-
-    return InterviewAccessResponse(
-        id=session.id,
-        access_token=session.access_token,
-        admin_user=admin_data,
-        candidate_user=candidate_data,
-        paper=paper_data,
-        coding_paper=coding_paper_data,
-        schedule_time=session.schedule_time,
-        duration_minutes=session.duration_minutes or 1440,
-        max_questions=session.max_questions,
-        start_time=session.start_time,
-        end_time=session.end_time,
-        status=status_str,
-        interview_round=str(session.interview_round.value if hasattr(session.interview_round, 'value') else session.interview_round) if session.interview_round else None,
-        response_count=response_count,
-        last_activity=session.last_activity or now,
-        result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
-        max_marks=max_marks,
-        total_score=session.total_score or 0.0,
-        enrollment_audio_path=session.enrollment_audio_path,
-        is_completed=session.is_completed or False,
-        tab_switch_count=session.tab_switch_count or 0,
-        tab_warning_active=session.tab_warning_active or False,
-        proctoring_event=proctoring_event
-    )
 
 
 @router.get("/schedule-time/{token}")

@@ -68,12 +68,17 @@ class AudioService:
             device = "cuda" if torch.cuda.is_available() else "cpu"
             logger.info(f"Loading Speaker Verification Model on {device}...")
             
-            # Fix for Windows Symlink Error (WinError 1314)
-            # Force download/copy files instead of symlinking
-            save_path = os.path.abspath("models/speechbrain") # Use absolute path for safety
+            # Fix for HF Spaces Permission Error / Windows Symlink Error
+            # Use /tmp/models on HF Spaces as /app/models may be read-only
+            if os.getenv("SPACE_ID"):
+                save_path = os.path.abspath("/tmp/models/speechbrain")
+            else:
+                save_path = os.path.abspath("models/speechbrain")
+                
             try:
                 if not os.path.exists(os.path.join(save_path, "hyperparams.yaml")):
-                    logger.info("Downloading SpeechBrain model to local directory (no symlinks)...")
+                    logger.info(f"Downloading SpeechBrain model to {save_path} (no symlinks)...")
+                    os.makedirs(save_path, exist_ok=True)
                     snapshot_download(
                         repo_id="speechbrain/spkrec-ecapa-voxceleb",
                         local_dir=save_path,

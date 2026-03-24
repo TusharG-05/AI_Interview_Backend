@@ -11,7 +11,7 @@ ENV TF_CPP_MIN_LOG_LEVEL=2
 
 # Clean inherited /app bloat from base image before copying fresh code
 WORKDIR /app
-RUN rm -rf /app/*
+RUN rm -rf /app/* && mkdir -p /app/models && chmod 777 /app/models
 
 # Only install application-level changes
 COPY requirements-app.txt .
