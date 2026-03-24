@@ -12,23 +12,42 @@ from ..schemas.shared.api_response import ApiResponse
 from ..schemas.resume.extract import ResumeResponse
 
 router = APIRouter(prefix="/resume", tags=["Resume Management"])
+from ..auth.dependencies import get_current_user_optional
+from ..models.db_models import InterviewSession
 
 @router.get("/", response_model=ApiResponse[ResumeResponse])
 async def get_resume(
     user_id: Optional[int] = None,
-    current_user: User = Depends(get_current_user),
+    interview_token: Optional[str] = None,
+    current_user: Optional[User] = Depends(get_current_user_optional),
     session: Session = Depends(get_session)
 ):
     """
     Retrieve resume metadata for specified user_id or current user.
     Admins can retrieve any, users only their own.
-    Returns the absolute Cloudinary URL in the response body.
+    Allows access via interview_token for candidates.
     """
-    target_user_id = user_id if user_id is not None else current_user.id
+    # 1. Resolve target_user_id
+    target_user_id = user_id
     
-    # Permission check
-    if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.ADMIN] and current_user.id != target_user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this resume")
+    if interview_token:
+        # Validate token and get candidate_id
+        interview = session.exec(select(InterviewSession).where(InterviewSession.access_token == interview_token)).first()
+        if not interview:
+            raise HTTPException(status_code=401, detail="Invalid interview token")
+        if target_user_id is not None and target_user_id != interview.candidate_id:
+            raise HTTPException(status_code=403, detail="Token mismatch for user_id")
+        target_user_id = interview.candidate_id
+        # Token access granted!
+    elif current_user:
+        if target_user_id is None:
+            target_user_id = current_user.id
+            
+        # Permission check for logged-in user
+        if current_user.role not in [UserRole.SUPER_ADMIN, UserRole.ADMIN] and current_user.id != target_user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this resume")
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required (Token or Login)")
     
     user = session.get(User, target_user_id)
     if not user:

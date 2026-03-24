@@ -1893,10 +1893,14 @@ async def stt_evaluate_tool(
 
 @router.get("/tts")
 async def standalone_tts(text: str, background_tasks: BackgroundTasks):
-    """
-    Generate Text-to-Speech (TTS) audio for the provided text via GET.
-    Enables direct browser playback in HTML <audio> tags via query parameters.
-    """
+    return await _generate_tts_response(text, background_tasks)
+
+@router.post("/tts")
+async def standalone_tts_post(data: TTSRange, background_tasks: BackgroundTasks):
+    return await _generate_tts_response(data.text, background_tasks)
+
+async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
+    """Internal helper for TTS generation and cleanup."""
     temp_mp3 = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.mp3"
     wav_path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.wav"
     
@@ -1907,6 +1911,7 @@ async def standalone_tts(text: str, background_tasks: BackgroundTasks):
         await audio_service.text_to_speech(text, temp_mp3)
         
         # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
+        from pydub import AudioSegment
         audio = AudioSegment.from_file(temp_mp3)
         audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
         audio.export(wav_path, format="wav")
