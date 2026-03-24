@@ -3,6 +3,7 @@ import shutil
 import contextlib
 import sentry_sdk
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from .core.database import init_db
 from .core.logger import setup_logging, get_logger
 from .core.config import SENTRY_DSN, REDIS_URL
@@ -99,11 +100,19 @@ async def lifespan(app: FastAPI):
     engine.dispose()
     logger.info("Application Shutdown Complete.")
 
+class ExcludeNoneRoute(APIRoute):
+    """Custom route class that excludes None values from responses by default."""
+    def __init__(self, *args, **kw):
+        if "response_model_exclude_none" not in kw:
+            kw["response_model_exclude_none"] = True
+        super().__init__(*args, **kw)
+
 app = FastAPI(
     title="AI Interview Platform API",
     description="High-performance JSON API for AI-driven face/gaze detection and automated interviews.",
     version="2.0.0",
     lifespan=lifespan,
+    route_class=ExcludeNoneRoute,
 )
 
 from fastapi.responses import JSONResponse
