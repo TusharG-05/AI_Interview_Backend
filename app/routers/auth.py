@@ -86,7 +86,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "email": user.email,
         "full_name": user.full_name,
         "role": str(user.role.value) if hasattr(user.role, "value") else str(user.role),
-        "profile_image_url" : user.profile_image,
+        "profile_image" : user.profile_image,
         "team": team_data
     }
     
