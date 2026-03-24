@@ -1,5 +1,5 @@
 from typing import Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import StreamingResponse
 from ..services.camera import CameraService
 from ..schemas.shared.api_response import ApiResponse
@@ -31,9 +31,20 @@ def frame_generator(interview_id: int):
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 @router.get("/video/video_feed")
-async def video_feed(interview_id: int):
+async def video_feed(interview_id: Optional[int] = Query(None)):
     """Streams the isolated annotated video feed for a specific session."""
     if not camera_service.running: camera_service.start()
+    
+    if interview_id is None:
+        # Return a placeholder frame when no interview_id provided
+        def placeholder_generator():
+            placeholder = b'\xff\xd8\xff\xdb\x00\x43\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\x09\x09\x08\x0a\x0c\x14\x0d\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c\x20\x24\x2e\x27\x20\x22\x2c\x23\x1c\x1c\x28\x37\x29\x2c\x30\x31\x34\x34\x34\x1f\x27\x39\x3d\x38\x32\x3c\x2e\x33\x34\x32\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1a\x00\x01\x01\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x05\x01\x02\x03\x06\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00\xf5\x7a\x00\xff\xd9'
+            while True:
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + placeholder + b'\r\n')
+                time.sleep(1.0)
+        
+        return StreamingResponse(placeholder_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+    
     return StreamingResponse(frame_generator(interview_id), media_type="multipart/x-mixed-replace; boundary=frame")
 
 

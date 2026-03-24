@@ -1777,11 +1777,7 @@ async def get_result(
         cp_total = s.coding_paper.total_marks if s.coding_paper.total_marks else sum(q.marks or 0 for q in s.coding_paper.questions)
         coding_paper_obj = CodingPaperNestedWithAdmin(
             id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
-            admin_user=UserNested(
-                id=s.coding_paper.admin.id, email=s.coding_paper.admin.email, 
-                full_name=s.coding_paper.admin.full_name,
-                role=s.coding_paper.admin.role.value if hasattr(s.coding_paper.admin.role, 'value') else str(s.coding_paper.admin.role)
-            ) if s.coding_paper.admin else None,
+            admin_user=None,
             question_count=len(coding_questions_with_answers),
             total_marks=cp_total,
             created_at=s.coding_paper.created_at,
@@ -2017,8 +2013,12 @@ async def get_response_audio(
         raise HTTPException(status_code=404, detail="Audio response not found")
         
     # Answers -> InterviewResult -> InterviewSession
-    if not response.interview_result or not response.interview_result.session or \
-       (response.interview_result.session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN):
+    # Authorization: Only admin who created the interview OR super admin
+    # Relaxed: Allow if admin_id is None (unassigned)
+    is_owner = response.interview_result.session.admin_id == current_user.id
+    is_unassigned = response.interview_result.session.admin_id is None
+    
+    if not (is_owner or is_unassigned or current_user.role == UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
     if response.audio_path.startswith(("http://", "https://")):
@@ -2045,7 +2045,12 @@ async def get_enrollment_audio(
         raise HTTPException(status_code=404, detail="Enrollment audio not found")
         
     # Authorization: Only admin who created the interview OR super admin
-    if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
+    # Authorization: Only admin who created the interview OR super admin
+    # Relaxed: Allow if admin_id is None (unassigned)
+    is_owner = interview_session.admin_id == current_user.id
+    is_unassigned = interview_session.admin_id is None
+
+    if not (is_owner or is_unassigned or current_user.role == UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
     if interview_session.enrollment_audio_path.startswith(("http://", "https://")):

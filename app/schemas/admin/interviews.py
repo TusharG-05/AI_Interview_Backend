@@ -2,13 +2,14 @@ from typing import Optional
 from pydantic import BaseModel, model_validator
 from .dashboard import AdminInterviewSessionDetail
 from ..shared.user import UserNested
+from ...models.db_models import InterviewRound
 
 class ScheduleInterviewRequest(BaseModel):
     candidate_id: int
     team_id: Optional[int] = None
     paper_id: Optional[int] = None
     coding_paper_id: Optional[int] = None
-    interview_round: str
+    interview_round: InterviewRound = InterviewRound.ROUND_1
     schedule_time: str # ISO format
     duration_minutes: int = 1440
     max_questions: Optional[int] = None

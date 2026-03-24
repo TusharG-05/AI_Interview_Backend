@@ -1,4 +1,5 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from typing import Optional
 from ..services.camera import CameraService
 from ..core.config import local_llm
 from ..schemas.shared.api_response import ApiResponse
@@ -51,7 +52,7 @@ def camera_status_callback(interview_id: int, warning_key: str):
         print(f"Callback Bridge Error: {e}")
 
 @router.get("/", response_model=ApiResponse[dict])
-async def get_system_status(interview_id: int):
+async def get_system_status(interview_id: Optional[int] = Query(None)):
     """Comprehensive health check for AI services (Isolate by session)."""
     from ..services.interview import USE_MODAL, get_modal_evaluator
 
@@ -122,6 +123,9 @@ async def get_system_status(interview_id: int):
             "gaze_detector": "initializing"
         }
     
+    # Get current warning (handle None interview_id)
+    current_warning = camera_service.get_current_warning(interview_id) if interview_id else None
+    
     return ApiResponse(
         status_code=200,
         data={
@@ -137,16 +141,21 @@ async def get_system_status(interview_id: int):
                 "proctoring_engine": proctoring_status,
                 "proctoring_details": proctoring_details,
                 "camera_access": hw_status,
-                "current_warning": camera_service.get_current_warning(interview_id)
+                "current_warning": current_warning
             }
         },
         message="System status retrieved successfully"
     )
 
 @router.websocket("/ws")
-async def websocket_status(websocket: WebSocket, interview_id: int):
+async def websocket_status(websocket: WebSocket, interview_id: int = None):
     """Real-time proctoring alert feed (Isolate by Session)."""
     global _listener_registered
+    
+    if interview_id is None:
+        await websocket.close(code=4000, reason="interview_id parameter is required")
+        return
+        
     await manager.connect(websocket, interview_id)
     
     if not _listener_registered:
