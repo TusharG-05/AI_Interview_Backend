@@ -42,7 +42,7 @@ class PaperNestedWithoutAdmin(BaseModel):
     id: int
     name: str
     description: str = ""
-    adminUser: Optional[int] = None
+    admin_user: Optional[int] = None
     question_count: int = 0
     total_marks: int = 0
     created_at: datetime
@@ -85,7 +85,6 @@ class AccessInterviewResponse(BaseModel):
     max_marks: float = 0.0
     total_score: Optional[float] = None
     enrollment_audio_path: Optional[str] = None
-    enrollment_audio_url: Optional[str] = None
     is_completed: bool = False
     proctoring_event: Optional["ProctoringEvent"] = None
 
