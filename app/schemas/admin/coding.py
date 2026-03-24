@@ -1,5 +1,5 @@
 from typing import List, Optional, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from ..shared.user import UserNested
 from datetime import datetime
 
@@ -14,6 +14,19 @@ class CodingQuestionFull(BaseModel):
     topic: str
     difficulty: str
     marks: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_json_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            import json
+            for field in ["examples", "constraints"]:
+                if isinstance(data.get(field), str):
+                    try:
+                        data[field] = json.loads(data[field])
+                    except:
+                        data[field] = []
+        return data
 
     class Config:
         from_attributes = True

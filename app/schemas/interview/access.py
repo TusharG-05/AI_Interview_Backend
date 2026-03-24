@@ -86,6 +86,8 @@ class AccessInterviewResponse(BaseModel):
     total_score: Optional[float] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
+    tab_switch_count: int = 0
+    tab_warning_active: bool = False
     proctoring_event: Optional["ProctoringEvent"] = None
 
     class Config:

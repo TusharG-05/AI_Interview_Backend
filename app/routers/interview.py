@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CandidateStatus, UserRole
+from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole
 from ..schemas.interview.questions import AnswerRequest
 
 from ..services import interview as interview_service
@@ -396,6 +396,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         total_score=session.total_score or 0.0,
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
+        tab_switch_count=session.tab_switch_count or 0,
+        tab_warning_active=session.tab_warning_active or False,
         proctoring_event=proctoring_event
     )
 
@@ -921,7 +923,6 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                         pass
 
             # 2. Direct: check CodingAnswers table for this interview result
-            from ..models.db_models import CodingAnswers, InterviewResult
             interview_result = session_db.exec(
                 select(InterviewResult).where(InterviewResult.interview_id == interview_id)
             ).first()
