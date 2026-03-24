@@ -294,7 +294,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
             id=session.paper.id,
             name=session.paper.name,
             description=session.paper.description or "",
-            adminUser=session.paper.admin_user if session.paper.admin else None,
+            admin_user=session.paper.admin_user if session.paper.admin else None,
             question_count=session.paper.question_count or len(questions_list),
             total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
             created_at=session.paper.created_at,
@@ -383,7 +383,6 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         max_marks=max_marks,
         total_score=session.total_score or 0.0,
         enrollment_audio_path=session.enrollment_audio_path,
-        enrollment_audio_url=f"/api/interview/enrollment-audio/{session.id}" if session.enrollment_audio_path else None,
         is_completed=session.is_completed or False,
         proctoring_event=proctoring_event
     )
