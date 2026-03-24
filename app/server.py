@@ -295,7 +295,18 @@ async def diagnostic_logging_middleware(request: Request, call_next):
 
 # Lazy include routers to ensure AI models (imported within routers) 
 # don't conflict with database initialization logic.
-from .routers import video, settings, admin, interview, auth, candidate, teams, coding_papers, resume
+from .routers import (
+    video, 
+    settings, 
+    admin, 
+    interview, 
+    auth, 
+    candidate, 
+    teams, 
+    coding_papers, 
+    resume,
+    agent
+)
 
 app.include_router(video.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
@@ -306,6 +317,7 @@ app.include_router(candidate.router, prefix="/api")
 app.include_router(teams.router, prefix="/api")
 app.include_router(coding_papers.router, prefix="/api")
 app.include_router(resume.router, prefix="/api")
+app.include_router(agent.router, prefix="/api")
 
 from fastapi.responses import RedirectResponse
 
