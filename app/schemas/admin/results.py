@@ -1,5 +1,5 @@
 from typing import List, Optional, Union
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, FieldSerializationInfo, field_serializer, field_validator
 from datetime import datetime
 from ..shared.user import UserNested
 from ...models.db_models import UserRole, InterviewRound
@@ -93,7 +93,7 @@ class InterviewSessionNested(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     status: str
-    total_score: Optional[float] = 0.0
+    score: Optional[float] = Field(default=0.0, validation_alias="total_score")
     current_status: Optional[str] = None
     last_activity: Optional[datetime] = None
     warning_count: int = 0
@@ -112,7 +112,7 @@ class GetResultsResponse(BaseModel):
     interview_session_id: int
     interview_session: Optional[InterviewSessionNested] = None
     result_status: str = "PENDING"
-    total_score: float = 0.0
+    score: float = Field(default=0.0, validation_alias="total_score")
     feedback: str = ""
     created_at: datetime
 
@@ -137,7 +137,7 @@ class GetInterviewResultResponse(BaseModel):
     last_activity: Optional[datetime] = None
     result_status: str = "PENDING"
     max_marks: float = 0.0
-    total_score: float = 0.0
+    score: float = Field(default=0.0, validation_alias="total_score")
     enrollment_audio_path: Optional[str] = None
     enrollment_audio_url: Optional[str] = None
     is_completed: bool = False
@@ -148,5 +148,5 @@ class GetInterviewResultResponse(BaseModel):
 
 class UpdateResultRequest(BaseModel):
     result_status: Optional[str] = None
-    total_score: Optional[float] = None
+    score: Optional[float] = Field(default=None, validation_alias="total_score")
     feedback: Optional[str] = None

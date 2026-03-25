@@ -198,7 +198,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         last_activity=session.last_activity or now,
         result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
         max_marks=max_marks,
-        total_score=session.total_score or 0.0,
+        score=session.total_score or 0.0,
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,

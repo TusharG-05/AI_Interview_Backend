@@ -20,7 +20,7 @@ class GetPaperResponse(BaseModel):
     description: Optional[str] = None
     question_count: int = 0
     total_marks: int = 0
-    questions: List[AdminQuestionRead] = []
+    questions: Optional[List[AdminQuestionRead]] = None
     created_at: datetime
 
     class Config:

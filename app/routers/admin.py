@@ -900,7 +900,7 @@ async def schedule_interview(
         start_time=format_iso_datetime(new_session.start_time),
         end_time=format_iso_datetime(new_session.end_time),
         status=new_session.status.value,
-        total_score=new_session.total_score,
+        score=new_session.total_score,
         current_status=new_session.current_status or None,
         last_activity=format_iso_datetime(new_session.last_activity),
         warning_count=new_session.warning_count,
@@ -968,7 +968,7 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             candidate_user=candidate_dict,
             status=s.status.value,
             schedule_time=format_iso_datetime(s.schedule_time),
-            total_score=s.total_score,
+            score=s.total_score,
             allow_copy_paste=s.allow_copy_paste or False,
             allow_question_navigate=s.allow_question_navigate or False,
             interview_round=s.interview_round.value if s.interview_round else None,
@@ -1039,7 +1039,7 @@ async def get_live_status_dashboard(
             "start_time": format_iso_datetime(interview_session.start_time),
             "end_time": format_iso_datetime(interview_session.end_time),
             "status": interview_session.status.value,
-            "total_score": interview_session.total_score,
+            "score": interview_session.total_score,
             "current_status": interview_session.current_status or None,
             "last_activity": format_iso_datetime(interview_session.last_activity),
             "warning_count": interview_session.warning_count,
@@ -1170,7 +1170,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
             question_count=session_obj.coding_paper.question_count or len(coding_questions_list),
             total_marks=session_obj.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session_obj.coding_paper.created_at,
-            questions=coding_questions_list
+            questions=None
         )
 
     # 5. Build Final Response Object
@@ -1219,7 +1219,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
         last_activity=session_obj.last_activity,
         result_status=getattr(session_obj.result, 'result_status', 'PENDING') if session_obj.result else 'PENDING',
         max_marks=(paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0),
-        total_score=session_obj.total_score or 0.0,
+        score=session_obj.total_score or 0.0,
         enrollment_audio_path=session_obj.enrollment_audio_path,
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{session_obj.id}" if session_obj.enrollment_audio_path else None,
         is_completed=session_obj.is_completed or False,
@@ -1571,7 +1571,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             start_time=s.start_time,
             end_time=s.end_time,
             status=s.status.value if hasattr(s.status, 'value') else str(s.status),
-            total_score=s.total_score,
+            score=s.total_score,
             current_status=s.current_status,
             last_activity=s.last_activity,
             warning_count=s.warning_count or 0,
@@ -1607,7 +1607,7 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             interview_session_id=s.id,
             interview_session=session_nested,
             result_status=s.result.result_status or "PENDING",
-            total_score=s.result.total_score or 0.0,
+            score=s.result.total_score or 0.0,
             feedback=aggregated_feedback,
             created_at=s.result.created_at
         ))
@@ -1810,7 +1810,7 @@ async def get_result(
         last_activity=s.last_activity,
         result_status=s.result.result_status if s.result else "PENDING",
         max_marks=float(max_marks),
-        total_score=float(s.result.total_score if s.result else 0.0),
+        score=float(s.result.total_score if s.result else 0.0),
         enrollment_audio_path=s.enrollment_audio_path,
         enrollment_audio_url=s.enrollment_audio_path, # Direct Cloudinary URL
         is_completed=s.is_completed or False,
@@ -1863,10 +1863,10 @@ async def update_result(
     update_dict = update_data.model_dump(exclude_unset=True)
     
     # Update total score if provided
-    if "total_score" in update_dict:
-        interview_session.total_score = update_dict["total_score"]
+    if "score" in update_dict:
+        interview_session.total_score = update_dict["score"]
         if interview_session.result:
-            interview_session.result.total_score = update_dict["total_score"]
+            interview_session.result.total_score = update_dict["score"]
             
     # Update result status if provided
     if "result_status" in update_dict and interview_session.result:
