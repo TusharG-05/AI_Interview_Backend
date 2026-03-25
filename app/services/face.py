@@ -92,6 +92,12 @@ class FaceRecognizer:
         # SFace is light enough to build even on HF Spaces (Free Tier)
         # We only skip if DeepFace is missing
         try:
+            # Explicitly import tf_keras to satisfy newer TensorFlow dependencies
+            try:
+                import tf_keras
+            except ImportError:
+                pass
+                
             from deepface import DeepFace
             logger.info(f"Building local Face Model: {self.model_name}...")
             DeepFace.build_model(self.model_name)

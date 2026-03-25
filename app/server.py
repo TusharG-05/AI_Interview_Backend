@@ -60,7 +60,12 @@ async def lifespan(app: FastAPI):
     # RATE LIMITING: Protect AI resources
     try:
         import redis.asyncio as redis
-        from fastapi_limiter import FastAPILimiter
+        # Support both standard and limiter-specific import paths
+        try:
+            from fastapi_limiter import FastAPILimiter
+        except ImportError:
+            from fastapi_limiter.limiter import FastAPILimiter
+            
         redis_conn = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
         await FastAPILimiter.init(redis_conn)
         logger.info("Lifespan: API Rate Limiting initialized (Redis).")
