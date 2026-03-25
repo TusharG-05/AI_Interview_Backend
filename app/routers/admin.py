@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 from ..schemas.admin.users import CreateUserRequest, UserRead, GetUserDetailResponse
 from ..schemas.admin.papers import GeneratePaperRequest, GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, UpdateQuestionRequest, AdminQuestionRead, QuestionCreateData
 from ..schemas.admin.interviews import ScheduleInterviewRequest, UpdateInterviewRequest, InterviewLinkResponse
-from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested, AdminUserResultBriefResponse
+from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested, GetAdminResultsListResponse
 from ..schemas.shared.team import TeamReadBasic
 from ..schemas.admin.coding import CodingQuestionFull, CodingPaperFull, GenerateCodingPaperRequest, CodingPaperCreateRequest, CodingPaperUpdateRequest, CodingQuestionCreateRequest, CodingQuestionUpdateRequest
 from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail
@@ -1494,9 +1494,9 @@ async def list_candidates(
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=ApiResponse[List[AdminUserResultBriefResponse]])
+@router.get("/users/results", response_model=ApiResponse[List[GetAdminResultsListResponse]])
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    """API for the admin dashboard: Returns flattened candidate details and their interview results."""
+    """API for the admin dashboard: Returns a flat list of candidate interview sessions and their results."""
     
     # Only show sessions created by this admin
     sessions = session.exec(
@@ -1504,52 +1504,34 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         .where(InterviewSession.admin_id == current_user.id)
         .options(
             selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.result),
-            selectinload(InterviewSession.admin)
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.result)
         )
     ).all()
     
     results = []
     for s in sessions:
-        # Determine status
-        status_val = "SUSPENDED" if s.is_suspended else (s.status.value if hasattr(s.status, 'value') else str(s.status))
-        
-        # Admin User
-        admin_user = None
-        if s.admin:
-            from .teams import _serialize_team_basic
-            admin_user = UserNested(
-                id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
-                role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-                profile_image=s.admin.profile_image,
-                team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
-            )
-        
-        # Candidate User
-        candidate_user = None
-        if s.candidate:
-            from ..schemas.shared.user import serialize_user
-            u_data = serialize_user(s.candidate)
-            # Map dict back to UserNested for validation if needed, or just use UserNested directly
-            candidate_user = UserNested(
-                id=u_data["id"] or 0,
-                email=u_data["email"],
-                full_name=u_data["full_name"],
-                role=u_data["role"],
-                profile_image=u_data["profile_image"]
-            )
-            if u_data.get("team"):
-                candidate_user.team = TeamReadBasic(id=u_data["team"]["id"], name=u_data["team"]["name"])
+        res_status = "PENDING"
+        score = 0.0
+        if s.result:
+            res_status = s.result.result_status or "PENDING"
+            score = s.result.total_score or 0.0
 
-        results.append(AdminUserResultBriefResponse(
-            id=s.result.id if s.result else s.id,
-            admin_user=admin_user,
-            candidate_user=candidate_user,
-            status=status_val,
-            result_status=s.result.result_status if s.result else "PENDING",
+        results.append(GetAdminResultsListResponse(
+            id=s.id,
+            admin_user=serialize_user(s.admin),
+            candidate_user=serialize_user(s.candidate),
+            status=s.status.value if hasattr(s.status, 'value') else str(s.status),
+            result_status=res_status,
             end_time=s.end_time,
-            score=s.total_score or (s.result.total_score if s.result else 0.0)
+            score=score
         ))
+
+    return ApiResponse(
+        status_code=200,
+        data=results,
+        message="All interview results retrieved successfully"
+    )
 
     return ApiResponse(
         status_code=200,

@@ -162,3 +162,15 @@ class UpdateResultRequest(BaseModel):
     result_status: Optional[str] = None
     score: Optional[float] = Field(default=None, validation_alias="total_score")
     feedback: Optional[str] = None
+
+class GetAdminResultsListResponse(BaseModel):
+    id: int
+    admin_user: UserNested
+    candidate_user: UserNested
+    status: str
+    result_status: str = "PENDING"
+    end_time: Optional[datetime] = None
+    score: Optional[float] = None
+
+    class Config:
+        from_attributes = True

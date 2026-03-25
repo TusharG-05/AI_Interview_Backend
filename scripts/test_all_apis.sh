@@ -430,8 +430,8 @@ RESP=$(curl -s --max-time 60 -w "\n%{http_code}" "$BASE/admin/users/results" -H 
 split_response "$RESP"
 check "GET /admin/users/results (list)" "200" "$CODE" "$BODY"
 
-# Get the interview that has results
-RESULT_INT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print(d[0]['interview']['id'] if d else '')" 2>/dev/null || echo "")
+# Get the interview that has results (New flat structure: d[0]['id'])
+RESULT_INT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print(d[0]['id'] if d and isinstance(d, list) else '')" 2>/dev/null || echo "")
 
 if [ -n "$RESULT_INT" ]; then
     RESP=$(curl -s --max-time 60 -w "\n%{http_code}" "$BASE/admin/results/$RESULT_INT" -H "Authorization: Bearer $ADMIN_TOKEN")
