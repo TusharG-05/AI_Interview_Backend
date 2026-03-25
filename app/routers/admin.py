@@ -1720,7 +1720,7 @@ async def get_result(
     )
 
     result_detail = InterviewSessionData(
-        id=s.id, access_token=s.access_token, invite_link=f"{FRONTEND_URL}/interview/{s.access_token}",
+        id=s.id, access_token=s.access_token, invite_link=None,
         admin_user=admin_obj, candidate_user=candidate_obj, 
         paper=paper_obj, coding_paper=coding_paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
