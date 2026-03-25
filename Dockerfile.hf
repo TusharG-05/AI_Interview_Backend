@@ -28,7 +28,7 @@ ENV HOME=/home/user \
     ENV=production
 
 # Copy requirements first to leverage cache
-COPY --chown=user requirements.txt .
+COPY --chown=user requirements-hf.txt ./requirements.txt
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \

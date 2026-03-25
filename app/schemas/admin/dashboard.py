@@ -1,5 +1,5 @@
 from typing import List, Optional, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from ..shared.user import UserNested
 
 class TimelineItem(BaseModel):
@@ -37,7 +37,7 @@ class AdminInterviewSessionDetail(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     status: str
-    total_score: Optional[float] = None
+    score: Optional[float] = Field(default=None, validation_alias="total_score")
     current_status: Optional[str] = None
     last_activity: Optional[str] = None
     warning_count: int

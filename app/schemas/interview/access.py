@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from datetime import datetime
 from ..shared.user import UserNested
 
@@ -81,7 +81,7 @@ class AccessInterviewResponse(BaseModel):
     last_activity: datetime
     result_status: str = "PENDING"
     max_marks: float = 0.0
-    total_score: Optional[float] = None
+    score: Optional[float] = Field(default=None, validation_alias="total_score")
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     tab_switch_count: int = 0

@@ -103,8 +103,12 @@ async def lifespan(app: FastAPI):
             logger.error(f"Warm-up process encountered an error: {e}")
     
     # Start warm-up in background thread so server starts instantly
-    threading.Thread(target=warm_up, daemon=True).start()
-    logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
+    # On HF Spaces, we skip local ML warmup to save memory and startup time
+    if not os.getenv("SPACE_ID"):
+        threading.Thread(target=warm_up, daemon=True).start()
+        logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
+    else:
+        logger.info("Warm-up: Skipped local model pre-warm on Hugging Face Space.")
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()
