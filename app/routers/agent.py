@@ -44,12 +44,13 @@ async def run_agent_task(
     """
     api_key = os.getenv("OPENCLAW_API_KEY", "dummy_key_for_testing")
     
+    workspace = os.getenv("OPENCLAW_WORKSPACE", "default")
+    
     try:
         # Initialize async OpenClaw client (wraps CMDOP)
-        # Using a dummy key for dry-run/testing if an actual key isn't provided,
-        # but in production OPENCLAW_API_KEY must be set to a valid CMDOP API Key.
-        async with AsyncOpenClaw.remote(api_key=api_key) as client:
-            logger.info(f"Triggering OpenClaw task: {request.task_description}")
+        # Explicitly passing workspace to ensure alignment with cloud configuration.
+        async with AsyncOpenClaw.remote(api_key=api_key, workspace=workspace) as client:
+            logger.info(f"Triggering OpenClaw task in workspace '{workspace}': {request.task_description}")
             
             # The exact API call depends on openclaw SDK specifics.
             # Using the documented cmdop style access for agent:
@@ -118,9 +119,10 @@ async def analyze_candidate_profile(
         "Please output only valid JSON."
     )
     
+    workspace = os.getenv("OPENCLAW_WORKSPACE", "default")
     try:
-        async with AsyncOpenClaw.remote(api_key=api_key) as client:
-            logger.info(f"Triggering candidate analysis for {request.candidate_name}")
+        async with AsyncOpenClaw.remote(api_key=api_key, workspace=workspace) as client:
+            logger.info(f"Triggering candidate analysis for {request.candidate_name} in workspace '{workspace}'")
             
             if hasattr(client, 'agent'):
                 # Pass the instruction to the agent
@@ -189,8 +191,9 @@ async def chat_with_admin(
         "Respond conversationally AFTER the tool output. If info is missing, ask for it first."
     )
 
+    workspace = os.getenv("OPENCLAW_WORKSPACE", "default")
     try:
-        async with AsyncOpenClaw.remote(api_key=api_key) as client:
+        async with AsyncOpenClaw.remote(api_key=api_key, workspace=workspace) as client:
             full_prompt = f"{api_docs}\n\nAdmin Message:\n{chat_request.message}"
             
             if hasattr(client, 'agent'):
