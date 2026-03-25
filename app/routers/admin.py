@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 from ..schemas.admin.users import CreateUserRequest, UserRead, GetUserDetailResponse
 from ..schemas.admin.papers import GeneratePaperRequest, GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, UpdateQuestionRequest, AdminQuestionRead, QuestionCreateData
 from ..schemas.admin.interviews import ScheduleInterviewRequest, UpdateInterviewRequest, InterviewLinkResponse
-from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested
+from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested, AdminUserResultBriefResponse
 from ..schemas.shared.team import TeamReadBasic
 from ..schemas.admin.coding import CodingQuestionFull, CodingPaperFull, GenerateCodingPaperRequest, CodingPaperCreateRequest, CodingPaperUpdateRequest, CodingQuestionCreateRequest, CodingQuestionUpdateRequest
 from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail
@@ -1494,9 +1494,9 @@ async def list_candidates(
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=ApiResponse[List[GetResultsResponse]])
+@router.get("/users/results", response_model=ApiResponse[List[AdminUserResultBriefResponse]])
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
+    """API for the admin dashboard: Returns flattened candidate details and their interview results."""
     
     # Only show sessions created by this admin
     sessions = session.exec(
@@ -1504,112 +1504,51 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         .where(InterviewSession.admin_id == current_user.id)
         .options(
             selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
-            selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers).selectinload(CodingAnswers.coding_question),
-            selectinload(InterviewSession.admin),
-            selectinload(InterviewSession.paper),
-            selectinload(InterviewSession.coding_paper)
+            selectinload(InterviewSession.result),
+            selectinload(InterviewSession.admin)
         )
     ).all()
     
     results = []
     for s in sessions:
-        if not s.result: continue 
+        # Determine status
+        status_val = "SUSPENDED" if s.is_suspended else (s.status.value if hasattr(s.status, 'value') else str(s.status))
         
-        # Build nested objects
-        # 1. Admin
-        admin_obj = None
+        # Admin User
+        admin_user = None
         if s.admin:
             from .teams import _serialize_team_basic
-            admin_obj = UserNested(
+            admin_user = UserNested(
                 id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
                 role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
                 profile_image=s.admin.profile_image,
                 team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
             )
-        # admin was deleted, no fallback needed
-             
-        # 2. Candidate
-        candidate_obj = None
-        if s.candidate:
-            candidate_obj = serialize_user(s.candidate)
-            
-        # 3. Paper
-        paper_obj = None
-        if s.paper:
-            p_total = s.paper.total_marks if s.paper.total_marks else sum(q.marks or 0 for q in s.paper.questions)
-            paper_obj = PaperNestedWithoutAdmin(
-                id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
-                question_count=s.paper.question_count or len(s.paper.questions), 
-                total_marks=p_total,
-                created_at=s.paper.created_at
-            )
-            
-        # 3.1 Coding Paper
-        coding_paper_obj = None
-        if s.coding_paper:
-            cp_total = s.coding_paper.total_marks if s.coding_paper.total_marks else sum(q.marks or 0 for q in s.coding_paper.questions)
-            coding_paper_obj = CodingPaperNestedWithoutAdmin(
-                id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
-                question_count=s.coding_paper.question_count or len(s.coding_paper.questions), 
-                total_marks=cp_total,
-                created_at=s.coding_paper.created_at
-            )
-            
-        # 4. Session Nested
-        session_nested = InterviewSessionNested(
-            id=s.id,
-            access_token=s.access_token,
-            invite_link=f"{FRONTEND_URL}/interview/{s.access_token}",
-            admin_user=admin_obj,
-            candidate_user=candidate_obj,
-            paper=paper_obj,
-            coding_paper=coding_paper_obj,
-            schedule_time=s.schedule_time,
-            duration_minutes=s.duration_minutes or 1440,
-            max_questions=s.max_questions,
-            start_time=s.start_time,
-            end_time=s.end_time,
-            status=s.status.value if hasattr(s.status, 'value') else str(s.status),
-            score=s.total_score,
-            current_status=s.current_status,
-            last_activity=s.last_activity,
-            warning_count=s.warning_count or 0,
-            max_warnings=s.max_warnings or 3,
-            is_suspended=s.is_suspended or False,
-            suspension_reason=s.suspension_reason,
-            suspended_at=s.suspended_at,
-            enrollment_audio_path=f"/api/admin/interviews/enrollment-audio/{s.id}" if s.enrollment_audio_path else None,
-            allow_copy_paste=s.allow_copy_paste or False,
-            allow_question_navigate=s.allow_question_navigate or False,
-            is_completed=s.is_completed or False,
-            result_status=s.result.result_status if s.result else "PENDING"
-        )
-        # 5. Aggregate Feedback & Top Level Result
-      
-
-        # 5. Aggregate Feedback from all question types
-        all_feedbacks = []
-        if s.result:
-            for aws in s.result.answers:
-                if aws.feedback:
-                    q_text = aws.question.question_text if aws.question else "Question"
-                    all_feedbacks.append(f"{q_text}: {aws.feedback}")
-            for caws in s.result.coding_answers:
-                if caws.feedback:
-                    cq_text = caws.coding_question.title if caws.coding_question else "Coding Question"
-                    all_feedbacks.append(f"{cq_text}: {caws.feedback}")
         
-        aggregated_feedback = "\n\n".join(all_feedbacks)
+        # Candidate User
+        candidate_user = None
+        if s.candidate:
+            from ..schemas.shared.user import serialize_user
+            u_data = serialize_user(s.candidate)
+            # Map dict back to UserNested for validation if needed, or just use UserNested directly
+            candidate_user = UserNested(
+                id=u_data["id"] or 0,
+                email=u_data["email"],
+                full_name=u_data["full_name"],
+                role=u_data["role"],
+                profile_image=u_data["profile_image"]
+            )
+            if u_data.get("team"):
+                candidate_user.team = TeamReadBasic(id=u_data["team"]["id"], name=u_data["team"]["name"])
 
-        results.append(GetResultsResponse(
-            id=s.result.id,
-            interview_session_id=s.id,
-            interview_session=session_nested,
-            result_status=s.result.result_status or "PENDING",
-            score=s.result.total_score or 0.0,
-            feedback=aggregated_feedback,
-            created_at=s.result.created_at
+        results.append(AdminUserResultBriefResponse(
+            id=s.result.id if s.result else s.id,
+            admin_user=admin_user,
+            candidate_user=candidate_user,
+            status=status_val,
+            result_status=s.result.result_status if s.result else "PENDING",
+            end_time=s.end_time,
+            score=s.total_score or (s.result.total_score if s.result else 0.0)
         ))
 
     return ApiResponse(
@@ -1617,8 +1556,6 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         data=results,
         message="All results retrieved successfully"
     )
-
-
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[dict])
 async def get_result(

@@ -107,6 +107,18 @@ class InterviewSessionNested(BaseModel):
     class Config:
         from_attributes = True
 
+class AdminUserResultBriefResponse(BaseModel):
+    id: int
+    admin_user: UserNested
+    candidate_user: UserNested
+    status: str # "SCHEDULED" | "LIVE" | "COMPLETED" | "EXPIRED" | "CANCELLED" | "SUSPENDED"
+    result_status: str # "PENDING" | "PASS" | "FAIL"
+    end_time: Optional[datetime] = None
+    score: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
 class GetResultsResponse(BaseModel):
     id: Optional[int] = None
     interview_session_id: int
