@@ -2,8 +2,16 @@ import os
 import shutil
 import contextlib
 import sentry_sdk
+from typing import Any
 from fastapi import FastAPI
 from fastapi.routing import APIRouter, APIRoute
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+
+class ExcludeNoneJSONResponse(JSONResponse):
+    """Custom JSONResponse that excludes None values by default."""
+    def render(self, content: Any) -> bytes:
+        return super().render(jsonable_encoder(content, exclude_none=True))
 
 class ExcludeNoneRoute(APIRoute):
     """Custom route class that excludes None values from responses by default."""
@@ -115,6 +123,7 @@ app = FastAPI(
     description="High-performance JSON API for AI-driven face/gaze detection and automated interviews.",
     version="2.0.0",
     lifespan=lifespan,
+    default_response_class=ExcludeNoneJSONResponse,
     route_class=ExcludeNoneRoute,
 )
 
@@ -130,7 +139,7 @@ from fastapi.encoders import jsonable_encoder
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Catch 422 validation errors and wrap them."""
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=422,
         content=ApiErrorResponse(
             status_code=422,
@@ -146,7 +155,7 @@ async def not_found_handler(request: Request, exc: Exception):
     if hasattr(exc, "detail"):
         message = str(exc.detail)
         
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=404,
         content=ApiErrorResponse(
             status_code=404,
@@ -166,7 +175,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         message = exc.detail.get("message", "Error occurred")
         data = exc.detail
 
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=exc.status_code,
         content=ApiErrorResponse(
             status_code=exc.status_code,
@@ -178,7 +187,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global Exception: {exc}", exc_info=True)
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=500,
         content=ApiErrorResponse(
             status_code=500,

@@ -27,8 +27,8 @@ class ProgressInfo(BaseModel):
 class AdminInterviewSessionDetail(BaseModel):
     id: int
     access_token: str
-    admin_id: Optional[int] = None
-    candidate_id: Optional[int] = None
+    admin_user: Optional[UserNested] = None
+    candidate_user: Optional[UserNested] = None
     paper_id: Optional[int] = None
     interview_round: Optional[str] = None
     schedule_time: str
@@ -50,9 +50,8 @@ class AdminInterviewSessionDetail(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     coding_paper_id: Optional[int] = None
-    team_id: Optional[int] = None
-    admin_user: Optional[UserNested] = None
-    candidate_user: Optional[UserNested] = None
+  
+   
 
     class Config:
         from_attributes = True

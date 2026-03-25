@@ -1143,7 +1143,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
             question_count=session_obj.paper.question_count or len(questions_list),
             total_marks=session_obj.paper.total_marks or sum(q.marks for q in questions_list),
             created_at=session_obj.paper.created_at,
-            questions=questions_list
+            questions=None
         )
 
     # 4. Map Coding Question Paper
