@@ -313,8 +313,6 @@ class TTSRange(BaseModel):
     text: str
 
 
-
-
 @router.get("/access/{token}", response_model=ApiResponse[InterviewAccessResponse])
 async def access_interview(
     token: str, 
