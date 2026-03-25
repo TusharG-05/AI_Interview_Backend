@@ -50,7 +50,7 @@ async def video_feed(interview_id: Optional[int] = Query(None)):
 
 
 # --- WebRTC Signaling ---
-from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 from ..services.webrtc import VideoTransformTrack
 from pydantic import BaseModel
 
@@ -73,14 +73,13 @@ async def offer(params: Offer):
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     
     # Cloud Optimization: Add Google STUN servers for NAT traversal
-    ice_config = {
-        "iceServers": [
-            {"urls": "stun:stun.l.google.com:19302"},
-            {"urls": "stun:stun1.l.google.com:19302"},
-            {"urls": "stun:stun2.l.google.com:19302"}
-        ]
-    }
-    pc = RTCPeerConnection(configuration=ice_config)
+    ice_servers = [
+        RTCIceServer(urls="stun:stun.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun1.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun2.l.google.com:19302")
+    ]
+    configuration = RTCConfiguration(iceServers=ice_servers)
+    pc = RTCPeerConnection(configuration=configuration)
     
     interview_id = params.interview_id or 0
     active_sessions[interview_id] = {"pc": pc, "track": None}
@@ -160,14 +159,13 @@ async def watch(target_session_id: int, params: Offer):
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     
     # Cloud Optimization: Add Google STUN servers for NAT traversal
-    ice_config = {
-        "iceServers": [
-            {"urls": "stun:stun.l.google.com:19302"},
-            {"urls": "stun:stun1.l.google.com:19302"},
-            {"urls": "stun:stun2.l.google.com:19302"}
-        ]
-    }
-    pc = RTCPeerConnection(configuration=ice_config)
+    ice_servers = [
+        RTCIceServer(urls="stun:stun.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun1.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun2.l.google.com:19302")
+    ]
+    configuration = RTCConfiguration(iceServers=ice_servers)
+    pc = RTCPeerConnection(configuration=configuration)
     
     # Track the admin PC to prevent garbage collection
     pcs.add(pc)
