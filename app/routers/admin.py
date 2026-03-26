@@ -1533,13 +1533,6 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
         message="All interview results retrieved successfully"
     )
 
-    return ApiResponse(
-        status_code=200,
-        data=results,
-        message="All results retrieved successfully"
-    )
-
-
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[dict])
 async def get_result(
@@ -1554,11 +1547,12 @@ async def get_result(
         select(InterviewSession)
         .where(InterviewSession.id == interview_id)
         .options(
-            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.candidate).selectinload(User.team),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers).selectinload(CodingAnswers.coding_question),
-            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.admin).selectinload(User.team),
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
         )
     ).first()
@@ -1719,7 +1713,7 @@ async def get_result(
         allow_question_navigation=s.allow_question_navigate or False
     )
 
-    result_detail = InterviewSessionData(
+    result_detail = AdminResultData(
         id=s.id, access_token=s.access_token, invite_link=None,
         admin_user=admin_obj, candidate_user=candidate_obj, 
         paper=paper_obj, coding_paper=coding_paper_obj,
@@ -1738,7 +1732,7 @@ async def get_result(
         proctoring_event=proctoring
     )
 
-    data_dict = result_detail.model_dump(exclude_none=True)
+    data_dict = result_detail.model_dump(exclude_none=True, by_alias=True)
 
     return ApiResponse(
         status_code=200,

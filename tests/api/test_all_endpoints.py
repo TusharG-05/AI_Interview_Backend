@@ -192,10 +192,13 @@ def test_results(client, session, test_users, auth_headers):
     result = InterviewResult(
         interview_id=interview.id,
         total_score=85.0,
-        status="PASS"
+        result_status="PASS"
     )
     session.add(result)
+    interview.result = result # Explicitly link
+    session.add(interview)
     session.commit()
+    session.refresh(interview)
     
     response = client.get(f"/api/admin/results/{interview.id}", headers=auth_headers)
     assert response.status_code == 200
