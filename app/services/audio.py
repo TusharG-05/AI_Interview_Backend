@@ -322,14 +322,25 @@ class AudioService:
                 return True, 1.0
 
             # 2. Perform verification
-            # SpeechBrain's EncoderClassifier has a verify_files method
-            # It returns (score, prediction) where prediction is a tensor of booleans
-            score, prediction = model.verify_files(local_enroll, local_test)
+            # SpeechBrain 1.0+ EncoderClassifier lacks verify_files.
+            # We must encode both and calculate cosine similarity manually.
             
-            match = bool(prediction[0])
-            similarity = float(score[0])
+            # Load and encode enrollment audio
+            wav_enroll = model.load_audio(local_enroll)
+            emb_enroll = model.encode_batch(wav_enroll)
             
-            logger.info(f"Speaker Verification: Match={match}, Score={similarity:.4f}")
+            # Load and encode test audio
+            wav_test = model.load_audio(local_test)
+            emb_test = model.encode_batch(wav_test)
+            
+            # Compute cosine similarity
+            import torch.nn.functional as F
+            # emb is usually [1, 1, 192] or [1, 192], ensure it's flattened for similarity
+            similarity = F.cosine_similarity(emb_enroll.flatten(), emb_test.flatten(), dim=0).item()
+            
+            match = similarity >= self.verification_threshold
+            
+            logger.info(f"Speaker Verification: Match={match}, Similarity={similarity:.4f} (Threshold={self.verification_threshold})")
             return match, similarity
             
         except Exception as e:

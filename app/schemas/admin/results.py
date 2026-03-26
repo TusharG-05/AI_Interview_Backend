@@ -16,6 +16,7 @@ class AdminAnswerAnswerShort(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class CodingQuestionExample(BaseModel):
     input: str
@@ -37,6 +38,7 @@ class CodingQuestionWithAnswer(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class AdminQuestionWithAnswer(BaseModel):
     id: int
@@ -52,6 +54,7 @@ class AdminQuestionWithAnswer(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class AdminPaperNested(BaseModel):
     id: int
@@ -65,6 +68,7 @@ class AdminPaperNested(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class AdminProctoringEvent(BaseModel):
     id: Optional[int] = None
@@ -78,11 +82,12 @@ class AdminProctoringEvent(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class InterviewSessionNested(BaseModel):
     id: int
     access_token: str
-    invite_link: str
+    invite_link: Optional[str] = None
     admin_user: Optional[UserNested] = None
     candidate_user: Optional[UserNested] = None
     paper: Optional[AdminPaperNested] = None
@@ -92,8 +97,8 @@ class InterviewSessionNested(BaseModel):
     max_questions: Optional[int] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    status: str
-    score: Optional[float] = Field(default=0.0, validation_alias="total_score")
+    status: Optional[str] = None
+    score: Optional[float] = Field(default=0.0, alias="total_score")
     current_status: Optional[str] = None
     last_activity: Optional[datetime] = None
     warning_count: int = 0
@@ -106,18 +111,20 @@ class InterviewSessionNested(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class GetResultsResponse(BaseModel):
     id: Optional[int] = None
     interview_session_id: int
     interview_session: Optional[InterviewSessionNested] = None
     result_status: str = "PENDING"
-    score: float = Field(default=0.0, validation_alias="total_score")
+    score: float = Field(default=0.0, alias="total_score")
     feedback: str = ""
     created_at: datetime
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class GetInterviewResultResponse(BaseModel):
     id: int
@@ -137,7 +144,7 @@ class GetInterviewResultResponse(BaseModel):
     last_activity: Optional[datetime] = None
     result_status: str = "PENDING"
     max_marks: float = 0.0
-    score: float = Field(default=0.0, validation_alias="total_score")
+    score: float = Field(default=0.0, alias="total_score")
     enrollment_audio_path: Optional[str] = None
     enrollment_audio_url: Optional[str] = None
     is_completed: bool = False
@@ -145,10 +152,11 @@ class GetInterviewResultResponse(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True
 
 class UpdateResultRequest(BaseModel):
     result_status: Optional[str] = None
-    score: Optional[float] = Field(default=None, validation_alias="total_score")
+    score: Optional[float] = Field(default=None, alias="total_score")
     feedback: Optional[str] = None
 
 class GetAdminResultsListResponse(BaseModel):
@@ -162,3 +170,4 @@ class GetAdminResultsListResponse(BaseModel):
 
     class Config:
         from_attributes = True
+        populate_by_name = True

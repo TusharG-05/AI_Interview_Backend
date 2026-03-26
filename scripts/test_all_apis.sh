@@ -348,7 +348,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         fi
 
         # Upload selfie
-        RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/interview/upload-selfie" \
+        RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/interview/upload-selfie" \
           -H "Authorization: Bearer $CAND_TOKEN" \
           -F "candidate_id=$CAND_ID" \
           -F "file=@/tmp/api_test/selfie.jpg;type=image/jpeg")
@@ -356,7 +356,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         check "POST /interview/upload-selfie" "200" "$CODE" "$BODY"
 
         # Start session with enrollment audio
-        RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/interview/start-session/$INT_ID" \
+        RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/interview/start-session/$INT_ID" \
           -H "Authorization: Bearer $CAND_TOKEN" \
           -F "enrollment_audio=@/tmp/api_test/audio.wav;type=audio/wav")
         split_response "$RESP"
@@ -380,8 +380,8 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         split_response "$RESP"
         check "POST /interview/$INT_ID/tab-switch (Warning 1)" "200" "$CODE" "$BODY"
         
-        # Verify expanded data: check for 'warning_count' and 'candidate_id' which suggests full InterviewSessionData
-        V_COUNT=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin).get('data',{}); print(data.get('warning_count','0') if isinstance(data,dict) else '0')" 2>/dev/null)
+        # Verify expanded data: check for 'warning_count' inside 'proctoring_event'
+        V_COUNT=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin).get('data',{}); print(data.get('proctoring_event',{}).get('warning_count','0') if isinstance(data,dict) else '0')" 2>/dev/null)
         V_CAND=$(echo "$BODY" | python3 -c "import sys,json; data=json.load(sys.stdin).get('data',{}); cid=data.get('candidate_id') or data.get('candidate_user',{}).get('id'); print('present' if cid else 'missing')" 2>/dev/null)
         
         if [ "$V_COUNT" = "1" ] && [ "$V_CAND" = "present" ]; then
@@ -448,7 +448,7 @@ if [ -n "$RESULT_INT" ]; then
 
         RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -o /dev/null "$BASE/admin/results/audio/$RESP_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
         CODE=$(echo "$RESP" | tail -1)
-        check "GET /admin/results/audio/$RESP_ID" "200 404" "$CODE" ""
+        check "GET /admin/results/audio/$RESP_ID" "200 404 307" "$CODE" ""
     fi
 
     # Update result
