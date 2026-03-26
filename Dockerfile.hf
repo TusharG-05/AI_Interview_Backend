@@ -28,7 +28,7 @@ ENV HOME=/home/user \
     ENV=production
 
 # Copy requirements first to leverage cache
-COPY --chown=user requirements-hf.txt ./requirements.txt
+COPY --chown=user requirements-hf-final.txt ./requirements.txt
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -38,9 +38,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY --chown=user . .
 RUN chmod +x start.sh
 
-# Download Face Landmarker Model (Bypass Git LFS/Binary restrictions)
+# Download Models (Bypass Git LFS/Binary restrictions & Avoid Runtime Latency)
 RUN mkdir -p app/assets && \
-    wget -q -O app/assets/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+    wget -q -O app/assets/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task && \
+    python3 -c "from deepface import DeepFace; DeepFace.build_model('SFace')"
 
 # Expose port (Hugging Face expects 7860 by default)
 EXPOSE 7860

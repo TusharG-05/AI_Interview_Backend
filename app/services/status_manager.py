@@ -338,7 +338,7 @@ def get_status_summary(
             "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
             "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
             "status": interview_session.status.value if hasattr(interview_session.status, 'value') else str(interview_session.status),
-            "score": interview_session.total_score,
+            "score": (result.total_score if result else interview_session.total_score) or 0.0,
             "current_status": interview_session.current_status,
             "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
             "warning_count": interview_session.warning_count or 0,

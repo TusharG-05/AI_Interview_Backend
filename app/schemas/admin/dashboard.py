@@ -37,7 +37,7 @@ class AdminInterviewSessionDetail(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     status: str
-    score: Optional[float] = Field(default=None, validation_alias="total_score")
+    total_score: Optional[float] = Field(default=0.0)
     current_status: Optional[str] = None
     last_activity: Optional[str] = None
     warning_count: int
