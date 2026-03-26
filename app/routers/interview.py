@@ -74,7 +74,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=ans.interview_result_id,
                 candidate_answer=ans.candidate_answer or "",
                 feedback=ans.feedback or "",
-                score=ans.score or 0.0,
+                total_score=ans.total_score or 0.0,
                 audio_path=ans.audio_path or "",
                 transcribed_text=ans.transcribed_text or "",
                 timestamp=ans.timestamp
@@ -85,7 +85,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=cans.interview_result_id,
                 candidate_answer=cans.candidate_answer or "",
                 feedback=cans.feedback or "",
-                score=cans.score or 0.0,
+                total_score=cans.total_score or 0.0,
                 audio_path=cans.audio_path or "",
                 transcribed_text=cans.transcribed_text or "",
                 timestamp=cans.timestamp
@@ -157,7 +157,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
             question_count=session.coding_paper.question_count or len(coding_questions_list),
             total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session.coding_paper.created_at,
-            team_id=session.coding_paper.team_id,
+            team_id=session.coding_paper.admin.team.id if session.coding_paper.admin and session.coding_paper.admin.team else None,
             questions=coding_questions_list
         )
 
@@ -198,7 +198,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         last_activity=session.last_activity or now,
         result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
         max_marks=max_marks,
-        score=session.total_score or 0.0,
+        total_score=session.total_score or 0.0,
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,
@@ -459,14 +459,14 @@ async def get_schedule_time(
         p_dict = session.paper.model_dump()
         p_dict['questions'] = []
         p_dict['admin_user'] = None
-        paper_data = PaperNested.model_validate(p_dict).model_dump()
+        paper_data = PaperNestedWithoutAdmin.model_validate(p_dict).model_dump()
 
     coding_paper_data = None
     if session.coding_paper:
         cp_dict = session.coding_paper.model_dump()
         cp_dict['coding_questions'] = []
         cp_dict['admin_user'] = None
-        coding_paper_data = CodingPaperNested.model_validate(cp_dict).model_dump()
+        coding_paper_data = CodingPaperNestedWithoutAdmin.model_validate(cp_dict).model_dump()
 
     return ApiResponse(
         status_code=200,
@@ -560,8 +560,13 @@ async def start_session_logic(
             audio_service.cleanup_audio(enrollment_path)
             
             # Upload to Cloudinary
-            cloudinary_url = cloudinary_service.upload_audio(content)
-            session.enrollment_audio_path = cloudinary_url
+            try:
+                cloudinary_url = cloudinary_service.upload_audio(content)
+                session.enrollment_audio_path = cloudinary_url
+            except Exception as upload_error:
+                logger.warning(f"Cloudinary upload failed: {upload_error}")
+                # Continue without Cloudinary upload - store locally
+                session.enrollment_audio_path = enrollment_path
             
             # Track enrollment completion
             record_status_change(
@@ -749,19 +754,33 @@ async def upload_selfie_session(
         
         # Compare ArcFace embeddings (primary - high accuracy)
         if arcface_embedding and stored_arcface:
-            arcface_sim = float(np.dot(arcface_embedding, stored_arcface) / (
-                np.linalg.norm(arcface_embedding) * np.linalg.norm(stored_arcface)
-            ))
-            verification_results.append(arcface_sim >= ARCFACE_THRESHOLD)
-            _logger.info(f"ArcFace similarity: {arcface_sim:.4f}, Passed: {arcface_sim >= ARCFACE_THRESHOLD}")
+            try:
+                if len(arcface_embedding) > 0 and len(stored_arcface) > 0:
+                    arcface_sim = float(np.dot(arcface_embedding, stored_arcface) / (
+                        np.linalg.norm(arcface_embedding) * np.linalg.norm(stored_arcface)
+                    ))
+                    verification_results.append(arcface_sim >= ARCFACE_THRESHOLD)
+                    _logger.info(f"ArcFace similarity: {arcface_sim:.4f}, Passed: {arcface_sim >= ARCFACE_THRESHOLD}")
+                else:
+                    _logger.warning("Empty embeddings detected, skipping ArcFace comparison")
+            except ValueError as e:
+                _logger.warning(f"ArcFace comparison failed: {e}")
+                verification_results.append(False)
         
         # Compare SFace embeddings (fallback - lightweight)
         if sface_embedding and stored_sface:
-            sface_sim = float(np.dot(sface_embedding, stored_sface) / (
-                np.linalg.norm(sface_embedding) * np.linalg.norm(stored_sface)
-            ))
-            verification_results.append(sface_sim >= SFACE_THRESHOLD)
-            _logger.info(f"SFace similarity: {sface_sim:.4f}, Passed: {sface_sim >= SFACE_THRESHOLD}")
+            try:
+                if len(sface_embedding) > 0 and len(stored_sface) > 0:
+                    sface_sim = float(np.dot(sface_embedding, stored_sface) / (
+                        np.linalg.norm(sface_embedding) * np.linalg.norm(stored_sface)
+                    ))
+                    verification_results.append(sface_sim >= SFACE_THRESHOLD)
+                    _logger.info(f"SFace similarity: {sface_sim:.4f}, Passed: {sface_sim >= SFACE_THRESHOLD}")
+                else:
+                    _logger.warning("Empty embeddings detected, skipping SFace comparison")
+            except ValueError as e:
+                _logger.warning(f"SFace comparison failed: {e}")
+                verification_results.append(False)
         
         # Check if any comparison were possible
         if not verification_results:

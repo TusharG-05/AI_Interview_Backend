@@ -98,7 +98,7 @@ class InterviewSessionNested(BaseModel):
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     status: Optional[str] = None
-    score: Optional[float] = Field(default=0.0, alias="total_score")
+    total_score: Optional[float] = Field(default=0.0)
     current_status: Optional[str] = None
     last_activity: Optional[datetime] = None
     warning_count: int = 0
@@ -118,7 +118,7 @@ class GetResultsResponse(BaseModel):
     interview_session_id: int
     interview_session: Optional[InterviewSessionNested] = None
     result_status: str = "PENDING"
-    score: float = Field(default=0.0, alias="total_score")
+    total_score: float = Field(default=0.0)
     feedback: str = ""
     created_at: datetime
 
@@ -144,7 +144,7 @@ class GetInterviewResultResponse(BaseModel):
     last_activity: Optional[datetime] = None
     result_status: str = "PENDING"
     max_marks: float = 0.0
-    score: float = Field(default=0.0, alias="total_score")
+    total_score: float = Field(default=0.0)
     enrollment_audio_path: Optional[str] = None
     enrollment_audio_url: Optional[str] = None
     is_completed: bool = False
@@ -156,7 +156,7 @@ class GetInterviewResultResponse(BaseModel):
 
 class UpdateResultRequest(BaseModel):
     result_status: Optional[str] = None
-    score: Optional[float] = Field(default=None, alias="total_score")
+    total_score: Optional[float] = Field(default=None)
     feedback: Optional[str] = None
 
 class GetAdminResultsListResponse(BaseModel):
@@ -166,7 +166,7 @@ class GetAdminResultsListResponse(BaseModel):
     status: str
     result_status: str = "PENDING"
     end_time: Optional[datetime] = None
-    score: Optional[float] = None
+    total_score: Optional[float] = None
 
     class Config:
         from_attributes = True

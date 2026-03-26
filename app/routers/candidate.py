@@ -76,7 +76,7 @@ async def my_interviews(
             paper_name=s.paper.name if s.paper else "General",
             date=format_iso_datetime(s.schedule_time) if s.schedule_time else "Scheduled",
             status=s.status.value,
-            score=None,
+            total_score=s.total_score,
             duration_minutes=s.duration_minutes,
             max_questions=s.max_questions,
             start_time=format_iso_datetime(s.start_time) if s.start_time else None,

@@ -900,7 +900,7 @@ async def schedule_interview(
         start_time=format_iso_datetime(new_session.start_time),
         end_time=format_iso_datetime(new_session.end_time),
         status=new_session.status.value,
-        score=new_session.total_score,
+        total_score=new_session.total_score,
         current_status=new_session.current_status or None,
         last_activity=format_iso_datetime(new_session.last_activity),
         warning_count=new_session.warning_count,
@@ -944,7 +944,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
         )
         .options(
             selectinload(InterviewSession.admin),
-            selectinload(InterviewSession.candidate)
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result)
         )
     ).all()
     if current_user.role == UserRole.SUPER_ADMIN:
@@ -952,7 +953,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             select(InterviewSession)
             .options(
                 selectinload(InterviewSession.admin),
-                selectinload(InterviewSession.candidate)
+                selectinload(InterviewSession.candidate),
+                selectinload(InterviewSession.result)
             )
         ).all()
     results = []
@@ -968,7 +970,7 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             candidate_user=candidate_dict,
             status=s.status.value,
             schedule_time=format_iso_datetime(s.schedule_time),
-            score=s.total_score,
+            total_score=(s.result.total_score if s.result else s.total_score) or 0.0,
             allow_copy_paste=s.allow_copy_paste or False,
             allow_question_navigate=s.allow_question_navigate or False,
             interview_round=s.interview_round.value if s.interview_round else None,
@@ -1039,7 +1041,7 @@ async def get_live_status_dashboard(
             "start_time": format_iso_datetime(interview_session.start_time),
             "end_time": format_iso_datetime(interview_session.end_time),
             "status": interview_session.status.value,
-            "score": interview_session.total_score,
+            "total_score": (interview_session.result.total_score if interview_session.result else interview_session.total_score) or 0.0,
             "current_status": interview_session.current_status or None,
             "last_activity": format_iso_datetime(interview_session.last_activity),
             "warning_count": interview_session.warning_count,
@@ -1219,7 +1221,7 @@ def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInter
         last_activity=session_obj.last_activity,
         result_status=getattr(session_obj.result, 'result_status', 'PENDING') if session_obj.result else 'PENDING',
         max_marks=(paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0),
-        score=session_obj.total_score or 0.0,
+        total_score=session_obj.total_score or 0.0,
         enrollment_audio_path=session_obj.enrollment_audio_path,
         enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{session_obj.id}" if session_obj.enrollment_audio_path else None,
         is_completed=session_obj.is_completed or False,
@@ -1512,10 +1514,10 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
     results = []
     for s in sessions:
         res_status = "PENDING"
-        score = 0.0
+        total_score = 0.0
         if s.result:
             res_status = s.result.result_status or "PENDING"
-            score = s.result.total_score or 0.0
+            total_score = s.result.total_score or 0.0
 
         results.append(GetAdminResultsListResponse(
             id=s.id,
@@ -1524,12 +1526,12 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             status=s.status.value if hasattr(s.status, 'value') else str(s.status),
             result_status=res_status,
             end_time=s.end_time,
-            score=score
+            total_score=total_score
         ))
 
     return ApiResponse(
         status_code=200,
-        data=results,
+        data=[result.model_dump(by_alias=True) for result in results],
         message="All interview results retrieved successfully"
     )
 
@@ -1725,7 +1727,7 @@ async def get_result(
         last_activity=s.last_activity,
         result_status=s.result.result_status if s.result else "PENDING",
         max_marks=float(max_marks),
-        score=float(s.result.total_score if s.result else 0.0),
+        total_score=float(s.result.total_score if s.result else 0.0),
         enrollment_audio_path=s.enrollment_audio_path,
         enrollment_audio_url=s.enrollment_audio_path, # Direct Cloudinary URL
         is_completed=s.is_completed or False,
@@ -1778,10 +1780,10 @@ async def update_result(
     update_dict = update_data.model_dump(exclude_unset=True)
     
     # Update total score if provided
-    if "score" in update_dict:
-        interview_session.total_score = update_dict["score"]
+    if "total_score" in update_dict:
+        interview_session.total_score = update_dict["total_score"]
         if interview_session.result:
-            interview_session.result.total_score = update_dict["score"]
+            interview_session.result.total_score = update_dict["total_score"]
             
     # Update result status if provided
     if "result_status" in update_dict and interview_session.result:
@@ -2188,7 +2190,7 @@ async def get_user(
             resume_url=user.resume_path if user.resume_path else None,
             profile_image=user.profile_image,
             team=team_data
-        ),
+        ).model_dump(),
         message="User details retrieved successfully"
     )
 
