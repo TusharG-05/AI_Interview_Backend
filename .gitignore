@@ -104,3 +104,7 @@ tests/logs/
 server.log
 test_results_final*.log
 /temp_uploads/
+
+# === Automated Scripts & Tests ===
+/scripts/
+/tests/
