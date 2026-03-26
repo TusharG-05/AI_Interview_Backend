@@ -92,19 +92,30 @@ class FaceRecognizer:
         # SFace is light enough to build even on HF Spaces (Free Tier)
         # We only skip if DeepFace is missing
         try:
-            # Explicitly import tf_keras to satisfy newer TensorFlow dependencies
+            # Explicitly handle TensorFlow/Keras environment for SFace
+            # tf-keras 2.13.0 is recommended for tensorflow 2.13.0
             try:
                 import tf_keras
+                import os
+                os.environ["TF_USE_LEGACY_KERAS"] = "1"
+                logger.info("Initializing tf-keras compatibility layer.")
             except ImportError:
-                pass
+                logger.debug("tf-keras not found, proceeding with default backend.")
                 
             from deepface import DeepFace
-            logger.info(f"Building local Face Model: {self.model_name}...")
+            # Ensure CPU-only optimization for HF Spaces
+            if os.getenv("SPACE_ID"):
+                import tensorflow as tf
+                tf.config.set_visible_devices([], 'GPU')
+                logger.info("HF Space detected: TensorFlow GPU disabled for CPU-only efficiency.")
+
+            logger.info(f"Building local Face Model: {self.model_name} (SFace)...")
             DeepFace.build_model(self.model_name)
+            logger.info(f"Local {self.model_name} model ready.")
         except ImportError:
-            logger.warning("DeepFace not installed - face recognition disabled")
+            logger.error("CRITICAL: DeepFace not installed. Face recognition is DISABLED.")
         except Exception as e:
-            logger.warning(f"Local {self.model_name} model build failed: {e}")
+            logger.warning(f"Local {self.model_name} model build failed (will try lazy load on first attempt): {e}")
 
     def recognize(self, img_rgb, locs):
         """

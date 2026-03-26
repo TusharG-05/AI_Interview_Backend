@@ -60,17 +60,15 @@ async def lifespan(app: FastAPI):
     # RATE LIMITING: Protect AI resources
     try:
         import redis.asyncio as redis
-        # Support both standard and limiter-specific import paths
-        try:
-            from fastapi_limiter import FastAPILimiter
-        except ImportError:
-            from fastapi_limiter.limiter import FastAPILimiter
+        from fastapi_limiter import FastAPILimiter
             
         redis_conn = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
         await FastAPILimiter.init(redis_conn)
-        logger.info("Lifespan: API Rate Limiting initialized (Redis).")
+        logger.info("Lifespan: API Rate Limiting initialized successfully.")
+    except ImportError:
+        logger.warning("Lifespan: fastapi-limiter not installed. Rate limiting disabled.")
     except Exception as re_e:
-        logger.warning(f"Lifespan: Rate Limiter failed to start: {re_e}")
+        logger.error(f"Lifespan: Rate Limiter failed to start: {re_e}")
     
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
     try:
