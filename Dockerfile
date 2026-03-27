@@ -1,34 +1,48 @@
-# --- Optimized Runtime ---
-# Inherits from the local base containing heavy ML libs in /opt/venv
-FROM interview-base:latest
+# ============================================================
+# AI Interview Backend - Render Optimized Dockerfile
+# Optimized for cloud deployment (CPU-only, stable builds)
+# ============================================================
 
-# Runtime environment variables
+# Use official Python slim image as base
+FROM python:3.11-slim-bookworm
+
+# Prevent Python from writing .pyc files and enable unbuffered logging
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PATH="/opt/venv/bin:$PATH"
-ENV CUDA_VISIBLE_DEVICES=-1
-ENV TF_CPP_MIN_LOG_LEVEL=2
 
-# Clean inherited /app bloat from base image before copying fresh code
+# Install system dependencies (Native libs for CV, ML and Audio)
+# Replaced libgl1-mesa-glx with libgl1 (modern Debian replacement)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    libgl1 \
+    libglib2.0-0 \
+    git \
+    wget \
+    redis-server \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
 WORKDIR /app
-RUN rm -rf /app/* && mkdir -p /app/models && chmod 777 /app/models
 
-# Only install application-level changes
-COPY requirements-app.txt .
-RUN pip install --no-cache-dir -r requirements-app.txt
+# Ensure /app/models exists and is writable for model downloads
+RUN mkdir -p /app/models && chmod 777 /app/models
 
-# Install Redis server for Celery
-USER root
-RUN apt-get update && apt-get install -y redis-server && rm -rf /var/lib/apt/lists/*
-# USER user
+# Use the stabilized production requirements established for Hugging Face
+# This prevents build timeouts and native dependency failures on Render
+COPY requirements-hf-final.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-hf-final.txt
 
-# Copy clean application code (filtered by .dockerignore)
+# Copy application code
 COPY . .
 
 # Ensure start script is executable
 RUN chmod +x start.sh
 
-# Expose API Port
+# Render usually uses port 10000, but we'll stick to 7860 to match HF 
+# and the user can map it in Render's dashboard.
 EXPOSE 7860
 
 # Default Command

@@ -35,7 +35,7 @@ echo "Celery worker started (PID: $CELERY_PID)"
 echo "Starting FastAPI application (ENV: ${ENV:-production})..."
 if [ "${ENV}" = "development" ]; then
     echo "Running in development mode with live reload!"
-    exec uvicorn app.server:app --host 0.0.0.0 --port 7860 --reload
+    exec uvicorn app.server:app --host 0.0.0.0 --port "${PORT:-7860}" --reload
 else
-    exec uvicorn app.server:app --host 0.0.0.0 --port 7860 --workers 1
+    exec uvicorn app.server:app --host 0.0.0.0 --port "${PORT:-7860}" --workers 1
 fi
