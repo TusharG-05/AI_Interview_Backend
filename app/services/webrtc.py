@@ -47,6 +47,5 @@ class VideoTransformTrack(MediaStreamTrack):
             return new_frame
             
         except Exception as e:
-            # If the track ends or errors, we log it
-            # logger.error(f"WebRTC Frame Error: {e}")
-            raise e
+            logger.error(f"WebRTC Frame Error: {e}")
+            raise

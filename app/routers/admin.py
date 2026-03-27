@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Annotated
 import json as _json
 from sqlalchemy import func
 from pydantic import BaseModel
@@ -16,8 +16,8 @@ from ..services.status_manager import record_status_change
 from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
-from fastapi_limiter.depends import RateLimiter
 logger = get_logger(__name__)
+from ..services.admin_serialization import serialize_interview_admin_detail
 
 from ..schemas.admin.users import CreateUserRequest, UserRead, GetUserDetailResponse
 from ..schemas.admin.papers import GeneratePaperRequest, GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, UpdateQuestionRequest, AdminQuestionRead, QuestionCreateData
@@ -78,8 +78,8 @@ async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
 
 @router.get("/papers", response_model=ApiResponse[List[GetPaperResponse]])
 async def list_papers(
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """List all question papers created by the admin."""
     stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
@@ -112,8 +112,8 @@ class CreatePaperRequest(BaseModel):
 @router.post("/papers", response_model=ApiResponse[GetPaperResponse], status_code=201)
 async def create_paper(
     paper_data: CreatePaperRequest,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Create a new collection of questions."""
     new_paper = QuestionPaper(
@@ -143,9 +143,9 @@ async def create_paper(
 @router.post("/upload-doc", response_model=ApiResponse[dict])
 async def upload_questions_doc(
     paper_id: int,
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)],
+    file: UploadFile = File(...)
 ):
     """
     Upload a document (.pdf, .docx, .txt, .xlsx) to extract questions and add them to a paper.
@@ -211,8 +211,8 @@ async def upload_questions_doc(
 @router.get("/papers/{paper_id}", response_model=ApiResponse[GetPaperResponse])
 async def get_paper(
     paper_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Get details of a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
@@ -1075,158 +1075,8 @@ async def get_live_status_dashboard(
     )
 
 
-def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInterviewResultResponse:
-    """Helper to serialize InterviewSession into GetInterviewResultResponse."""
-    import json as _json
-    from ..schemas.admin.results import (
-        GetInterviewResultResponse as AdminResultData,
-        AdminAnswerAnswerShort as AnswerShort,
-        AdminQuestionWithAnswer as QuestionWithAnswer,
-        AdminPaperNested as PaperNestedWithAdminId,
-        AdminPaperNested as CodingPaperNestedWithAdmin,
-        AdminProctoringEvent as ProctoringEventRead
-    )
-    
-    # 1. Map Admin User
-    admin_data = None
-    if session_obj.admin:
-        admin_data = UserRead(
-            id=session_obj.admin.id,
-            email=session_obj.admin.email,
-            full_name=session_obj.admin.full_name,
-            role=str(session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else session_obj.admin.role),
-            profile_image=session_obj.admin.profile_image,
-            team=TeamReadBasic(
-                id=session_obj.admin.team.id,
-                name=session_obj.admin.team.name,
-                description=session_obj.admin.team.description or "",
-                created_at=session_obj.admin.team.created_at.isoformat() if hasattr(session_obj.admin.team, "created_at") and session_obj.admin.team.created_at else ""
-            ) if session_obj.admin.team else None
-        )
-
-    # 2. Map Candidate User
-    candidate_data = None
-    if session_obj.candidate:
-        candidate_data = UserRead(
-            id=session_obj.candidate.id,
-            email=session_obj.candidate.email,
-            full_name=session_obj.candidate.full_name,
-            role=str(session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else session_obj.candidate.role),
-            profile_image=session_obj.candidate.profile_image,
-            team=TeamReadBasic(
-                id=session_obj.candidate.team.id,
-                name=session_obj.candidate.team.name,
-                description=session_obj.candidate.team.description,
-                created_at=session_obj.candidate.team.created_at.isoformat() if session_obj.candidate.team.created_at else ""
-            ) if session_obj.candidate.team else None
-        )
-
-    # 3. Map Standard Question Paper
-    paper_data = None
-    if session_obj.paper:
-        questions_list = [
-            QuestionWithAnswer(
-                id=q.id,
-                paper_id=q.paper_id,
-                content=q.content or "",
-                question_text=q.question_text or "",
-                topic=q.topic or "",
-                difficulty=str(q.difficulty),
-                marks=q.marks or 0,
-                response_type=str(q.response_type)
-            ) for q in getattr(session_obj.paper, "questions", [])
-        ]
-        
-        paper_data = GetPaperResponse(
-            id=session_obj.paper.id,
-            name=session_obj.paper.name,
-            description=session_obj.paper.description or "",
-            adminUser=session_obj.paper.admin.full_name if session_obj.paper.admin else None,
-            question_count=session_obj.paper.question_count or len(questions_list),
-            total_marks=session_obj.paper.total_marks or sum(q.marks for q in questions_list),
-            created_at=session_obj.paper.created_at,
-            questions=None
-        )
-
-    # 4. Map Coding Question Paper
-    coding_paper_data = None
-    if session_obj.coding_paper:
-        coding_questions_list = [
-            QuestionWithAnswer(
-                id=cq.id,
-                paper_id=cq.paper_id,
-                content=cq.problem_statement or "",
-                question_text=cq.title or "",
-                topic=cq.topic or "",
-                difficulty=str(cq.difficulty),
-                marks=cq.marks or 0,
-                response_type="coding"
-            ) for cq in getattr(session_obj.coding_paper, "questions", [])
-        ]
-        
-        coding_paper_data = PaperNestedWithAdminId(
-            id=session_obj.coding_paper.id,
-            name=session_obj.coding_paper.name,
-            description=session_obj.coding_paper.description or "",
-            admin_user=session_obj.coding_paper.admin.id if session_obj.coding_paper.admin else None,
-            question_count=session_obj.coding_paper.question_count or len(coding_questions_list),
-            total_marks=session_obj.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
-            created_at=session_obj.coding_paper.created_at,
-            questions=None
-        )
-
-    # 5. Build Final Response Object
-    # Create proctoring event with id
-    proctoring_event = None
-    if session_obj.proctoring_events:
-        # Get the first proctoring event or create a summary one
-        proctoring_event = ProctoringEventRead(
-            id=session_obj.proctoring_events[0].id if session_obj.proctoring_events else session_obj.id,
-            warning_count=session_obj.warning_count or 0,
-            max_warnings=session_obj.max_warnings or 3,
-            is_suspended=session_obj.is_suspended or False,
-            suspension_reason=session_obj.suspension_reason,
-            suspended_at=session_obj.suspended_at,
-            allow_copy_paste=session_obj.allow_copy_paste or False,
-            allow_question_navigation=session_obj.allow_question_navigate or False
-        )
-    else:
-        # Create proctoring event from session data
-        proctoring_event = ProctoringEventRead(
-            id=session_obj.id,
-            warning_count=session_obj.warning_count or 0,
-            max_warnings=session_obj.max_warnings or 3,
-            is_suspended=session_obj.is_suspended or False,
-            suspension_reason=session_obj.suspension_reason,
-            suspended_at=session_obj.suspended_at,
-            allow_copy_paste=session_obj.allow_copy_paste or False,
-            allow_question_navigation=session_obj.allow_question_navigate or False
-        )
-
-    return GetInterviewResultResponse(
-        id=session_obj.id,
-        access_token=session_obj.access_token,
-        admin_user=admin_data if admin_data else None,
-        candidate_user=candidate_data if candidate_data else None,
-        paper=paper_data if paper_data else None,
-        coding_paper=coding_paper_data if coding_paper_data else None,
-        interview_round=str(session_obj.interview_round.value if hasattr(session_obj.interview_round, 'value') else session_obj.interview_round) if session_obj.interview_round else None,
-        schedule_time=session_obj.schedule_time,
-        duration_minutes=session_obj.duration_minutes or 1440,
-        max_questions=session_obj.max_questions,
-        start_time=session_obj.start_time,
-        end_time=session_obj.end_time,
-        status=str(session_obj.status.value if hasattr(session_obj.status, 'value') else session_obj.status),
-        response_count=len(session_obj.result.answers) if session_obj.result else 0,
-        last_activity=session_obj.last_activity,
-        result_status=getattr(session_obj.result, 'result_status', 'PENDING') if session_obj.result else 'PENDING',
-        max_marks=(paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0),
-        total_score=session_obj.total_score or 0.0,
-        enrollment_audio_path=session_obj.enrollment_audio_path,
-        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{session_obj.id}" if session_obj.enrollment_audio_path else None,
-        is_completed=session_obj.is_completed or False,
-        proctoring_event=proctoring_event
-    )
+# The local _serialize_interview_admin_detail function has been replaced 
+# by the dedicated service in app/services/admin_serialization.py
 
 @router.get("/interviews/{interview_id}", response_model=ApiResponse[GetInterviewResultResponse])
 async def get_interview(
@@ -1396,8 +1246,8 @@ async def update_interview(
 @router.delete("/interviews/{interview_id}", response_model=ApiResponse[dict])
 async def delete_interview(
     interview_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Hard delete an interview session and all related data (responses, proctoring events, etc.)."""
     # Retrieve the interview session with relationships loaded

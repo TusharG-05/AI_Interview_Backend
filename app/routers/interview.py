@@ -1549,6 +1549,10 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
     # Process results in background using plain function (no Celery dependency)
     from ..tasks.interview_tasks import process_session_results
     background_tasks.add_task(process_session_results, interview_id)
+    
+    # Cleanup proctoring resources
+    from ..services.camera import CameraService
+    CameraService().clear_session(interview_id)
     return ApiResponse(
         status_code=200,
         data={"status": "finished"},
