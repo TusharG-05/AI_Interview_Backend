@@ -1,7 +1,8 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Optional
 from ..services.camera import CameraService
-from ..core.config import local_llm
+from ..core.config import local_llm, IS_ORCHESTRATOR
+
 from ..schemas.shared.api_response import ApiResponse
 from ..core.database import engine
 from sqlmodel import text
@@ -81,15 +82,23 @@ async def get_system_status(interview_id: Optional[int] = Query(None)):
         if os.getenv("GROQ_API_KEY"):
             llm_status = "healthy (Groq API fallback)"
         else:
-            try:
-                local_llm.invoke("ping")
-                llm_status = "healthy (local Ollama)"
-            except Exception:
-                # Fallback to Hugging Face Inference API check
+            if not IS_ORCHESTRATOR:
+                try:
+                    local_llm.invoke("ping")
+                    llm_status = "healthy (local Ollama)"
+                except Exception:
+                    # Fallback to Hugging Face Inference API check
+                    if os.getenv("HF_TOKEN"):
+                        llm_status = "healthy (HF Inference API fallback)"
+                    else:
+                        llm_status = "disconnected (local Ollama not found & no fallback keys)"
+            else:
+                # Orchestrator mode with no remote keys
                 if os.getenv("HF_TOKEN"):
                     llm_status = "healthy (HF Inference API fallback)"
                 else:
-                    llm_status = "disconnected (local Ollama not found & no fallback keys)"
+                    llm_status = "disabled (Orchestrator Mode - Local Ollama skipped)"
+
     
     # Check Database Status
     db_status = "unknown"
