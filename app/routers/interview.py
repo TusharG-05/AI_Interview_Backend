@@ -722,16 +722,16 @@ async def upload_selfie_session(
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
     
-        # 5. Generate embeddings from uploaded selfie
+    # 5. Generate embeddings from uploaded selfie
     try:
-        from deepface import DeepFace
         from ..services.face import USE_MODAL, get_modal_embedding
         
         arcface_embedding = None
         sface_embedding = None
+        is_orchestrator = os.getenv("ENV_MODE") == "orchestrator"
         
-        # 1. Try ArcFace via Modal.com (GPU) if enabled
-        if USE_MODAL:
+        # 1. Try Modal (GPU) if enabled or if in Orchestrator mode (where local is disabled)
+        if USE_MODAL or is_orchestrator:
             try:
                 modal_cls = get_modal_embedding()
                 if modal_cls:
@@ -743,27 +743,27 @@ async def upload_selfie_session(
             except Exception as e:
                 _logger.warning(f"Modal ArcFace call failed: {e}")
         
-        # 2. Local Fallback for ArcFace and SFace
-        if arcface_embedding is None or True: # Always generate SFace locally, and ArcFace if Modal failed
+        # 2. Local Fallback (Skip in Orchestrator mode to avoid importing DeepFace)
+        if arcface_embedding is None and not is_orchestrator:
+            from deepface import DeepFace
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                 tmp.write(image_bytes)
                 tmp_path = tmp.name
             
             try:
                 # Generate ArcFace if not already got from Modal
-                if arcface_embedding is None:
-                    try:
-                        arc_objs = DeepFace.represent(
-                            img_path=tmp_path,
-                            model_name="ArcFace",
-                            detector_backend="mediapipe",
-                            enforce_detection=True
-                        )
-                        if arc_objs:
-                            arcface_embedding = arc_objs[0]["embedding"]
-                            _logger.info("ArcFace embedding generated locally")
-                    except Exception as e:
-                        _logger.warning(f"Local ArcFace embedding failed: {e}")
+                try:
+                    arc_objs = DeepFace.represent(
+                        img_path=tmp_path,
+                        model_name="ArcFace",
+                        detector_backend="mediapipe",
+                        enforce_detection=True
+                    )
+                    if arc_objs:
+                        arcface_embedding = arc_objs[0]["embedding"]
+                        _logger.info("ArcFace embedding generated locally")
+                except Exception as e:
+                    _logger.warning(f"Local ArcFace embedding failed: {e}")
                 
                 # Always generate SFace locally as lightweight backup
                 try:
@@ -784,10 +784,12 @@ async def upload_selfie_session(
         
         # Check if any embeddings were generated
         if arcface_embedding is None and sface_embedding is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to generate face embeddings. Please ensure a clear face is visible in the image."
-            )
+            detail_msg = "Failed to generate face embeddings."
+            if is_orchestrator and not USE_MODAL:
+                detail_msg += " (Note: Orchestrator mode requires USE_MODAL=true for face recognition)"
+            else:
+                detail_msg += " Please ensure a clear face is visible in the image."
+            raise HTTPException(status_code=400, detail=detail_msg)
         
         # 6. Parse stored embeddings
         stored_embeddings = json.loads(candidate.face_embedding)

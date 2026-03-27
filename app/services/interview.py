@@ -4,7 +4,7 @@ import json
 from typing import Dict, Union, Optional, Any
 from sqlmodel import Session, select
 from ..models.db_models import Questions
-from ..core.config import local_llm
+from ..core.config import local_llm, IS_ORCHESTRATOR
 from ..prompts.evaluation import evaluation_prompt
 from ..prompts.code_evaluation import code_evaluation_prompt
 from ..core.logger import get_logger
@@ -12,6 +12,7 @@ from huggingface_hub import InferenceClient
 from groq import Groq
 
 logger = get_logger(__name__)
+
 
 # Modal integration flag (shared with audio.py)
 USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
@@ -26,7 +27,8 @@ if GROQ_API_KEY:
     except Exception as e:
         logger.error(f"Failed to initialize Groq client: {e}")
 
-evaluation_chain = evaluation_prompt | local_llm
+# Chain initialization (moved inside functions for lazy loading)
+
 
 
 # Lazy load Modal LLM
@@ -181,10 +183,15 @@ def evaluate_answer_content(
                 except Exception as e:
                     logger.warning(f"HF attempt {attempt + 1} failed: {e}")
 
-            # Local fallback (Ollama via LangChain)
-            response = evaluation_chain.invoke({"question": question, "answer": answer})
-            parsed = _parse_llm_result(response.content)
-            if parsed: return parsed
+            # Local fallback (Ollama via LangChain) - Skip in Orchestrator mode to avoid timeout
+            if not IS_ORCHESTRATOR:
+                evaluation_chain = evaluation_prompt | local_llm
+                response = evaluation_chain.invoke({"question": question, "answer": answer})
+                parsed = _parse_llm_result(response.content)
+                if parsed: return parsed
+            else:
+                logger.warning("Orchestrator mode: Skipping local LLM fallback.")
+
             
         except Exception as e:
             logger.error(f"Fallback attempt {attempt + 1} failed: {e}")
@@ -282,18 +289,27 @@ def evaluate_code_submission(
             logger.warning(f"evaluate_code: HF API failed: {e}")
 
     # --- Local Ollama fallback ---
-    try:
-        logger.info("evaluate_code: Using local Ollama...")
-        result = _chain_invoke(code_eval_chain, chain_vars)
-        logger.info(f"evaluate_code: Ollama score={result.get('score')}")
-        return _scale_code_result(result)
-    except Exception as e:
-        logger.error(f"evaluate_code: Ollama failed: {e}")
+    if not IS_ORCHESTRATOR:
+        try:
+            logger.info("evaluate_code: Using local Ollama...")
+            result = _chain_invoke(code_eval_chain, chain_vars)
+            logger.info(f"evaluate_code: Ollama score={result.get('score')}")
+            return _scale_code_result(result)
+        except Exception as e:
+            logger.error(f"evaluate_code: Ollama failed: {e}")
+            return _scale_code_result({
+                "feedback": "Code evaluation service temporarily unavailable.",
+                "score": 0.0,
+                "error": True,
+            })
+    else:
+        logger.warning("Orchestrator mode: Skipping local code evaluation.")
         return _scale_code_result({
-            "feedback": "Code evaluation service temporarily unavailable.",
+            "feedback": "Code evaluation unavailable (Orchestrator Mode).",
             "score": 0.0,
             "error": True,
         })
+
 
 
 # ---------------------------------------------------------------------------
@@ -362,22 +378,27 @@ def generate_coding_questions_from_prompt(
             logger.warning(last_error)
 
     # --- Local Ollama ---
-    try:
-        logger.info("generate_coding_questions: Using local Ollama...")
-        response = generation_chain.invoke({
-            "ai_prompt": ai_prompt,
-            "difficulty_mix": difficulty_mix,
-            "num_questions": num_questions,
-        })
-        result = _parse_json(response.content)
-        logger.info(f"generate_coding_questions: Ollama returned {len(result)} problems")
-        return result
-    except Exception as e:
-        error_msg = f"Ollama failed: {str(e)}"
-        if last_error:
-            error_msg = f"{last_error} | {error_msg}"
-        logger.error(error_msg)
-        raise ValueError(f"Coding question generation failed: {error_msg}")
+    if not IS_ORCHESTRATOR:
+        try:
+            logger.info("generate_coding_questions: Using local Ollama...")
+            response = generation_chain.invoke({
+                "ai_prompt": ai_prompt,
+                "difficulty_mix": difficulty_mix,
+                "num_questions": num_questions,
+            })
+            result = _parse_json(response.content)
+            logger.info(f"generate_coding_questions: Ollama returned {len(result)} problems")
+            return result
+        except Exception as e:
+            error_msg = f"Ollama failed: {str(e)}"
+            if last_error:
+                error_msg = f"{last_error} | {error_msg}"
+            logger.error(error_msg)
+            raise ValueError(f"Coding question generation failed: {error_msg}")
+    else:
+        logger.warning("Orchestrator mode: Skipping local coding question generation.")
+        raise ValueError(f"Coding question generation failed: {last_error or 'Remote services unavailable and local fallback disabled in Orchestrator Mode'}")
+
 
 
 def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> Questions:
@@ -512,19 +533,24 @@ def generate_questions_from_prompt(
             logger.warning(last_error)
 
     # --- Local Ollama ---
-    try:
-        logger.info("generate_questions: Using local Ollama...")
-        response = generation_chain.invoke({
-            "ai_prompt": ai_prompt,
-            "years_of_experience": years_of_experience,
-            "num_questions": num_questions,
-        })
-        result = _parse_json(response.content)
-        logger.info(f"generate_questions: Ollama returned {len(result)} questions")
-        return result
-    except Exception as e:
-        error_msg = f"Ollama failed: {str(e)}"
-        if last_error:
-            error_msg = f"{last_error} | {error_msg}"
-        logger.error(error_msg)
-        raise ValueError(f"Question generation failed: {error_msg}")
+    if not IS_ORCHESTRATOR:
+        try:
+            logger.info("generate_questions: Using local Ollama...")
+            response = generation_chain.invoke({
+                "ai_prompt": ai_prompt,
+                "years_of_experience": years_of_experience,
+                "num_questions": num_questions,
+            })
+            result = _parse_json(response.content)
+            logger.info(f"generate_questions: Ollama returned {len(result)} questions")
+            return result
+        except Exception as e:
+            error_msg = f"Ollama failed: {str(e)}"
+            if last_error:
+                error_msg = f"{last_error} | {error_msg}"
+            logger.error(error_msg)
+            raise ValueError(f"Question generation failed: {error_msg}")
+    else:
+        logger.warning("Orchestrator mode: Skipping local question generation.")
+        raise ValueError(f"Question generation failed: {last_error or 'Remote services unavailable and local fallback disabled in Orchestrator Mode'}")
+

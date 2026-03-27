@@ -1,15 +1,13 @@
-import cv2
 import threading
 import time
 import os
-import numpy as np
-from typing import Optional, Tuple
-# from .face import FaceDetector
-# from .gaze import GazeDetector
+from typing import Optional, Tuple, Any
+from ..core.config import IS_ORCHESTRATOR
 from ..utils.image_processing import decode_image
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
+
 
 class CameraService:
     """
@@ -31,8 +29,9 @@ class CameraService:
         if self._initialized: return
         self._initialized = True
         
-        self.face_detector: Optional[FaceDetector] = None
-        self.gaze_detector: Optional[GazeDetector] = None
+        self.face_detector: Optional[Any] = None
+        self.gaze_detector: Optional[Any] = None
+
         self.running: bool = False
         self._listeners = []
         
@@ -56,6 +55,15 @@ class CameraService:
         video_source is ignored in Client-Side mode but kept for signature compatibility.
         """
         if self.running: return
+        
+        # --- Skip heavy detector initialization in Orchestrator Mode ---
+        if IS_ORCHESTRATOR:
+            logger.info("CameraService: Running in ORCHESTRATOR mode. Background detectors disabled.")
+
+            self.running = True
+            self._detectors_ready = True # Allow frames to pass through without analysis
+            return
+
         logger.info("Starting CameraService (Client-Side Streaming Mode)...")
         
         # Init Detectors in background (Stateless initialization)
@@ -96,7 +104,8 @@ class CameraService:
         if self.gaze_detector:
             self.gaze_detector.close()
 
-    def process_frame_ndarray(self, frame: np.ndarray, interview_id: int):
+    def process_frame_ndarray(self, frame: Any, interview_id: int):
+
         """
         Core logic: Processes a numpy BGR frame (from WS or WebRTC).
         Returns: (annotated_frame, result_dict)
@@ -118,8 +127,10 @@ class CameraService:
             
             # --- ANNOTATE ---
             if locs:
+                import cv2
                 for (top, right, bottom, left) in locs:
                     cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+
             
             warning = ""
             if n_face > 1: warning = "MULTIPLE FACES DETECTED"
@@ -129,10 +140,12 @@ class CameraService:
 
             # Update latest frame for MJPEG stream (Isolate by session)
             with self.frame_lock:
+                import cv2
                 success, buffer = cv2.imencode('.jpg', frame)
                 if success:
                     self.session_frames[interview_id] = buffer.tobytes()
                 self.session_frame_ids[interview_id] = self.session_frame_ids.get(interview_id, 0) + 1
+
                 if interview_id not in self.session_start_times:
                     self.session_start_times[interview_id] = time.time()
                 self.session_last_active[interview_id] = time.time()

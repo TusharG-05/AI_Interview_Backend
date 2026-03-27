@@ -2,8 +2,6 @@
 import os
 import logging
 from dotenv import load_dotenv
-from langchain_ollama import ChatOllama
-
 load_dotenv()
 
 # App Configuration
@@ -15,12 +13,43 @@ LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5-coder:3b")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
-# Initialize the local language model
-local_llm = ChatOllama(
-    model=LLM_MODEL,
-    temperature=LLM_TEMPERATURE,
-    base_url=OLLAMA_BASE_URL
-)
+# Orchestrator & Environment Mode
+ENV_MODE = os.getenv("ENV_MODE", "development")
+IS_ORCHESTRATOR = ENV_MODE == "orchestrator"
+
+# Lazy-loaded LLM Initialization
+_local_llm = None
+
+def get_local_llm():
+    """Lazy initialization for local LLM to save memory on startup."""
+    global _local_llm
+    if _local_llm is None:
+        from langchain_ollama import ChatOllama
+        _local_llm = ChatOllama(
+            model=LLM_MODEL,
+            temperature=LLM_TEMPERATURE,
+            base_url=OLLAMA_BASE_URL
+        )
+    return _local_llm
+
+# Legacy support for existing imports
+# Note: Initializing it as a Proxy-like object OR just updating imports is better.
+# For now, we'll keep the name but wrap it or update usages.
+class LazyLLM:
+    def __getattr__(self, name):
+        return getattr(get_local_llm(), name)
+    
+    def __or__(self, other):
+        # Support LangChain pipe operator
+        return get_local_llm() | other
+    
+    def __ror__(self, other):
+        # Support LangChain pipe operator
+        return other | get_local_llm()
+
+local_llm = LazyLLM()
+
+
 
 # Database Configuration
 DATABASE_URL = os.getenv("DATABASE_URL")

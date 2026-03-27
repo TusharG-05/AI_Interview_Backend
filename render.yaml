@@ -1,19 +1,23 @@
-# Render Blueprint for AI Interview Platform
-# This file automates the setup of Postgres, Redis, Web, and Worker services.
+# Render Blueprint for AI Interview Orchestrator
+# This defines a high-performance, low-memory API service.
 
 services:
-  # 1. Web Service (FastAPI)
+  # 1. Orchestrator Service (FastAPI)
   - type: web
-    name: ai-interview-api
+    name: ai-interview-orchestrator
     runtime: docker
     dockerFilePath: Dockerfile.render
-    plan: standard # AI models require at least 'standard' (512MB-2GB+)
-    region: ohio # Change as needed
+    plan: free # Can now run on FREE tier (512MB RAM)
+    region: ohio
     envVars:
       - key: PORT
         value: 7860
       - key: ENV
         value: production
+      - key: ENV_MODE
+        value: orchestrator
+      - key: USE_MODAL
+        value: "true"
       - key: REDIS_URL
         fromService:
           type: redis
@@ -23,43 +27,26 @@ services:
         fromDatabase:
           name: ai-interview-db
           property: connectionString
-      # --- REQUIRED SECRETS (Fill these in Render Dashboard) ---
-      - key: MAIL_USERNAME
+      # --- REQUIRED SECRETS (Fill in Render Dashboard) ---
+      - key: MODAL_TOKEN_ID
         sync: false
-      - key: MAIL_PASSWORD
+      - key: MODAL_TOKEN_SECRET
         sync: false
       - key: GROQ_API_KEY
+        sync: false
+      - key: HF_TOKEN
         sync: false
       - key: CLOUDINARY_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true
 
-  # 2. Worker Service (Celery)
-  - type: worker
-    name: ai-interview-worker
-    runtime: docker
-    dockerFilePath: Dockerfile.render
-    plan: standard
-    region: ohio
-    envVars:
-      - key: REDIS_URL
-        fromService:
-          type: redis
-          name: ai-interview-redis
-          property: connectionString
-      - key: DATABASE_URL
-        fromDatabase:
-          name: ai-interview-db
-          property: connectionString
-
-# 3. Managed Database (PostgreSQL)
+# 2. Managed Database (PostgreSQL)
 databases:
   - name: ai-interview-db
-    plan: free # Can upgrade as needed
+    plan: free
 
-# 4. Managed Redis
+# 3. Managed Redis
 redis:
   - name: ai-interview-redis
     plan: free
-    ipAllowList: [] # Only allow internal connections

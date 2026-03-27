@@ -1,13 +1,14 @@
-import cv2
 import time
-import numpy as np
 import multiprocessing
 import os
 import threading
+from typing import Any, List, Optional
+from ..core.config import IS_ORCHESTRATOR
 from ..utils.image_processing import convert_to_rgb, resize_with_aspect_ratio
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
+
 
 # Modal integration flag
 USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
@@ -34,6 +35,14 @@ def get_modal_embedding():
 class MediaPipeDetector:
     """Handles face detection using MediaPipe."""
     def __init__(self, model_path='app/assets/face_landmarker.task', num_faces=4, min_confidence=0.5):
+        # --- Skip initialization in Orchestrator Mode or HF Space (Lazy) ---
+        is_hf = os.getenv("SPACE_ID") is not None
+        if IS_ORCHESTRATOR or is_hf:
+            logger.info(f"MediaPipeDetector: Skipping eager initialization (Mode: {'Orchestrator' if IS_ORCHESTRATOR else 'HF'})")
+
+            self.detector = None
+            return
+
         import mediapipe as mp
         from mediapipe.tasks import python
         from mediapipe.tasks.python import vision
@@ -61,6 +70,9 @@ class MediaPipeDetector:
         self.detector = vision.FaceLandmarker.create_from_options(options)
 
     def detect(self, img_rgb):
+        if self.detector is None:
+            return []
+            
         import mediapipe as mp
         h, w = img_rgb.shape[:2]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
@@ -89,6 +101,12 @@ class FaceRecognizer:
         # Default local/fallback model is SFace (lightweight: 35MB)
         self.model_name = "SFace"
         
+        # --- Skip initialization in Orchestrator Mode ---
+        if IS_ORCHESTRATOR:
+            logger.info("FaceRecognizer: Skipping local model initialization (Orchestrator Mode)")
+            return
+
+
         # SFace is light enough to build even on HF Spaces (Free Tier)
         # We only skip if DeepFace is missing
         try:
@@ -113,7 +131,7 @@ class FaceRecognizer:
             DeepFace.build_model(self.model_name)
             logger.info(f"Local {self.model_name} model ready.")
         except ImportError:
-            logger.error("CRITICAL: DeepFace not installed. Face recognition is DISABLED.")
+            logger.error("CRITICAL: DeepFace not installed. Local face recognition is DISABLED.")
         except Exception as e:
             logger.warning(f"Local {self.model_name} model build failed (will try lazy load on first attempt): {e}")
 
@@ -176,6 +194,7 @@ class FaceRecognizer:
                 # 2. Local fallback (Lightweight: SFace) if Modal fails or is disabled
                 if curr_emb is None:
                     try:
+                        # On 512MB tiers, this might still cause a spike, but user confirmed SFace is light enough for HF.
                         from deepface import DeepFace
                         objs = DeepFace.represent(
                             img_path=face, 
@@ -185,8 +204,11 @@ class FaceRecognizer:
                             align=False
                         )
                         curr_emb = objs[0]["embedding"]
+                        logger.info(f"Local {self.model_name} fallback successful.")
                     except Exception as e:
                         logger.warning(f"Local {self.model_name} fallback failed: {e}")
+
+
                 
                 if curr_emb is None:
                     matches.append(False)
@@ -201,6 +223,7 @@ class FaceRecognizer:
                     matches.append(False)
                     continue
 
+                import numpy as np
                 a = np.array(known_vec)
                 b = np.array(curr_emb)
                 
@@ -214,6 +237,7 @@ class FaceRecognizer:
                 # Threshold: 0.40 is generally safe for both ArcFace and SFace
                 # but SFace is more compact, sometimes more strict.
                 matches.append(bool(cos_sim > 0.40))
+
                 
             except Exception as e:
                 logger.debug(f"Face recognition error: {e}")
@@ -259,11 +283,13 @@ def face_worker_process(frame_queue, result_queue):
             
             recognizer.known_encoding = embedding_cache.get(interview_id)
             
+            import cv2
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             h, w = frame_rgb.shape[:2]
             target_h = 540
             s = target_h / h if h > target_h else 1.0
             img = cv2.resize(frame_rgb, (0,0), fx=s, fy=s) if s < 1.0 else frame_rgb
+
             
             locs = detector.detect(img)
             matches = recognizer.recognize(img, locs)

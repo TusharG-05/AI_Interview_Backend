@@ -1,7 +1,9 @@
 import os
 import asyncio
 from pathlib import Path
+from ..core.config import IS_ORCHESTRATOR
 from ..core.logger import get_logger
+
 
 logger = get_logger(__name__)
 
@@ -41,10 +43,11 @@ class AudioService:
 
     @property
     def stt_model(self):
-        # Prevent loading heavy local model on HF Spaces
-        if os.getenv("SPACE_ID"):
-            logger.warning("Local STT model loading blocked on HF Spaces to prevent OOM")
+        # Prevent loading heavy local model on HF Spaces or Orchestrator mode
+        if os.getenv("SPACE_ID") or IS_ORCHESTRATOR:
+            logger.warning(f"Local STT model loading blocked (Mode: {'Orchestrator' if IS_ORCHESTRATOR else 'HF'})")
             return None
+
 
         if self._stt_model is None:
             import torch
@@ -61,6 +64,12 @@ class AudioService:
 
     @property
     def speaker_model(self):
+        # Prevent loading heavy local model in Orchestrator mode
+        if IS_ORCHESTRATOR:
+            logger.warning("Local Speaker model loading blocked in Orchestrator mode")
+            return None
+
+
         if self._speaker_model is None:
             import torch
             from huggingface_hub import snapshot_download
@@ -218,11 +227,11 @@ class AudioService:
             if hf_text:
                 return hf_text
 
-            # 3. Local Fallback (Disabled on HF Spaces to prevent OOM)
-            is_cloud = os.getenv("SPACE_ID") is not None
-            if not is_cloud:
+            # 3. Local Fallback (Disabled in Orchestrator/Cloud to prevent OOM)
+            if not os.getenv("SPACE_ID") and not IS_ORCHESTRATOR:
                 logger.info("Falling back to local STT...")
                 model = self.stt_model
+
                 if model:
                     loop = asyncio.get_running_loop()
                     def _transcribe():
@@ -238,10 +247,10 @@ class AudioService:
                     text = await loop.run_in_executor(None, _transcribe)
                     return text if text else "[Silence/No Speech Detected]"
             else:
-                msg = "Cloud Environment detected. Skipping local STT fallback."
+                msg = f"Orchestrator/Cloud Environment detected. Skipping local STT fallback to prevent OOM."
                 logger.warning(msg)
-                if not last_error:
-                    last_error = msg
+                return ""
+
 
             # If all failed, return the accumulated last error
             return f"[STT Error: {last_error or 'All STT services failed'}]"
