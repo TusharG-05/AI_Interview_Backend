@@ -86,35 +86,35 @@ async def lifespan(app: FastAPI):
 
     # These imports are now safe since init_db() already finished
     from .services.camera import CameraService
-    from .routers.interview import audio_service
+    from .routers.interview import get_audio_service
     
-    # Pre-warm models in background
-    import threading
-    def warm_up():
-        logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
-        from .core.config import local_llm
-        try:
-            # Trigger lazy loading properties for audio/speech models
-            _ = audio_service.stt_model
-            _ = audio_service.speaker_model
-            
-            # Local LLM (Ollama) is often absent in cloud/HF environments
+    # Pre-warm models in background (SKIP in orchestrator mode to save memory)
+    from .core.config import ENV_MODE
+    if ENV_MODE != "orchestrator":
+        import threading
+        def warm_up():
+            logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
+            from .core.config import local_llm
             try:
-                local_llm.invoke("Hello")
-            except Exception as llm_e:
-                logger.info(f"Warm-up: Local LLM (Ollama) unreachable, skipping pre-warm: {llm_e}")
+                audio_service = get_audio_service()
+                # Trigger lazy loading properties for audio/speech models
+                _ = audio_service.stt_model
+                _ = audio_service.speaker_model
                 
-            logger.info("Warm-up: AI Models Ready.")
-        except Exception as e:
-            logger.error(f"Warm-up process encountered an error: {e}")
-    
-    # Start warm-up in background thread so server starts instantly
-    # On HF Spaces, we skip local ML warmup to save memory and startup time
-    if not os.getenv("SPACE_ID"):
+                # Local LLM (Ollama) is often absent in cloud/HF environments
+                try:
+                    local_llm.invoke("Hello")
+                except Exception as llm_e:
+                    logger.info(f"Warm-up: Local LLM (Ollama) unreachable, skipping pre-warm: {llm_e}")
+                    
+                logger.info("Warm-up: AI Models Ready.")
+            except Exception as e:
+                logger.error(f"Warm-up process encountered an error: {e}")
+        
         threading.Thread(target=warm_up, daemon=True).start()
         logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
     else:
-        logger.info("Warm-up: Skipped local model pre-warm on Hugging Face Space.")
+        logger.info("Orchestrator Mode detected: Skipping local model pre-warm to save RAM.")
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()

@@ -38,6 +38,7 @@ elif DATABASE_URL.startswith("postgresql://") and "+psycopg2" not in DATABASE_UR
 # Security
 SECRET_KEY = os.getenv("SECRET_KEY")
 ENV = os.getenv("ENV", "development")
+ENV_MODE = os.getenv("ENV_MODE", "full")  # "full" or "orchestrator"
 
 if not SECRET_KEY:
     if ENV == "production":

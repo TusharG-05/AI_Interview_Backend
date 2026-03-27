@@ -24,13 +24,29 @@ from datetime import datetime, timedelta, timezone
 
 from pydub import AudioSegment
 import logging
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
 from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
-logger = logging.getLogger(__name__)
-audio_service = AudioService()
-cloudinary_service = CloudinaryService()
+_audio_service = None
+_cloudinary_service = None
+
+def get_audio_service():
+    global _audio_service
+    if _audio_service is None:
+        from ..services.audio import AudioService
+        _audio_service = AudioService()
+    return _audio_service
+
+def get_cloudinary_service():
+    global _cloudinary_service
+    if _cloudinary_service is None:
+        from ..services.cloudinary_service import CloudinaryService
+        _cloudinary_service = CloudinaryService()
+    return _cloudinary_service
 
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
@@ -595,29 +611,31 @@ async def start_session_logic(
     warning = None
     try:
         if enrollment_audio:
-            os.makedirs("app/assets/audio/enrollment", exist_ok=True)
-            enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
-            content = await enrollment_audio.read()
-            audio_service.save_audio_blob(content, enrollment_path)
-            
-            # Silence/Quality Check
+            audio_service = get_audio_service()
             try:
-                if audio_service.calculate_energy(enrollment_path) < 50:
-                     warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
+                content = await enrollment_audio.read()
+                enrollment_path = f"app/assets/audio/enrollment_{uuid.uuid4().hex}.webm"
+                audio_service.save_audio_blob(content, enrollment_path)
+                
+                # Simple silence check
+                try:
+                    if audio_service.calculate_energy(enrollment_path) < 50:
+                        logger.warning(f"Session {interview_id}: Enrollment audio too silent.")
+                except: pass
+                
+                # Upload to Cloudinary
+                try:
+                    cloudinary_service = get_cloudinary_service()
+                    cloudinary_url = cloudinary_service.upload_audio(content)
+                    session.enrollment_audio_path = cloudinary_url
+                except Exception as e:
+                    logger.error(f"Failed to upload enrollment audio: {e}")
+                    session.enrollment_audio_path = enrollment_path
+
+                audio_service.cleanup_audio(enrollment_path)
             except Exception as e:
-                logger.warning(f"Energy check failed: {e}")
-            
-            # Cleanup only after processing
-            audio_service.cleanup_audio(enrollment_path)
-            
-            # Upload to Cloudinary
-            try:
-                cloudinary_url = cloudinary_service.upload_audio(content)
-                session.enrollment_audio_path = cloudinary_url
-            except Exception as upload_error:
-                logger.warning(f"Cloudinary upload failed: {upload_error}")
-                # Continue without Cloudinary upload - store locally
-                session.enrollment_audio_path = enrollment_path
+                logger.error(f"Failed to process enrollment audio: {e}")
+                warning = "Failed to process enrollment audio."
             
             # Track enrollment completion
             record_status_change(
@@ -1102,6 +1120,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     os.makedirs("app/assets/audio/questions", exist_ok=True)
     audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
     if not os.path.exists(audio_path):
+        audio_service = get_audio_service()
         await audio_service.text_to_speech(question.question_text or question.content, audio_path)
     
     # Calculate progress
@@ -1190,6 +1209,7 @@ async def submit_answer_audio(
     os.makedirs("app/assets/audio/responses", exist_ok=True)
     audio_path = f"app/assets/audio/responses/resp_{interview_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
+    audio_service = get_audio_service()
     audio_service.save_audio_blob(content, audio_path)
     
     # Get or Create InterviewResult (Thread-safe-ish check)
@@ -1243,6 +1263,8 @@ async def submit_answer_audio(
     # Transcribe audio immediately so evaluation can run right away.
     # STT and LLM errors are caught inside the helpers; answer is already saved.
     transcribed_text = ""
+    audio_service = get_audio_service()
+    cloudinary_service = get_cloudinary_service()
     try:
         # REF: Using await instead of new_event_loop().run_until_complete()
         # triggering nested loops in Uvicorn is unstable and prone to 000 crashes.
@@ -1910,6 +1932,7 @@ async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User 
         temp_path = f"app/assets/audio/standalone/{temp_filename}" 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
         
+        audio_service = get_audio_service()
         audio_service.save_audio_blob(content, temp_path)
         
         # Perform STT
@@ -1945,6 +1968,7 @@ async def stt_evaluate_tool(
         temp_path = f"app/assets/audio/standalone/{temp_filename}"
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
         
+        audio_service = get_audio_service()
         audio_service.save_audio_blob(content, temp_path)
         
         # Perform STT
@@ -1987,9 +2011,9 @@ async def stt_evaluate_tool(
 async def standalone_tts(text: str, background_tasks: BackgroundTasks):
     return await _generate_tts_response(text, background_tasks)
 
-@router.post("/tts")
-async def standalone_tts_post(data: TTSRange, background_tasks: BackgroundTasks):
-    return await _generate_tts_response(data.text, background_tasks)
+# @router.post("/tts")
+# async def standalone_tts_post(data: TTSRange, background_tasks: BackgroundTasks):
+#     return await _generate_tts_response(data.text, background_tasks)
 
 async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
     """Internal helper for TTS generation and cleanup."""
@@ -2000,42 +2024,43 @@ async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
         os.makedirs(os.path.dirname(temp_mp3), exist_ok=True)
         
         # 1. Generate MP3 stream
+        audio_service = get_audio_service()
         await audio_service.text_to_speech(text, temp_mp3)
         
+        # Verify file creation to prevent pydub errors
+        if not os.path.exists(temp_mp3):
+            logger.error(f"TTS service failed to create file: {temp_mp3}. Check if 'edge-tts' is installed and working.")
+            raise FileNotFoundError(f"TTS file {temp_mp3} not found")
+
         # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
+        logger.info(f"Converting TTS MP3 to WAV: {wav_path}")
         from pydub import AudioSegment
         audio = AudioSegment.from_file(temp_mp3)
         audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
         audio.export(wav_path, format="wav")
         
-        # 3. Cleanup intermediate MP3
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
-
-        # 4. Return FileResponse and schedule cleanup
-        def cleanup():
-            if os.path.exists(wav_path):
-                try: os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"TTS Cleanup Error: {e}")
-
-        background_tasks.add_task(cleanup)
+        # 3. Upload to Cloudinary (as per requirement: audio saved in Cloudinary, not local)
+        with open(wav_path, "rb") as f:
+            wav_content = f.read()
         
-        return FileResponse(
-            wav_path,
-            media_type="audio/wav",
-            content_disposition_type="inline"
-        )
+        cloudinary_service = get_cloudinary_service()
+        cloudinary_url = cloudinary_service.upload_audio(wav_content, folder="standalone_tts")
+        
+        # 4. Cleanup intermediate files immediately
+        for p in [temp_mp3, wav_path]:
+            if os.path.exists(p): 
+                try: os.remove(p)
+                except Exception as e: logger.error(f"TTS Cleanup Error: {e}")
+
+        # 5. Return RedirectResponse to the Cloudinary URL
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=cloudinary_url)
 
     except Exception as e:
         logger.error(f"TTS Generation Error: {e}")
         # Final safety cleanup
         for p in [temp_mp3, wav_path]:
             if os.path.exists(p): 
-                try: 
-                    os.remove(p)
-                except Exception as e:
-                    logger.error(f"TTS Cleanup Error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")
-        
+                try: os.remove(p)
+                except Exception as e: logger.error(f"TTS Cleanup Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")
