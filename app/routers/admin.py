@@ -25,7 +25,7 @@ from ..schemas.admin.interviews import ScheduleInterviewRequest, UpdateInterview
 from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested, GetAdminResultsListResponse
 from ..schemas.shared.team import TeamReadBasic
 from ..schemas.admin.coding import CodingQuestionFull, CodingPaperFull, GenerateCodingPaperRequest, CodingPaperCreateRequest, CodingPaperUpdateRequest, CodingQuestionCreateRequest, CodingQuestionUpdateRequest
-from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail
+from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail,AdminInterviewsList
 InterviewSessionDetail = AdminInterviewSessionDetail
 from ..schemas.shared.api_response import ApiResponse
 from ..schemas.shared.user import UserNested, serialize_user
@@ -932,7 +932,7 @@ async def schedule_interview(
         message="Interview scheduled successfully"
     )
 
-@router.get("/interviews", response_model=ApiResponse[List[AdminInterviewSessionDetail]])
+@router.get("/interviews", response_model=ApiResponse[List[AdminInterviewsList]])
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
     # Only show sessions created by this admin (including those where admin is NULL)
@@ -960,26 +960,16 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
     results = []
     for s in sessions:
         # Serialize users with role-based keys, handling NULL users
-        admin_dict = serialize_user(s.admin, fallback_role="admin")
+        #admin_dict = serialize_user(s.admin, fallback_role="admin")
         candidate_dict = serialize_user(s.candidate, fallback_role="candidate")
-        
-        results.append(AdminInterviewSessionDetail(
+
+        results.append(AdminInterviewsList(
             id=s.id,
-            access_token=s.access_token,
-            admin_user=admin_dict,
             candidate_user=candidate_dict,
             status=s.status.value,
             schedule_time=format_iso_datetime(s.schedule_time),
             total_score=(s.result.total_score if s.result else s.total_score) or 0.0,
-            allow_copy_paste=s.allow_copy_paste or False,
-            allow_question_navigate=s.allow_question_navigate or False,
-            interview_round=s.interview_round.value if s.interview_round else None,
-            team_id=s.candidate.team_id if s.candidate else None,
-            duration_minutes=s.duration_minutes,
-            warning_count=s.warning_count,
-            max_warnings=s.max_warnings,
-            is_suspended=s.is_suspended,
-            is_completed=s.is_completed
+            interview_round=s.interview_round.value if s.interview_round else None
         ))
     return ApiResponse(
         status_code=200,

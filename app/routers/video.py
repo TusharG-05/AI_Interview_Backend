@@ -8,10 +8,18 @@ import asyncio
 import json
 from ..core.logger import get_logger
 
+print("\033[94m[STARTUP] Routers: video.py module loading...\033[0m", flush=True)
 
-router = APIRouter(tags=["Gaze & Face Analysis"])
-logger = get_logger(__name__)
-camera_service = CameraService()
+_camera_service = None
+
+def get_camera_service():
+    """Lazy-load the camera service to save memory on cloud startup."""
+    global _camera_service
+    if _camera_service is None:
+        print("\033[94m[MODELS] Initializing CameraService (Lazy)...\033[0m", flush=True)
+        from ..services.camera import CameraService
+        _camera_service = CameraService()
+    return _camera_service
 
 def frame_generator(interview_id: int):
     """Yields MJPEG frames synchronized with the camera service for a specific session."""
