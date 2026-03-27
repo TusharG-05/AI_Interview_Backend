@@ -1,9 +1,10 @@
 from typing import List, Optional, Annotated
 import json as _json
+from datetime import datetime
 from sqlalchemy import func
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
@@ -18,6 +19,7 @@ from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 logger = get_logger(__name__)
 from ..services.admin_serialization import serialize_interview_admin_detail
+_serialize_interview_admin_detail = serialize_interview_admin_detail
 
 from ..schemas.admin.users import CreateUserRequest, UserRead, GetUserDetailResponse
 from ..schemas.admin.papers import GeneratePaperRequest, GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, UpdateQuestionRequest, AdminQuestionRead, QuestionCreateData
@@ -1340,9 +1342,12 @@ async def list_candidates(
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns a flat list of candidate interview sessions and their results."""
     
-    # Only show sessions created by this admin
+    # 1. Join with InterviewResult to only show sessions that have a generated result.
+    # This prevents 404 errors when viewing detailed results for scheduled/invited sessions.
+    from ..models.db_models import InterviewResult
     sessions = session.exec(
         select(InterviewSession)
+        .join(InterviewResult)
         .where(InterviewSession.admin_id == current_user.id)
         .options(
             selectinload(InterviewSession.candidate),
@@ -1928,7 +1933,7 @@ async def create_user(
         
         try:
             await resume.seek(0)
-            # Ensure your cloudinary_service call is also correct
+            # Upload to Cloudinary
             resume_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
             if resume_url:
                 new_user.resume_path = resume_url
@@ -1953,19 +1958,23 @@ async def create_user(
         from .teams import _serialize_team_basic
         team_data = _serialize_team_basic(new_user.team, session)
 
-    return create_response(ApiResponse(
+    return Response(
+        content=ApiResponse(
+            status_code=201,
+            data=UserRead(
+                id=new_user.id,
+                email=new_user.email,
+                full_name=new_user.full_name,
+                role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
+                resume_url=new_user.resume_path,
+                profile_image=new_user.profile_image, 
+                team=team_data
+            ),
+            message="User created with profile image and biometric embeddings."
+        ).model_dump_json(),
         status_code=201,
-        data=UserRead(
-            id=new_user.id,
-            email=new_user.email,
-            full_name=new_user.full_name,
-            role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
-            resume_url=new_user.resume_path,
-            profile_image=new_user.profile_image, 
-            team=team_data
-        ),
-        message="User created with profile image and biometric embeddings."
-    ))
+        media_type="application/json"
+    )
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):

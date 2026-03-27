@@ -2,7 +2,6 @@
 set -e
 
 # --- Internal Infrastructure ---
-export RENDER=true
 export PYTHONUNBUFFERED=TRUE
 export PYTHONPATH=$PYTHONPATH:.
 
@@ -10,35 +9,38 @@ if [ -f .env ]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
-# ── Start Redis ───────────────────────────────────────────────────────────────
-echo "🚀 Starting Redis server..."
-redis-server \
-    --daemonize yes \
-    --port 6379 \
-    --bind 127.0.0.1 \
-    --pidfile /tmp/redis.pid \
-    --dir /tmp \
-    --maxmemory 256mb \
-    --maxmemory-policy allkeys-lru \
-    --protected-mode no
+# ── Start Redis (Only if not provided externally) ───────────────────────────
+# On Render/Managed environments, REDIS_URL is provided. On HF, we start local.
+if [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL" == *"localhost"* ]]; then
+    echo "🚀 Starting local Redis server..."
+    redis-server \
+        --daemonize yes \
+        --port 6379 \
+        --bind 127.0.0.1 \
+        --pidfile /tmp/redis.pid \
+        --dir /tmp \
+        --maxmemory 256mb \
+        --maxmemory-policy allkeys-lru \
+        --protected-mode no || { echo "❌ Redis failed to start"; exit 1; }
 
-# Wait for Redis to be ready (max 30 s)
-MAX_WAIT=30
-WAITED=0
-until redis-cli ping 2>/dev/null | grep -q PONG; do
-    if [ "$WAITED" -ge "$MAX_WAIT" ]; then
-        echo "ERROR: Redis did not start within ${MAX_WAIT}s. Exiting."
-        exit 1
-    fi
-    echo "Waiting for Redis... (${WAITED}s)"
-    sleep 1
-    WAITED=$((WAITED + 1))
-done
-echo "Redis is up and running!"
+    # Wait for Redis to be ready (max 30 s)
+    MAX_WAIT=30
+    WAITED=0
+    until redis-cli ping 2>/dev/null | grep -q PONG; do
+        if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+            echo "ERROR: Redis did not start within ${MAX_WAIT}s. Exiting."
+            exit 1
+        fi
+        echo "Waiting for Redis... (${WAITED}s)"
+        sleep 1
+        WAITED=$((WAITED + 1))
+    done
+    echo "Local Redis is up and running!"
+fi
 
 # ── Start Celery worker ───────────────────────────────────────────────────────
 echo "Starting Celery worker..."
-celery -A app.core.celery_app worker --loglevel=info &
+celery -A app.core.celery_app worker --loglevel=info > /tmp/celery.log 2>&1 &
 CELERY_PID=$!
 echo "Celery worker started (PID: $CELERY_PID)"
 

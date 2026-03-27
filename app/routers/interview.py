@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Union
+import json as _json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole
@@ -199,6 +200,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
         max_marks=max_marks,
         total_score=session.total_score or 0.0,
+        current_status=str(session.current_status.value if hasattr(session.current_status, 'value') else session.current_status),
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,
@@ -423,10 +425,14 @@ async def get_schedule_time(
     ).first()
     
     if not session:
-        return ApiResponse(
+        return Response(
+            content=_json.dumps(ApiResponse(
+                status_code=404,
+                data=None,
+                message="Invalid interview token"
+            ).model_dump()),
             status_code=404,
-            data=None,
-            message="Invalid interview token"
+            media_type="application/json"
         )
 
     # 1. Setup Time and Message Logic
@@ -443,7 +449,11 @@ async def get_schedule_time(
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="This interview has been cancelled.")
     elif session.is_completed or session.status == InterviewStatus.COMPLETED:
-        raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        return ApiResponse(
+            status_code=200,
+            data=None,
+            message="This interview has already been completed."
+        )
     elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
         raise HTTPException(status_code=403, detail="This interview link has expired.")
     elif session.status == InterviewStatus.LIVE:
@@ -467,6 +477,47 @@ async def get_schedule_time(
         cp_dict['coding_questions'] = []
         cp_dict['admin_user'] = None
         coding_paper_data = CodingPaperNestedWithoutAdmin.model_validate(cp_dict).model_dump()
+
+    # For cancelled/completed/expired interviews, still return the paper data
+    if session.status == InterviewStatus.CANCELLED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+            },
+            message="This interview has been cancelled."
+        )
+    elif session.is_completed or session.status == InterviewStatus.COMPLETED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+            },
+            message="This interview has already been completed."
+        )
+    elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+            },
+            message="This interview link has expired."
+        )
 
     return ApiResponse(
         status_code=200,
@@ -784,9 +835,16 @@ async def upload_selfie_session(
         
         # Check if any comparison were possible
         if not verification_results:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not compute similarity - embedding mismatch."
+            # If no embeddings available, allow the upload but warn
+            _logger.warning("No face embeddings available for verification, allowing upload")
+            return ApiResponse(
+                status_code=200,
+                data={
+                    "candidate_id": candidate_id,
+                    "verification_status": "no_embeddings",
+                    "message": "Selfie uploaded successfully (no face verification available)"
+                },
+                message="Selfie uploaded successfully"
             )
         
         # 8. Final Verification: Both must pass if available
