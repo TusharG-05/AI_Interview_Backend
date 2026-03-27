@@ -28,9 +28,23 @@ import logging
 router = APIRouter(prefix="/interview", tags=["Interview"])
 from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
-logger = logging.getLogger(__name__)
-audio_service = AudioService()
-cloudinary_service = CloudinaryService()
+_audio_service = None
+_cloudinary_service = None
+
+def get_audio_service():
+    global _audio_service
+    if _audio_service is None:
+        from ..services.audio import AudioService
+        _audio_service = AudioService()
+    return _audio_service
+
+def get_cloudinary_service():
+    global _cloudinary_service
+    if _cloudinary_service is None:
+        from ..services.cloudinary_service import CloudinaryService
+        _cloudinary_service = CloudinaryService()
+    return _cloudinary_service
+
 
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
@@ -598,7 +612,9 @@ async def start_session_logic(
             os.makedirs("app/assets/audio/enrollment", exist_ok=True)
             enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
             content = await enrollment_audio.read()
+            audio_service = get_audio_service()
             audio_service.save_audio_blob(content, enrollment_path)
+
             
             # Silence/Quality Check
             try:
@@ -608,11 +624,13 @@ async def start_session_logic(
                 logger.warning(f"Energy check failed: {e}")
             
             # Cleanup only after processing
-            audio_service.cleanup_audio(enrollment_path)
+            get_audio_service().cleanup_audio(enrollment_path)
+
             
             # Upload to Cloudinary
             try:
-                cloudinary_url = cloudinary_service.upload_audio(content)
+                cloudinary_url = get_cloudinary_service().upload_audio(content)
+
                 session.enrollment_audio_path = cloudinary_url
             except Exception as upload_error:
                 logger.warning(f"Cloudinary upload failed: {upload_error}")
@@ -1061,7 +1079,8 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             os.makedirs("app/assets/audio/questions", exist_ok=True)
             audio_path = f"app/assets/audio/questions/q_{proxy_q.id}.mp3"
             if not os.path.exists(audio_path):
-                await audio_service.text_to_speech(next_cq.title, audio_path)
+                await get_audio_service().text_to_speech(next_cq.title, audio_path)
+
 
             question_index = len(answered_ids) + 1
             total_coding = len(all_coding_qs)
@@ -1104,7 +1123,8 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     os.makedirs("app/assets/audio/questions", exist_ok=True)
     audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
     if not os.path.exists(audio_path):
-        await audio_service.text_to_speech(question.question_text or question.content, audio_path)
+        await get_audio_service().text_to_speech(question.question_text or question.content, audio_path)
+
     
     # Calculate progress
     total_questions = 0
@@ -1192,7 +1212,8 @@ async def submit_answer_audio(
     os.makedirs("app/assets/audio/responses", exist_ok=True)
     audio_path = f"app/assets/audio/responses/resp_{interview_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
-    audio_service.save_audio_blob(content, audio_path)
+    get_audio_service().save_audio_blob(content, audio_path)
+
     
     # Get or Create InterviewResult (Thread-safe-ish check)
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
@@ -1248,12 +1269,14 @@ async def submit_answer_audio(
     try:
         # REF: Using await instead of new_event_loop().run_until_complete()
         # triggering nested loops in Uvicorn is unstable and prone to 000 crashes.
-        transcribed_text = await audio_service.speech_to_text(audio_path)
+        transcribed_text = await get_audio_service().speech_to_text(audio_path)
+
         
         # Speaker verification (best-effort)
         if session_obj.enrollment_audio_path:
             try:
-                match, _ = await audio_service.verify_speaker(
+                match, _ = await get_audio_service().verify_speaker(
+
                     session_obj.enrollment_audio_path, audio_path
                 )
                 if not match:
@@ -1274,7 +1297,8 @@ async def submit_answer_audio(
                 cloudinary_url = cloudinary_service.upload_audio(audio_content)
                 answer.audio_path = cloudinary_url
                 # Cleanup local file
-                audio_service.cleanup_audio(audio_path)
+                get_audio_service().cleanup_audio(audio_path)
+
             except Exception as cloud_exc:
                 logger.error(f"Cloudinary upload failed for answer {answer.id}: {cloud_exc}")
 
@@ -1912,10 +1936,12 @@ async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User 
         temp_path = f"app/assets/audio/standalone/{temp_filename}" 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
         
-        audio_service.save_audio_blob(content, temp_path)
+        get_audio_service().save_audio_blob(content, temp_path)
+
         
         # Perform STT
-        text = await audio_service.speech_to_text(temp_path)
+        text = await get_audio_service().speech_to_text(temp_path)
+
         
         # Cleanup
         if os.path.exists(temp_path):
@@ -1947,10 +1973,12 @@ async def stt_evaluate_tool(
         temp_path = f"app/assets/audio/standalone/{temp_filename}"
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
         
-        audio_service.save_audio_blob(content, temp_path)
+        get_audio_service().save_audio_blob(content, temp_path)
+
         
         # Perform STT
-        transcribed_text = await audio_service.speech_to_text(temp_path)
+        transcribed_text = await get_audio_service().speech_to_text(temp_path)
+
         
         # Cleanup audio immediately if transcribed
         if os.path.exists(temp_path):
@@ -2002,7 +2030,8 @@ async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
         os.makedirs(os.path.dirname(temp_mp3), exist_ok=True)
         
         # 1. Generate MP3 stream
-        await audio_service.text_to_speech(text, temp_mp3)
+        await get_audio_service().text_to_speech(text, temp_mp3)
+
         
         # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
         from pydub import AudioSegment

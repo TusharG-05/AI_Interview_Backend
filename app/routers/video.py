@@ -119,8 +119,13 @@ async def offer(params: Offer):
         stmt = select(User).join(InterviewSession, InterviewSession.candidate_id == User.id).where(InterviewSession.id == interview_id)
         user = db_session.exec(stmt).first()
         if user and user.face_embedding:
-            get_camera_service().face_detector.register_session_identity(interview_id, user.face_embedding)
-            logger.info(f"Identity registered for Session {interview_id}")
+            cam = get_camera_service()
+            if cam.face_detector:
+                cam.face_detector.register_session_identity(interview_id, user.face_embedding)
+                logger.info(f"Identity registered for Session {interview_id}")
+            else:
+                logger.info(f"Identity registration skipped: Face detector is not initialized in this environment.")
+
 
     logger.info(f"WebRTC: New Candidate Connection {interview_id}")
 

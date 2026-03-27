@@ -49,16 +49,37 @@ def create_response(api_response: ApiResponse):
     """Wrapper for ApiResponse to ensure forward compatibility with FastAPI response processing."""
     return api_response
 
-nlp_service = NLPService()
-email_service = EmailService()
+_nlp_service = None
+_email_service = None
+
+def get_nlp_service():
+    global _nlp_service
+    if _nlp_service is None:
+        from ..services.nlp import NLPService
+        _nlp_service = NLPService()
+    return _nlp_service
+
+def get_email_service():
+    global _email_service
+    if _email_service is None:
+        from ..services.email import EmailService
+        _email_service = EmailService()
+    return _email_service
+
 
 # --- WebSocket Dashboard ---
 from ..services.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
 from ..tasks.email_tasks import send_interview_invitation_task
-from ..services.cloudinary_service import CloudinaryService
+_cloudinary_service = None
 
-cloudinary_service = CloudinaryService()
+def get_cloudinary_service():
+    global _cloudinary_service
+    if _cloudinary_service is None:
+        from ..services.cloudinary_service import CloudinaryService
+        _cloudinary_service = CloudinaryService()
+    return _cloudinary_service
+
 
 @router.websocket("/dashboard/ws")
 async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
@@ -164,7 +185,8 @@ async def upload_questions_doc(
     
     try:
         # 2. Extract questions
-        extracted_data = nlp_service.extract_qa_from_file(temp_path, questions_only=True)
+        extracted_data = get_nlp_service().extract_qa_from_file(temp_path, questions_only=True)
+
         
         if not extracted_data:
             return ApiResponse(
