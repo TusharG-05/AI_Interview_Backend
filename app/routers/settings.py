@@ -14,7 +14,15 @@ import logging
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/status", tags=["System"])
-camera_service = CameraService()
+_camera_service = None
+
+def get_camera_service():
+    global _camera_service
+    if _camera_service is None:
+        from ..services.camera import CameraService
+        _camera_service = CameraService()
+    return _camera_service
+
 
 class ConnectionManager:
     def __init__(self):
@@ -113,17 +121,20 @@ async def get_system_status(interview_id: Optional[int] = Query(None)):
         logger.error(f"Database health check failed: {e}")
 
     hw_status = "idle"
-    if camera_service.running:
+    if get_camera_service().running:
+
         hw_status = "active (streaming)"
     
     # Enhanced proctoring status
     proctoring_status = "initializing/off"
     proctoring_details = {}
-    if camera_service._detectors_ready:
+    if get_camera_service()._detectors_ready:
+
         proctoring_status = "healthy"
         proctoring_details = {
-            "face_detector": "✓ active" if camera_service.face_detector else "✗ failed",
-            "gaze_detector": "✓ active" if camera_service.gaze_detector else "✗ failed"
+            "face_detector": "✓ active" if get_camera_service().face_detector else "✗ failed",
+            "gaze_detector": "✓ active" if get_camera_service().gaze_detector else "✗ failed"
+
         }
     else:
         proctoring_details = {
@@ -133,7 +144,8 @@ async def get_system_status(interview_id: Optional[int] = Query(None)):
         }
     
     # Get current warning (handle None interview_id)
-    current_warning = camera_service.get_current_warning(interview_id) if interview_id else None
+    current_warning = get_camera_service().get_current_warning(interview_id) if interview_id else None
+
     
     return ApiResponse(
         status_code=200,
@@ -168,11 +180,13 @@ async def websocket_status(websocket: WebSocket, interview_id: int = None):
     await manager.connect(websocket, interview_id)
     
     if not _listener_registered:
-        camera_service.add_listener(camera_status_callback)
+        get_camera_service().add_listener(camera_status_callback)
+
         _listener_registered = True
         
     try:
-        await websocket.send_json({"warning": camera_service.get_current_warning(interview_id)})
+        await websocket.send_json({"warning": get_camera_service().get_current_warning(interview_id)})
+
         while True:
             await websocket.receive_text() # Keep-alive
     except WebSocketDisconnect:

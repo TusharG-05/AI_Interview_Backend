@@ -19,9 +19,10 @@ if [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL"
         --bind 127.0.0.1 \
         --pidfile /tmp/redis.pid \
         --dir /tmp \
-        --maxmemory 256mb \
+        --maxmemory 32mb \
         --maxmemory-policy allkeys-lru \
         --protected-mode no || { echo "❌ Redis failed to start"; exit 1; }
+
 
     # Wait for Redis to be ready (max 30 s)
     MAX_WAIT=30
