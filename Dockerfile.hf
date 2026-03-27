@@ -1,21 +1,20 @@
+# Hugging Face Spaces Dockerfile
+# Uses python:3.11-slim; no aiortc/WebRTC (requires native libs unavailable on HF)
 
-# Use Python 3.10 to be safe (or 3.11 if compatible)
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies (ffmpeg, etc.)
-RUN apt-get update && apt-get install -y \
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
     libxext6 \
-    libgl1-mesa-dev \
+    libgl1 \
     libglib2.0-0 \
     git \
     wget \
-    tesseract-ocr \
-    libtesseract-dev \
     redis-server \
     && rm -rf /var/lib/apt/lists/*
 
@@ -27,25 +26,24 @@ ENV HOME=/home/user \
     PYTHONPATH=/app \
     ENV=production
 
-# Copy requirements first to leverage cache
-COPY --chown=user requirements-hf-final.txt ./requirements.txt
+# ── Install Python dependencies ──────────────────────────────────────────────
+# Copy only requirements first to leverage Docker layer cache
+COPY --chown=user requirements-hf-final.txt /app/requirements.txt
 
-# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY --chown=user . .
-RUN chmod +x start.sh
+# ── Copy application code ────────────────────────────────────────────────────
+COPY --chown=user . /app
 
-# Download Models (Bypass Git LFS/Binary restrictions & Avoid Runtime Latency)
-RUN mkdir -p app/assets && \
-    wget -q -O app/assets/face_landmarker.task https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task && \
-    python3 -c "from deepface import DeepFace; DeepFace.build_model('SFace')"
+# ── Pre-download ML models at build time (avoids cold-start latency) ─────────
+RUN chmod +x /app/start.sh && \
+    mkdir -p /app/app/assets && \
+    wget -q -O /app/app/assets/face_landmarker.task \
+        https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task && \
+    python3 -c "from deepface import DeepFace; DeepFace.build_model('SFace')" || true
 
-# Expose port (Hugging Face expects 7860 by default)
+# Expose port (Hugging Face Spaces default)
 EXPOSE 7860
 
-# Command to run the application
-# Note: HF Spaces expect port 7860
-CMD ["./start.sh"]
+CMD ["/app/start.sh"]

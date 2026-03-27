@@ -41,6 +41,10 @@ class CameraService:
         self.session_frame_ids: dict[int, int] = {}
         self.session_warnings: dict[int, str] = {}
         self.session_start_times: dict[int, float] = {} # {interview_id: timestamp}
+        self.session_last_active: dict[int, float] = {} # {interview_id: timestamp}
+        
+        from concurrent.futures import ThreadPoolExecutor
+        self.executor = ThreadPoolExecutor(max_workers=5)
         
         self.frame_lock = threading.Lock()
         self._detectors_ready = False
@@ -131,30 +135,33 @@ class CameraService:
                 self.session_frame_ids[interview_id] = self.session_frame_ids.get(interview_id, 0) + 1
                 if interview_id not in self.session_start_times:
                     self.session_start_times[interview_id] = time.time()
+                self.session_last_active[interview_id] = time.time()
 
             # --- PERSIST PROCTORING EVENT (With Grace Period) ---
             GRACE_PERIOD = 30 # Seconds
             in_grace_period = (time.time() - self.session_start_times.get(interview_id, time.time())) < GRACE_PERIOD
             
             if warning and not in_grace_period:
-                from ..core.database import engine
-                from sqlmodel import Session
-                from ..services.status_manager import add_violation
-                
-                with Session(engine) as db_session:
-                    # session_obj = db_session.get(InterviewSession, interview_id)
-                    # We need the full session object for status_manager
-                    # Optimization: In a real app, caching this might be better than fetching every frame
+                def persist_violation(iid, warn, n_f, fnd, g_s):
+                    from ..core.database import engine
+                    from sqlmodel import Session
+                    from ..services.status_manager import add_violation
                     from ..models.db_models import InterviewSession
-                    interview_session = db_session.get(InterviewSession, interview_id)
                     
-                    if interview_session:
-                        add_violation(
-                            session=db_session,
-                            interview_session=interview_session,
-                            event_type=warning,
-                            details=f"Faces: {n_face}, Auth: {found}, Gaze: {gaze_status}"
-                        )
+                    try:
+                        with Session(engine) as db_session:
+                            interview_session = db_session.get(InterviewSession, iid)
+                            if interview_session:
+                                add_violation(
+                                    session=db_session,
+                                    interview_session=interview_session,
+                                    event_type=warn,
+                                    details=f"Faces: {n_f}, Auth: {fnd}, Gaze: {g_s}"
+                                )
+                    except Exception as e:
+                        logger.error(f"Async Violation Persist Error: {e}")
+
+                self.executor.submit(persist_violation, interview_id, warning, n_face, found, gaze_status)
             elif warning and in_grace_period:
                 logger.debug(f"Proctoring: Alert suppressed during grace period for Session {interview_id}")
 
@@ -206,6 +213,17 @@ class CameraService:
                     except Exception as e:
                         logger.error(f"MONITOR: Failed to restart GazeDetector: {e}")
 
+                # Cleanup stale sessions (TTL: 10 minutes)
+                STALE_TTL = 600
+                now = time.time()
+                stale_ids = [
+                    sid for sid, last_active in self.session_last_active.items()
+                    if (now - last_active) > STALE_TTL
+                ]
+                for sid in stale_ids:
+                    logger.info(f"MONITOR: Auto-clearing stale session {sid}")
+                    self.clear_session(sid)
+
         self._monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
         self._monitor_thread.start()
 
@@ -244,4 +262,17 @@ class CameraService:
 
     def get_current_warning(self, interview_id: int):
         return self.session_warnings.get(interview_id, "System Active")
+
+    def clear_session(self, interview_id: int):
+        """
+        Clears all cached session data for a specific interview.
+        Should be called when an interview finishes or the candidate disconnects.
+        """
+        with self.frame_lock:
+            self.session_frames.pop(interview_id, None)
+            self.session_frame_ids.pop(interview_id, None)
+            self.session_warnings.pop(interview_id, None)
+            self.session_start_times.pop(interview_id, None)
+            self.session_last_active.pop(interview_id, None)
+            logger.info(f"Proctoring: Cleared session data for Interview {interview_id}")
 

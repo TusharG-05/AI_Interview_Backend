@@ -50,8 +50,16 @@ async def video_feed(interview_id: Optional[int] = Query(None)):
 
 
 # --- WebRTC Signaling ---
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
-from ..services.webrtc import VideoTransformTrack
+# aiortc requires native system libs (libsrtp2, libav) that are unavailable on some
+# platforms (e.g. HF Spaces). Import it conditionally so startup never crashes.
+try:
+    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+    from ..services.webrtc import VideoTransformTrack
+    WEBRTC_AVAILABLE = True
+except ImportError:
+    WEBRTC_AVAILABLE = False
+    logger.warning("aiortc not installed — WebRTC endpoints are disabled on this deployment.")
+
 from pydantic import BaseModel
 
 class Offer(BaseModel):
@@ -70,6 +78,9 @@ async def offer(params: Offer):
     Candidate Connection (Proctoring Source). 
     Registers identity and initializes session-isolated AI.
     """
+    if not WEBRTC_AVAILABLE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="WebRTC (aiortc) is not available on this deployment.")
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     
     # Cloud Optimization: Add Google STUN servers for NAT traversal
@@ -134,6 +145,9 @@ async def watch(target_session_id: int, params: Offer):
     Admin Ghost Mode: Watch an active session.
     Waits up to 10 seconds for candidate stream to be available.
     """
+    if not WEBRTC_AVAILABLE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="WebRTC (aiortc) is not available on this deployment.")
     import asyncio
     import time
     

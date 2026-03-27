@@ -203,16 +203,20 @@ async def global_exception_handler(request: Request, exc: Exception):
         ).model_dump()
     )
 
+from .core.config import FRONTEND_URL
 from fastapi.middleware.cors import CORSMiddleware
-import os
 
-# SECURITY: Allow ALL origins (including localhost) for development convenience
-# WARNING: This effectively disables CORS protection.
-# ALLOW_ORIGIN_REGEX = r".*"
+# SECURITY: Restrict origins in production, allow development origins
+origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+if FRONTEND_URL:
+    if FRONTEND_URL not in origins:
+        origins.append(FRONTEND_URL)
+if os.getenv("ENV") == "development":
+    origins = ["*"] # Keep wildcard for local dev convenience if explicitly set
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
