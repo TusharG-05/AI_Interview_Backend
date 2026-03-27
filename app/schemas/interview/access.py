@@ -82,6 +82,7 @@ class AccessInterviewResponse(BaseModel):
     result_status: str = "PENDING"
     max_marks: float = 0.0
     total_score: Optional[float] = Field(default=None)
+    current_status: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     tab_switch_count: int = 0

@@ -1,0 +1,65 @@
+# Render Blueprint for AI Interview Platform
+# This file automates the setup of Postgres, Redis, Web, and Worker services.
+
+services:
+  # 1. Web Service (FastAPI)
+  - type: web
+    name: ai-interview-api
+    runtime: docker
+    dockerFilePath: Dockerfile.render
+    plan: standard # AI models require at least 'standard' (512MB-2GB+)
+    region: ohio # Change as needed
+    envVars:
+      - key: PORT
+        value: 7860
+      - key: ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ai-interview-redis
+          property: connectionString
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-interview-db
+          property: connectionString
+      # --- REQUIRED SECRETS (Fill these in Render Dashboard) ---
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+
+  # 2. Worker Service (Celery)
+  - type: worker
+    name: ai-interview-worker
+    runtime: docker
+    dockerFilePath: Dockerfile.render
+    plan: standard
+    region: ohio
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: ai-interview-redis
+          property: connectionString
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-interview-db
+          property: connectionString
+
+# 3. Managed Database (PostgreSQL)
+databases:
+  - name: ai-interview-db
+    plan: free # Can upgrade as needed
+
+# 4. Managed Redis
+redis:
+  - name: ai-interview-redis
+    plan: free
+    ipAllowList: [] # Only allow internal connections

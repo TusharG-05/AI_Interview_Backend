@@ -145,6 +145,7 @@ class GetInterviewResultResponse(BaseModel):
     result_status: str = "PENDING"
     max_marks: float = 0.0
     total_score: float = Field(default=0.0)
+    current_status: Optional[str] = None
     enrollment_audio_path: Optional[str] = None
     enrollment_audio_url: Optional[str] = None
     is_completed: bool = False
@@ -166,7 +167,7 @@ class GetAdminResultsListResponse(BaseModel):
     status: str
     result_status: str = "PENDING"
     end_time: Optional[datetime] = None
-    total_score: Optional[float] = None
+    total_score: Optional[float] = Field(default=None, alias="score")
 
     class Config:
         from_attributes = True
