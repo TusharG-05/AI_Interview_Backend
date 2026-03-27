@@ -24,6 +24,16 @@ class ProgressInfo(BaseModel):
     total_questions: int
     current_question_id: Optional[int] = None
 
+class AdminInterviewsList(BaseModel):
+    id: int
+    candidate_user: UserNested
+    status: str
+    schedule_time: str
+    total_score: Optional[float] = Field(default=0.0)
+    interview_round: Optional[str] = None
+    class Config:
+        from_attributes = True
+
 class AdminInterviewSessionDetail(BaseModel):
     id: int
     access_token: str

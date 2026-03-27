@@ -1,14 +1,25 @@
 #!/bin/bash
 set -e
 
+# --- Internal Infrastructure ---
+export RENDER=true
+export PYTHONUNBUFFERED=TRUE
+export PYTHONPATH=$PYTHONPATH:.
+
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
+
 # ── Start Redis ───────────────────────────────────────────────────────────────
-echo "Starting Redis server..."
+echo "🚀 Starting Redis server..."
 redis-server \
     --daemonize yes \
     --port 6379 \
     --bind 127.0.0.1 \
     --pidfile /tmp/redis.pid \
     --dir /tmp \
+    --maxmemory 256mb \
+    --maxmemory-policy allkeys-lru \
     --protected-mode no
 
 # Wait for Redis to be ready (max 30 s)

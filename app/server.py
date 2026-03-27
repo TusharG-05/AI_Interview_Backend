@@ -8,6 +8,9 @@ from fastapi.routing import APIRouter, APIRoute
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 
+# --- Startup Instrumentation ---
+print("\033[94m[STARTUP] app.server module initializing...\033[0m", flush=True)
+
 class ExcludeNoneJSONResponse(JSONResponse):
     """Custom JSONResponse that excludes None values by default."""
     def render(self, content: Any) -> bytes:
@@ -313,31 +316,45 @@ async def diagnostic_logging_middleware(request: Request, call_next):
         
     except Exception as e:
         process_time = (time.time() - start_time) * 1000
-        print(f"\n\033[91m====================== CRITICAL ERROR ======================\033[0m", flush=True)
+        print("\n\033[91m====================== CRITICAL ERROR ======================\033[0m", flush=True)
         print(f"\033[91mFailed Endpoint: {request.method} {request.url.path}\033[0m", flush=True)
         print(f"\033[91mExecution Time: {process_time:.2f}ms\033[0m", flush=True)
         print(f"\033[91mInput Payload that caused failure:\n{body_str}\033[0m", flush=True)
-        print(f"\033[91m------------------------------------------------------------\033[0m", flush=True)
+        print("\033[91m------------------------------------------------------------\033[0m", flush=True)
         import traceback
         traceback.print_exc()
-        print(f"\033[91m============================================================\033[0m\n", flush=True)
+        print("\033[91m============================================================\033[0m\n", flush=True)
         raise e
 
 # (Redundant endpoint removed. Use settings.router instead)
 
-# Lazy include routers to ensure AI models (imported within routers) 
-# don't conflict with database initialization logic.
-from .routers import video, settings, admin, interview, auth, candidate, teams, coding_papers, resume
+# --- Router Inclusion (Instrumented for Cloud Debugging) ---
+print("\n\033[94m[STARTUP] Loading routers...\033[0m", flush=True)
 
-app.include_router(video.router, prefix="/api")
+from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video
+
+print("\033[94m[STARTUP] Including Auth, Settings, Admin, Teams...\033[0m", flush=True)
+app.include_router(auth.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
-app.include_router(interview.router, prefix="/api")
-app.include_router(auth.router, prefix="/api")
-app.include_router(candidate.router, prefix="/api")
 app.include_router(teams.router, prefix="/api")
-app.include_router(coding_papers.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Resume, Coding, Interview...\033[0m", flush=True)
 app.include_router(resume.router, prefix="/api")
+app.include_router(coding_papers.router, prefix="/api")
+app.include_router(interview.router, prefix="/api")
+
+# Heavy ML Routers: Wrapped and Instrumented
+if os.getenv("RENDER") == "true" or os.getenv("SPACE_ID"):
+    print("\033[93m[STARTUP] Cloud Environment detected. Loading ML routers with caution...\033[0m", flush=True)
+
+print("\033[94m[STARTUP] Including Candidate Router...\033[0m", flush=True)
+app.include_router(candidate.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Video Router (Heavy)...\033[0m", flush=True)
+app.include_router(video.router, prefix="/api")
+
+print("\033[92m[STARTUP] All routers included successfully.\033[0m\n", flush=True)
 
 from fastapi.responses import RedirectResponse
 
