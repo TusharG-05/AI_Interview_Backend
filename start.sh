@@ -23,7 +23,6 @@ if [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL"
         --maxmemory-policy allkeys-lru \
         --protected-mode no || { echo "❌ Redis failed to start"; exit 1; }
 
-
     # Wait for Redis to be ready (max 30 s)
     MAX_WAIT=30
     WAITED=0
@@ -37,6 +36,8 @@ if [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL"
         WAITED=$((WAITED + 1))
     done
     echo "Local Redis is up and running!"
+else
+    echo "🔗 Using external Redis at: $REDIS_URL"
 fi
 
 # ── Start Celery worker ───────────────────────────────────────────────────────
@@ -51,5 +52,7 @@ if [ "${ENV}" = "development" ]; then
     echo "Running in development mode with live reload!"
     exec uvicorn app.server:app --host 0.0.0.0 --port "${PORT:-7860}" --reload
 else
+    # For Render/Production: prioritize PORT env var (usually provided by platform)
+    # If PORT is not set, default to 7860 for local development
     exec uvicorn app.server:app --host 0.0.0.0 --port "${PORT:-7860}" --workers 1
 fi

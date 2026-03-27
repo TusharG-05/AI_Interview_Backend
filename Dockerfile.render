@@ -38,7 +38,8 @@ COPY . /app
 # In orchestrator mode, models are offloaded to Modal/HF API.
 RUN chmod +x /app/start.sh
 
-# Expose port (Render default)
+# Expose port (Render will provide PORT env var)
+# Note: Render provides PORT env var dynamically, this is just documentation
 EXPOSE 7860
 
 CMD ["/app/start.sh"]
