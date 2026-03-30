@@ -29,12 +29,15 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 .venv/
+.venv*/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
 .python-version
+.env*
+! .env.example
 
 # === IDEs & Editors ===
 .idea/
@@ -108,3 +111,7 @@ test_results_final*.log
 # === Automated Scripts & Tests ===
 /scripts/
 /tests/
+app/assets/*.jpg
+app/assets/*.png
+tests/assets/
+app/assets/audio/standalone/*.mp3

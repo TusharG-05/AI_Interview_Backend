@@ -207,6 +207,8 @@ class GazeDetector:
         logger.info("Gaze Worker started.")
         
     def process_frame(self, frame_bgr):
+        if IS_ORCHESTRATOR:
+            return None
         try:
             # Send BGR directly; worker will convert to RGB
             if not self.frame_queue.full():

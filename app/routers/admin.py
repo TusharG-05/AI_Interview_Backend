@@ -11,8 +11,6 @@ from ..core.database import get_db as get_session
 from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, CodingAnswers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions, CandidateStatus
 from ..auth.dependencies import get_admin_user
 from ..auth.security import get_password_hash
-from ..services.nlp import NLPService
-from ..services.email import EmailService
 from ..services.status_manager import record_status_change
 from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
 from ..core.logger import get_logger
