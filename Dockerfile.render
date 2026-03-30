@@ -26,8 +26,8 @@ ENV PYTHONUNBUFFERED=TRUE \
     ENV_MODE=orchestrator
 
 # ── Install Python dependencies (Orchestrator Mode) ─────────────────────────
-# Uses requirements-light.txt which excludes torch, tensorflow, etc.
-COPY requirements-light.txt /app/requirements.txt
+# Uses requirements-render.txt which excludes torch, tensorflow, etc.
+COPY requirements-render.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 

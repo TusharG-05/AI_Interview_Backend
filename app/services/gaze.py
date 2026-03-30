@@ -179,10 +179,21 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
 # =============================================================================
 # BACKEND API: GazeDetector Class
 # =============================================================================
+from ..core.config import IS_ORCHESTRATOR
+
 class GazeDetector:
     def __init__(self, model_path='app/assets/face_landmarker.task', max_faces=1):
         logger.info("Initializing GazeDetector...")
         self.model_path = model_path
+        
+        # --- Skip initialization in Orchestrator Mode (Render Free Tier) ---
+        if IS_ORCHESTRATOR:
+            logger.info("GazeDetector: Orchestrator Mode enabled. Worker Process DISABLED to save memory.")
+            self.worker = None
+            self.frame_queue = None
+            self.result_queue = None
+            return
+
         self.frame_queue = multiprocessing.Queue(maxsize=1)
         self.result_queue = multiprocessing.Queue(maxsize=1)
         
