@@ -2,6 +2,7 @@
 fastapi==0.128.0
 uvicorn==0.40.0
 starlette==0.50.0
+uvloop==0.21.0
 pydantic==2.12.5
 pydantic-settings==2.12.0
 python-multipart==0.0.21
@@ -35,6 +36,7 @@ jinja2==3.1.6
 aiofiles==25.1.0
 python-socketio==5.16.0
 python-engineio==4.13.0
+celery==5.4.0
 loguru
 tenacity==9.1.2
 edge-tts==7.2.7
@@ -53,3 +55,7 @@ pydub==0.25.1
 psutil==7.2.1
 cffi==2.0.0
 cryptography==46.0.3
+PyMuPDF==1.26.7
+python-docx==1.2.0
+openpyxl==3.1.5
+pandas==2.3.3
