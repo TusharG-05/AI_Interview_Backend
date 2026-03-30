@@ -6,6 +6,9 @@ pydantic==2.12.5
 pydantic-settings==2.12.0
 python-multipart==0.0.21
 python-dotenv==1.2.1
+sentry-sdk[fastapi]==2.22.0
+fastapi-limiter==0.1.6
+email-validator
 
 # Database & Storage
 sqlmodel==0.0.31
@@ -35,6 +38,10 @@ python-engineio==4.13.0
 loguru
 tenacity==9.1.2
 edge-tts==7.2.7
+redis==5.2.0
+static_ffmpeg==3.0
+orjson==3.11.5
+pyyaml
 
 # Image Handling (Headless & Minimal)
 opencv-python-headless==4.13.0.90
