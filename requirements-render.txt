@@ -30,6 +30,10 @@ groq==0.15.0
 requests==2.32.5
 httpx==0.28.1
 aiohttp==3.13.3
+langchain-core==1.2.7
+langchain-ollama==1.0.1
+websockets==16.0
+
 
 # Utilities
 jinja2==3.1.6
