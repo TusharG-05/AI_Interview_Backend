@@ -4,6 +4,7 @@ import contextlib
 import sentry_sdk
 from typing import Any
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.routing import APIRouter, APIRoute
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -72,7 +73,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Lifespan: fastapi-limiter not installed. Rate limiting disabled.")
     except Exception as re_e:
         logger.error(f"Lifespan: Rate Limiter failed to start: {re_e}")
-    
+
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
     try:
         import torchaudio
@@ -225,6 +226,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Static Files (Test UI) ---
+# Ensure the static directory exists
+os.makedirs("app/static", exist_ok=True)
+app.mount("/test", StaticFiles(directory="app/static"), name="static")
+
 # HF Proxy Fix: Support X-Forwarded-Proto and X-Forwarded-For
 # This ensures that WebSockets and Redirects use the correct protocol (https)
 from fastapi import Request
@@ -250,83 +256,6 @@ async def proxy_fix_middleware(request: Request, call_next):
 import time
 import json
 
-@app.middleware("http")
-async def diagnostic_logging_middleware(request: Request, call_next):
-    # Skip in production/Hugging Face to avoid issues
-    if os.getenv("ENV") == "production" or os.getenv("SPACE_ID"):
-        return await call_next(request)
-        
-    # Skip noisy endpoints like swagger docs
-    if request.url.path in ["/docs", "/openapi.json", "/redoc"]:
-        return await call_next(request)
-        
-    start_time = time.time()
-    
-    # 1. Safely read and restore the request body (Skip multipart to avoid breaking file uploads)
-    content_type = request.headers.get("content-type", "")
-    is_multipart = "multipart/form-data" in content_type
-    
-    body_str = ""
-    is_json = False
-    
-    if not is_multipart:
-        try:
-            body_bytes = await request.body()
-            # Restore the stream so the endpoints can still access the body
-            async def receive():
-                return {"type": "http.request", "body": body_bytes}
-            request._receive = receive
-            
-            # 2. Try to parse JSON for pretty printing and masking passwords
-            if body_bytes:
-                try:
-                    parsed = json.loads(body_bytes)
-                    # Mask potential secrets
-                    for key in ["password", "token", "access_token"]:
-                        if isinstance(parsed, dict) and key in parsed:
-                            parsed[key] = "********"
-                    body_str = json.dumps(parsed, indent=2)
-                    is_json = True
-                except Exception:
-                    body_str = body_bytes.decode(errors="replace")[:500]
-        except Exception:
-            body_str = "<error reading body>"
-    else:
-        body_str = "<multipart/form-data (skipped to preserve stream)>"
-
-    print(f"\n\033[96m[REQUEST START] {request.method} {request.url.path}\033[0m", flush=True)
-    if body_str:
-        print(f"\033[90mPayload:\n{body_str}\033[0m", flush=True)
-        
-    # 3. Execute the request and catch any 500s directly here to print context
-    try:
-        response = await call_next(request)
-        process_time = (time.time() - start_time) * 1000
-        
-        # Color based on status code
-        if 200 <= response.status_code < 300:
-            color = "\033[92m" # Green
-        elif 400 <= response.status_code < 500:
-            color = "\033[93m" # Yellow
-        else:
-            color = "\033[91m" # Red
-            
-        print(f"{color}[REQUEST END] {request.method} {request.url.path} - {response.status_code} - {process_time:.2f}ms\033[0m", flush=True)
-        return response
-        
-    except Exception as e:
-        process_time = (time.time() - start_time) * 1000
-        print("\n\033[91m====================== CRITICAL ERROR ======================\033[0m", flush=True)
-        print(f"\033[91mFailed Endpoint: {request.method} {request.url.path}\033[0m", flush=True)
-        print(f"\033[91mExecution Time: {process_time:.2f}ms\033[0m", flush=True)
-        print(f"\033[91mInput Payload that caused failure:\n{body_str}\033[0m", flush=True)
-        print("\033[91m------------------------------------------------------------\033[0m", flush=True)
-        import traceback
-        traceback.print_exc()
-        print("\033[91m============================================================\033[0m\n", flush=True)
-        raise e
-
-# (Redundant endpoint removed. Use settings.router instead)
 
 # --- Router Inclusion (Instrumented for Cloud Debugging) ---
 print("\n\033[94m[STARTUP] Loading routers...\033[0m", flush=True)
