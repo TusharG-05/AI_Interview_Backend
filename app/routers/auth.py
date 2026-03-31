@@ -166,6 +166,13 @@ async def register(
                 status_code=403,
                 detail="Registration is restricted to Admins. Please contact an administrator."
             )
+        
+        # Role-based restriction: Admins can only create Candidates
+        if current_user.role == UserRole.ADMIN and user_data.role != UserRole.CANDIDATE:
+            raise HTTPException(
+                status_code=403,
+                detail="Admins are only permitted to register Candidates. Please contact a Super Admin for other roles."
+            )
 
     existing_user = session.exec(select(User).where(User.email == user_data.email.lower())).first()
     if existing_user:

@@ -196,7 +196,7 @@ check "POST /admin/papers (create)" "201" "$CODE" "$BODY"
 PAPER_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
 
 if [ -n "$PAPER_ID" ]; then
-    RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/admin/generate-paper" \
+    RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/admin/generate-paper" \
       -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
       -d "{\"ai_prompt\":\"Python backend developer with FastAPI experience\",\"years_of_experience\":3,\"num_questions\":2,\"team_id\":$TEAM_ID}")
     split_response "$RESP"
@@ -498,7 +498,7 @@ echo ""
 echo "━━━ 8. STANDALONE TOOLS ━━━"
 
 # Evaluate answer
-RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/evaluate-answer" \
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/evaluate-answer" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"question\":\"What is Python?\",\"answer\":\"Python is a high-level programming language.\"}")
@@ -506,19 +506,19 @@ split_response "$RESP"
 check "POST /interview/evaluate-answer" "200 500" "$CODE" "$BODY"
 
 # TTS
-RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -o /dev/null "$BASE/interview/tts?text=Hello+world")
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -o /dev/null "$BASE/interview/tts?text=Hello+world")
 CODE=$(echo "$RESP" | tail -1)
 check "GET /interview/tts" "200" "$CODE" ""
 
 # Speech to text
-RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/speech-to-text" \
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/speech-to-text" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -F "audio=@/tmp/api_test/audio.wav;type=audio/wav")
 split_response "$RESP"
 check "POST /interview/tools/speech-to-text" "200" "$CODE" "$BODY"
 
 # STT Evaluate
-RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/sttEvaluate" \
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/sttEvaluate" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -F "audio=@/tmp/api_test/audio.wav;type=audio/wav" \
   -F "question_text=What is Python?" \
