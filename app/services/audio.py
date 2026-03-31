@@ -128,17 +128,49 @@ class AudioService:
             
             logger.info(f"Attempting HF Inference API for STT: {audio_path}")
             
-            # CRITICAL: Use Path object to ensure huggingface-hub correctly detects file type
-            # Passing raw string can sometimes cause 'Content type None not supported' errors.
-            result = client.automatic_speech_recognition(
-                audio=Path(audio_path),
-                model="openai/whisper-large-v3-turbo"
-            )
+            loop = asyncio.get_running_loop()
+            def _hf_call():
+                # CRITICAL: Use Path object to ensure huggingface-hub correctly detects file type
+                return client.automatic_speech_recognition(
+                    audio=Path(audio_path),
+                    model="openai/whisper-large-v3-turbo"
+                )
+            
+            result = await loop.run_in_executor(None, _hf_call)
             text = result.get("text", "").strip()
             logger.info(f"HF Inference STT successful: {text[:50]}...")
             return text
         except Exception as e:
             logger.error(f"HF Inference STT Error: {e}")
+            return ""
+
+    async def groq_inference_stt(self, audio_path: str) -> str:
+        """High-performance STT using Groq Whisper LPU."""
+        groq_api_key = os.getenv("GROQ_API_KEY")
+        if not groq_api_key:
+            return ""
+
+        try:
+            from groq import Groq
+            client = Groq(api_key=groq_api_key)
+            
+            logger.info(f"Attempting Groq LPU STT: {audio_path}")
+            
+            loop = asyncio.get_running_loop()
+            def _groq_call():
+                with open(audio_path, "rb") as file:
+                    return client.audio.transcriptions.create(
+                        file=(os.path.basename(audio_path), file.read()),
+                        model="whisper-large-v3",
+                        response_format="json",
+                    )
+            
+            transcription = await loop.run_in_executor(None, _groq_call)
+            text = transcription.text.strip()
+            logger.info(f"Groq STT successful: {text[:50]}...")
+            return text
+        except Exception as e:
+            logger.error(f"Groq STT Error: {e}")
             return ""
 
     async def _ensure_local_path(self, audio_path: str) -> tuple[str, bool]:
@@ -177,8 +209,9 @@ class AudioService:
         """
         Transcribes audio using a multi-layered fallback approach:
         1. Modal (Best accuracy/speed if enabled)
-        2. Hugging Face Inference API (Fallback)
-        3. Local Whisper (Final fallback, disabled on cloud to prevent OOM)
+        2. Groq LPU (Extremely Fast)
+        3. Hugging Face Inference API (Fallback)
+        4. Local Whisper (Final fallback, disabled on cloud to prevent OOM)
         """
         local_path, is_temp = await self._ensure_local_path(audio_path)
         if not local_path:
@@ -213,12 +246,17 @@ class AudioService:
                         last_error = f"Modal STT failed: {str(e)}"
                         logger.warning(last_error)
             
-            # 2. Secondary Fallback: HF Inference API (Lightweight)
-            hf_text = await self.hf_inference_stt(audio_path)
+            # 2. Secondary Fallback: Groq LPU (Extremely Fast)
+            groq_text = await self.groq_inference_stt(local_path)
+            if groq_text:
+                return groq_text
+            
+            # 3. Tertiary Fallback: HF Inference API (Lightweight)
+            hf_text = await self.hf_inference_stt(local_path)
             if hf_text:
                 return hf_text
 
-            # 3. Local Fallback (Disabled on HF Spaces to prevent OOM)
+            # 4. Local Fallback (Disabled on HF Spaces to prevent OOM)
             is_cloud = os.getenv("SPACE_ID") is not None
             if not is_cloud:
                 logger.info("Falling back to local STT...")
@@ -322,14 +360,25 @@ class AudioService:
                 return True, 1.0
 
             # 2. Perform verification
-            # SpeechBrain's EncoderClassifier has a verify_files method
-            # It returns (score, prediction) where prediction is a tensor of booleans
-            score, prediction = model.verify_files(local_enroll, local_test)
+            # SpeechBrain 1.0+ EncoderClassifier lacks verify_files.
+            # We must encode both and calculate cosine similarity manually.
             
-            match = bool(prediction[0])
-            similarity = float(score[0])
+            # Load and encode enrollment audio
+            wav_enroll = model.load_audio(local_enroll)
+            emb_enroll = model.encode_batch(wav_enroll)
             
-            logger.info(f"Speaker Verification: Match={match}, Score={similarity:.4f}")
+            # Load and encode test audio
+            wav_test = model.load_audio(local_test)
+            emb_test = model.encode_batch(wav_test)
+            
+            # Compute cosine similarity
+            import torch.nn.functional as F
+            # emb is usually [1, 1, 192] or [1, 192], ensure it's flattened for similarity
+            similarity = F.cosine_similarity(emb_enroll.flatten(), emb_test.flatten(), dim=0).item()
+            
+            match = similarity >= self.verification_threshold
+            
+            logger.info(f"Speaker Verification: Match={match}, Similarity={similarity:.4f} (Threshold={self.verification_threshold})")
             return match, similarity
             
         except Exception as e:

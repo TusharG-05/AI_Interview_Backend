@@ -1,3 +1,7 @@
+# ============================================================
+# NEW CORE REQUIREMENTS — Heavy ML & Computing Stack
+# ============================================================
+
 # Torch & Heavy ML Libs
 torch==2.6.0
 torchaudio==2.6.0
@@ -24,6 +28,7 @@ static_ffmpeg==3.0
 resampy==0.4.3
 pydub==0.25.1
 noisereduce==3.0.3
+ffmpeg-python==0.2.0
 
 # Data Science Stack
 numpy==2.3.5
@@ -32,16 +37,10 @@ scikit-learn==1.8.0
 scipy==1.17.0
 matplotlib==3.10.8
 
-# Networking & Async (Heavy)
-grpcio==1.76.0
+# Networking & Async (Heavy / Native)
+grpcio==1.78.0
 nvidia-cublas-cu12==12.4.5.8
 nvidia-cudnn-cu12==9.1.0.70
-
-# Additional Heavy Dependencies (Restored)
-ctranslate2==4.6.3
-flatbuffers==25.12.19
-h5py==3.15.1
-keras==3.13.1
 nvidia-cuda-cupti-cu12==12.4.127
 nvidia-cuda-nvrtc-cu12==12.4.127
 nvidia-cuda-runtime-cu12==12.4.127
@@ -53,8 +52,17 @@ nvidia-cusparselt-cu12==0.6.2
 nvidia-nccl-cu12==2.21.5
 nvidia-nvjitlink-cu12==12.4.127
 nvidia-nvtx-cu12==12.4.127
+triton==3.2.0
+
+# Additional Infrastructure Restored
+ctranslate2==4.6.3
+flatbuffers==25.12.19
+h5py==3.15.1
+keras==3.13.1
 onnxruntime==1.23.2
 protobuf==6.33.4
 tensorboard==2.20.0
 tensorboard-data-server==0.7.2
-triton==3.2.0
+aiortc==1.14.0
+pylibsrtp==1.0.0
+av==16.1.0

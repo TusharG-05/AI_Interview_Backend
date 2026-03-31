@@ -89,7 +89,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "profile_image" : user.profile_image,
         "team": team_data
     }
-    
+    print(token_data)
     return ApiResponse(
         status_code=200,
         data=token_data,

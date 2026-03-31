@@ -41,12 +41,12 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                     break
 
         if os.getenv("SPACE_ID"):
-            worker_logger.info("Cloud Environment (HF Spaces) detected.")
+            worker_logger.info("Cloud Environment (HF Spaces) detected. Using CPU-optimized MediaPipe settings.")
     
-        worker_logger.info(f"GazeWorker: Initializing MediaPipe with model: {abs_model_path}")
+        worker_logger.info(f"GazeWorker: Initializing MediaPipe FaceLandmarker with model: {abs_model_path}")
     
         if not os.path.exists(abs_model_path):
-            worker_logger.error(f"GazeWorker: CRITICAL - Model file not found. AI Proctoring will fail.")
+            worker_logger.error(f"GazeWorker: CRITICAL ERROR - Model file missing at {abs_model_path}. Proctoring will fail.")
             return
 
         base_options = python.BaseOptions(model_asset_path=abs_model_path)
@@ -60,8 +60,12 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
             min_tracking_confidence=0.25
         )
         
-        landmarker = vision.FaceLandmarker.create_from_options(options)
-        worker_logger.info("GazeWorker: MediaPipe Landmarker created successfully.")
+        try:
+            landmarker = vision.FaceLandmarker.create_from_options(options)
+            worker_logger.info("GazeWorker: MediaPipe landmarker initialized successfully.")
+        except Exception as mp_e:
+            worker_logger.error(f"GazeWorker: MediaPipe creation failed: {mp_e}")
+            return
         
         # State tracking for grace period
         suspicious_start_time = None

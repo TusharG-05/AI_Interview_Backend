@@ -1,9 +1,10 @@
-from typing import List, Optional
+from typing import List, Optional, Annotated
 import json as _json
+from datetime import datetime
 from sqlalchemy import func
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
@@ -16,8 +17,9 @@ from ..services.status_manager import record_status_change
 from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
-from fastapi_limiter.depends import RateLimiter
 logger = get_logger(__name__)
+from ..services.admin_serialization import serialize_interview_admin_detail
+_serialize_interview_admin_detail = serialize_interview_admin_detail
 
 from ..schemas.admin.users import CreateUserRequest, UserRead, GetUserDetailResponse
 from ..schemas.admin.papers import GeneratePaperRequest, GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, UpdateQuestionRequest, AdminQuestionRead, QuestionCreateData
@@ -25,7 +27,7 @@ from ..schemas.admin.interviews import ScheduleInterviewRequest, UpdateInterview
 from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested, GetAdminResultsListResponse
 from ..schemas.shared.team import TeamReadBasic
 from ..schemas.admin.coding import CodingQuestionFull, CodingPaperFull, GenerateCodingPaperRequest, CodingPaperCreateRequest, CodingPaperUpdateRequest, CodingQuestionCreateRequest, CodingQuestionUpdateRequest
-from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail
+from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail,AdminInterviewsList
 InterviewSessionDetail = AdminInterviewSessionDetail
 from ..schemas.shared.api_response import ApiResponse
 from ..schemas.shared.user import UserNested, serialize_user
@@ -78,8 +80,8 @@ async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
 
 @router.get("/papers", response_model=ApiResponse[List[GetPaperResponse]])
 async def list_papers(
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """List all question papers created by the admin."""
     stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
@@ -112,8 +114,8 @@ class CreatePaperRequest(BaseModel):
 @router.post("/papers", response_model=ApiResponse[GetPaperResponse], status_code=201)
 async def create_paper(
     paper_data: CreatePaperRequest,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Create a new collection of questions."""
     new_paper = QuestionPaper(
@@ -143,9 +145,9 @@ async def create_paper(
 @router.post("/upload-doc", response_model=ApiResponse[dict])
 async def upload_questions_doc(
     paper_id: int,
-    file: UploadFile = File(...),
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)],
+    file: UploadFile = File(...)
 ):
     """
     Upload a document (.pdf, .docx, .txt, .xlsx) to extract questions and add them to a paper.
@@ -211,8 +213,8 @@ async def upload_questions_doc(
 @router.get("/papers/{paper_id}", response_model=ApiResponse[GetPaperResponse])
 async def get_paper(
     paper_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Get details of a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
@@ -900,7 +902,7 @@ async def schedule_interview(
         start_time=format_iso_datetime(new_session.start_time),
         end_time=format_iso_datetime(new_session.end_time),
         status=new_session.status.value,
-        score=new_session.total_score,
+        total_score=new_session.total_score,
         current_status=new_session.current_status or None,
         last_activity=format_iso_datetime(new_session.last_activity),
         warning_count=new_session.warning_count,
@@ -932,7 +934,7 @@ async def schedule_interview(
         message="Interview scheduled successfully"
     )
 
-@router.get("/interviews", response_model=ApiResponse[List[AdminInterviewSessionDetail]])
+@router.get("/interviews", response_model=ApiResponse[List[AdminInterviewsList]])
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
     # Only show sessions created by this admin (including those where admin is NULL)
@@ -944,7 +946,8 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
         )
         .options(
             selectinload(InterviewSession.admin),
-            selectinload(InterviewSession.candidate)
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result)
         )
     ).all()
     if current_user.role == UserRole.SUPER_ADMIN:
@@ -952,32 +955,23 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
             select(InterviewSession)
             .options(
                 selectinload(InterviewSession.admin),
-                selectinload(InterviewSession.candidate)
+                selectinload(InterviewSession.candidate),
+                selectinload(InterviewSession.result)
             )
         ).all()
     results = []
     for s in sessions:
         # Serialize users with role-based keys, handling NULL users
-        admin_dict = serialize_user(s.admin, fallback_role="admin")
+        #admin_dict = serialize_user(s.admin, fallback_role="admin")
         candidate_dict = serialize_user(s.candidate, fallback_role="candidate")
-        
-        results.append(AdminInterviewSessionDetail(
+
+        results.append(AdminInterviewsList(
             id=s.id,
-            access_token=s.access_token,
-            admin_user=admin_dict,
             candidate_user=candidate_dict,
             status=s.status.value,
             schedule_time=format_iso_datetime(s.schedule_time),
-            score=s.total_score,
-            allow_copy_paste=s.allow_copy_paste or False,
-            allow_question_navigate=s.allow_question_navigate or False,
-            interview_round=s.interview_round.value if s.interview_round else None,
-            team_id=s.candidate.team_id if s.candidate else None,
-            duration_minutes=s.duration_minutes,
-            warning_count=s.warning_count,
-            max_warnings=s.max_warnings,
-            is_suspended=s.is_suspended,
-            is_completed=s.is_completed
+            total_score=(s.result.total_score if s.result else s.total_score) or 0.0,
+            interview_round=s.interview_round.value if s.interview_round else None
         ))
     return ApiResponse(
         status_code=200,
@@ -1039,7 +1033,7 @@ async def get_live_status_dashboard(
             "start_time": format_iso_datetime(interview_session.start_time),
             "end_time": format_iso_datetime(interview_session.end_time),
             "status": interview_session.status.value,
-            "score": interview_session.total_score,
+            "total_score": (interview_session.result.total_score if interview_session.result else interview_session.total_score) or 0.0,
             "current_status": interview_session.current_status or None,
             "last_activity": format_iso_datetime(interview_session.last_activity),
             "warning_count": interview_session.warning_count,
@@ -1073,158 +1067,8 @@ async def get_live_status_dashboard(
     )
 
 
-def _serialize_interview_admin_detail(session_obj: InterviewSession) -> GetInterviewResultResponse:
-    """Helper to serialize InterviewSession into GetInterviewResultResponse."""
-    import json as _json
-    from ..schemas.admin.results import (
-        GetInterviewResultResponse as AdminResultData,
-        AdminAnswerAnswerShort as AnswerShort,
-        AdminQuestionWithAnswer as QuestionWithAnswer,
-        AdminPaperNested as PaperNestedWithAdminId,
-        AdminPaperNested as CodingPaperNestedWithAdmin,
-        AdminProctoringEvent as ProctoringEventRead
-    )
-    
-    # 1. Map Admin User
-    admin_data = None
-    if session_obj.admin:
-        admin_data = UserRead(
-            id=session_obj.admin.id,
-            email=session_obj.admin.email,
-            full_name=session_obj.admin.full_name,
-            role=str(session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else session_obj.admin.role),
-            profile_image=session_obj.admin.profile_image,
-            team=TeamReadBasic(
-                id=session_obj.admin.team.id,
-                name=session_obj.admin.team.name,
-                description=session_obj.admin.team.description or "",
-                created_at=session_obj.admin.team.created_at.isoformat() if hasattr(session_obj.admin.team, "created_at") and session_obj.admin.team.created_at else ""
-            ) if session_obj.admin.team else None
-        )
-
-    # 2. Map Candidate User
-    candidate_data = None
-    if session_obj.candidate:
-        candidate_data = UserRead(
-            id=session_obj.candidate.id,
-            email=session_obj.candidate.email,
-            full_name=session_obj.candidate.full_name,
-            role=str(session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else session_obj.candidate.role),
-            profile_image=session_obj.candidate.profile_image,
-            team=TeamReadBasic(
-                id=session_obj.candidate.team.id,
-                name=session_obj.candidate.team.name,
-                description=session_obj.candidate.team.description,
-                created_at=session_obj.candidate.team.created_at.isoformat() if session_obj.candidate.team.created_at else ""
-            ) if session_obj.candidate.team else None
-        )
-
-    # 3. Map Standard Question Paper
-    paper_data = None
-    if session_obj.paper:
-        questions_list = [
-            QuestionWithAnswer(
-                id=q.id,
-                paper_id=q.paper_id,
-                content=q.content or "",
-                question_text=q.question_text or "",
-                topic=q.topic or "",
-                difficulty=str(q.difficulty),
-                marks=q.marks or 0,
-                response_type=str(q.response_type)
-            ) for q in getattr(session_obj.paper, "questions", [])
-        ]
-        
-        paper_data = GetPaperResponse(
-            id=session_obj.paper.id,
-            name=session_obj.paper.name,
-            description=session_obj.paper.description or "",
-            adminUser=session_obj.paper.admin.full_name if session_obj.paper.admin else None,
-            question_count=session_obj.paper.question_count or len(questions_list),
-            total_marks=session_obj.paper.total_marks or sum(q.marks for q in questions_list),
-            created_at=session_obj.paper.created_at,
-            questions=None
-        )
-
-    # 4. Map Coding Question Paper
-    coding_paper_data = None
-    if session_obj.coding_paper:
-        coding_questions_list = [
-            QuestionWithAnswer(
-                id=cq.id,
-                paper_id=cq.paper_id,
-                content=cq.problem_statement or "",
-                question_text=cq.title or "",
-                topic=cq.topic or "",
-                difficulty=str(cq.difficulty),
-                marks=cq.marks or 0,
-                response_type="coding"
-            ) for cq in getattr(session_obj.coding_paper, "questions", [])
-        ]
-        
-        coding_paper_data = PaperNestedWithAdminId(
-            id=session_obj.coding_paper.id,
-            name=session_obj.coding_paper.name,
-            description=session_obj.coding_paper.description or "",
-            admin_user=session_obj.coding_paper.admin.id if session_obj.coding_paper.admin else None,
-            question_count=session_obj.coding_paper.question_count or len(coding_questions_list),
-            total_marks=session_obj.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
-            created_at=session_obj.coding_paper.created_at,
-            questions=None
-        )
-
-    # 5. Build Final Response Object
-    # Create proctoring event with id
-    proctoring_event = None
-    if session_obj.proctoring_events:
-        # Get the first proctoring event or create a summary one
-        proctoring_event = ProctoringEventRead(
-            id=session_obj.proctoring_events[0].id if session_obj.proctoring_events else session_obj.id,
-            warning_count=session_obj.warning_count or 0,
-            max_warnings=session_obj.max_warnings or 3,
-            is_suspended=session_obj.is_suspended or False,
-            suspension_reason=session_obj.suspension_reason,
-            suspended_at=session_obj.suspended_at,
-            allow_copy_paste=session_obj.allow_copy_paste or False,
-            allow_question_navigation=session_obj.allow_question_navigate or False
-        )
-    else:
-        # Create proctoring event from session data
-        proctoring_event = ProctoringEventRead(
-            id=session_obj.id,
-            warning_count=session_obj.warning_count or 0,
-            max_warnings=session_obj.max_warnings or 3,
-            is_suspended=session_obj.is_suspended or False,
-            suspension_reason=session_obj.suspension_reason,
-            suspended_at=session_obj.suspended_at,
-            allow_copy_paste=session_obj.allow_copy_paste or False,
-            allow_question_navigation=session_obj.allow_question_navigate or False
-        )
-
-    return GetInterviewResultResponse(
-        id=session_obj.id,
-        access_token=session_obj.access_token,
-        admin_user=admin_data if admin_data else None,
-        candidate_user=candidate_data if candidate_data else None,
-        paper=paper_data if paper_data else None,
-        coding_paper=coding_paper_data if coding_paper_data else None,
-        interview_round=str(session_obj.interview_round.value if hasattr(session_obj.interview_round, 'value') else session_obj.interview_round) if session_obj.interview_round else None,
-        schedule_time=session_obj.schedule_time,
-        duration_minutes=session_obj.duration_minutes or 1440,
-        max_questions=session_obj.max_questions,
-        start_time=session_obj.start_time,
-        end_time=session_obj.end_time,
-        status=str(session_obj.status.value if hasattr(session_obj.status, 'value') else session_obj.status),
-        response_count=len(session_obj.result.answers) if session_obj.result else 0,
-        last_activity=session_obj.last_activity,
-        result_status=getattr(session_obj.result, 'result_status', 'PENDING') if session_obj.result else 'PENDING',
-        max_marks=(paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0),
-        score=session_obj.total_score or 0.0,
-        enrollment_audio_path=session_obj.enrollment_audio_path,
-        enrollment_audio_url=f"/api/admin/interviews/enrollment-audio/{session_obj.id}" if session_obj.enrollment_audio_path else None,
-        is_completed=session_obj.is_completed or False,
-        proctoring_event=proctoring_event
-    )
+# The local _serialize_interview_admin_detail function has been replaced 
+# by the dedicated service in app/services/admin_serialization.py
 
 @router.get("/interviews/{interview_id}", response_model=ApiResponse[GetInterviewResultResponse])
 async def get_interview(
@@ -1394,8 +1238,8 @@ async def update_interview(
 @router.delete("/interviews/{interview_id}", response_model=ApiResponse[dict])
 async def delete_interview(
     interview_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Hard delete an interview session and all related data (responses, proctoring events, etc.)."""
     # Retrieve the interview session with relationships loaded
@@ -1498,9 +1342,12 @@ async def list_candidates(
 async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """API for the admin dashboard: Returns a flat list of candidate interview sessions and their results."""
     
-    # Only show sessions created by this admin
+    # 1. Join with InterviewResult to only show sessions that have a generated result.
+    # This prevents 404 errors when viewing detailed results for scheduled/invited sessions.
+    from ..models.db_models import InterviewResult
     sessions = session.exec(
         select(InterviewSession)
+        .join(InterviewResult)
         .where(InterviewSession.admin_id == current_user.id)
         .options(
             selectinload(InterviewSession.candidate),
@@ -1512,10 +1359,10 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
     results = []
     for s in sessions:
         res_status = "PENDING"
-        score = 0.0
+        total_score = 0.0
         if s.result:
             res_status = s.result.result_status or "PENDING"
-            score = s.result.total_score or 0.0
+            total_score = s.result.total_score or 0.0
 
         results.append(GetAdminResultsListResponse(
             id=s.id,
@@ -1524,20 +1371,15 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
             status=s.status.value if hasattr(s.status, 'value') else str(s.status),
             result_status=res_status,
             end_time=s.end_time,
-            score=score
+            total_score=total_score
         ))
 
     return ApiResponse(
         status_code=200,
-        data=results,
+        data=[result.model_dump(by_alias=True) for result in results],
         message="All interview results retrieved successfully"
     )
 
-    return ApiResponse(
-        status_code=200,
-        data=results,
-        message="All results retrieved successfully"
-    )
 
 @router.get("/results/{interview_id}", response_model=ApiResponse[dict])
 async def get_result(
@@ -1552,11 +1394,12 @@ async def get_result(
         select(InterviewSession)
         .where(InterviewSession.id == interview_id)
         .options(
-            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.candidate).selectinload(User.team),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers).selectinload(CodingAnswers.coding_question),
-            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.admin).selectinload(User.team),
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
         )
     ).first()
@@ -1717,8 +1560,8 @@ async def get_result(
         allow_question_navigation=s.allow_question_navigate or False
     )
 
-    result_detail = InterviewSessionData(
-        id=s.id, access_token=s.access_token, invite_link=f"{FRONTEND_URL}/interview/{s.access_token}",
+    result_detail = AdminResultData(
+        id=s.id, access_token=s.access_token, invite_link=None,
         admin_user=admin_obj, candidate_user=candidate_obj, 
         paper=paper_obj, coding_paper=coding_paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
@@ -1729,14 +1572,14 @@ async def get_result(
         last_activity=s.last_activity,
         result_status=s.result.result_status if s.result else "PENDING",
         max_marks=float(max_marks),
-        score=float(s.result.total_score if s.result else 0.0),
+        total_score=float(s.result.total_score if s.result else 0.0),
         enrollment_audio_path=s.enrollment_audio_path,
         enrollment_audio_url=s.enrollment_audio_path, # Direct Cloudinary URL
         is_completed=s.is_completed or False,
         proctoring_event=proctoring
     )
 
-    data_dict = result_detail.model_dump(exclude_none=True)
+    data_dict = result_detail.model_dump(exclude_none=True, by_alias=True)
 
     return ApiResponse(
         status_code=200,
@@ -1782,10 +1625,10 @@ async def update_result(
     update_dict = update_data.model_dump(exclude_unset=True)
     
     # Update total score if provided
-    if "score" in update_dict:
-        interview_session.total_score = update_dict["score"]
+    if "total_score" in update_dict:
+        interview_session.total_score = update_dict["total_score"]
         if interview_session.result:
-            interview_session.result.total_score = update_dict["score"]
+            interview_session.result.total_score = update_dict["total_score"]
             
     # Update result status if provided
     if "result_status" in update_dict and interview_session.result:
@@ -2090,7 +1933,7 @@ async def create_user(
         
         try:
             await resume.seek(0)
-            # Ensure your cloudinary_service call is also correct
+            # Upload to Cloudinary
             resume_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
             if resume_url:
                 new_user.resume_path = resume_url
@@ -2115,19 +1958,23 @@ async def create_user(
         from .teams import _serialize_team_basic
         team_data = _serialize_team_basic(new_user.team, session)
 
-    return create_response(ApiResponse(
+    return Response(
+        content=ApiResponse(
+            status_code=201,
+            data=UserRead(
+                id=new_user.id,
+                email=new_user.email,
+                full_name=new_user.full_name,
+                role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
+                resume_url=new_user.resume_path,
+                profile_image=new_user.profile_image, 
+                team=team_data
+            ),
+            message="User created with profile image and biometric embeddings."
+        ).model_dump_json(),
         status_code=201,
-        data=UserRead(
-            id=new_user.id,
-            email=new_user.email,
-            full_name=new_user.full_name,
-            role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
-            resume_url=new_user.resume_path,
-            profile_image=new_user.profile_image, 
-            team=team_data
-        ),
-        message="User created with profile image and biometric embeddings."
-    ))
+        media_type="application/json"
+    )
 
 @router.get("/users", response_model=ApiResponse[List[UserRead]])
 async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
@@ -2192,7 +2039,7 @@ async def get_user(
             resume_url=user.resume_path if user.resume_path else None,
             profile_image=user.profile_image,
             team=team_data
-        ),
+        ).model_dump(),
         message="User details retrieved successfully"
     )
 

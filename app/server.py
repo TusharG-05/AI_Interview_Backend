@@ -8,6 +8,9 @@ from fastapi.routing import APIRouter, APIRoute
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 
+# --- Startup Instrumentation ---
+print("\033[94m[STARTUP] app.server module initializing...\033[0m", flush=True)
+
 class ExcludeNoneJSONResponse(JSONResponse):
     """Custom JSONResponse that excludes None values by default."""
     def render(self, content: Any) -> bytes:
@@ -60,17 +63,15 @@ async def lifespan(app: FastAPI):
     # RATE LIMITING: Protect AI resources
     try:
         import redis.asyncio as redis
-        # Support both standard and limiter-specific import paths
-        try:
-            from fastapi_limiter import FastAPILimiter
-        except ImportError:
-            from fastapi_limiter.limiter import FastAPILimiter
+        from fastapi_limiter import FastAPILimiter
             
         redis_conn = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
         await FastAPILimiter.init(redis_conn)
-        logger.info("Lifespan: API Rate Limiting initialized (Redis).")
+        logger.info("Lifespan: API Rate Limiting initialized successfully.")
+    except ImportError:
+        logger.warning("Lifespan: fastapi-limiter not installed. Rate limiting disabled.")
     except Exception as re_e:
-        logger.warning(f"Lifespan: Rate Limiter failed to start: {re_e}")
+        logger.error(f"Lifespan: Rate Limiter failed to start: {re_e}")
     
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
     try:
@@ -85,35 +86,35 @@ async def lifespan(app: FastAPI):
 
     # These imports are now safe since init_db() already finished
     from .services.camera import CameraService
-    from .routers.interview import audio_service
+    from .routers.interview import get_audio_service
     
-    # Pre-warm models in background
-    import threading
-    def warm_up():
-        logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
-        from .core.config import local_llm
-        try:
-            # Trigger lazy loading properties for audio/speech models
-            _ = audio_service.stt_model
-            _ = audio_service.speaker_model
-            
-            # Local LLM (Ollama) is often absent in cloud/HF environments
+    # Pre-warm models in background (SKIP in orchestrator mode to save memory)
+    from .core.config import ENV_MODE
+    if ENV_MODE != "orchestrator":
+        import threading
+        def warm_up():
+            logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
+            from .core.config import local_llm
             try:
-                local_llm.invoke("Hello")
-            except Exception as llm_e:
-                logger.info(f"Warm-up: Local LLM (Ollama) unreachable, skipping pre-warm: {llm_e}")
+                audio_service = get_audio_service()
+                # Trigger lazy loading properties for audio/speech models
+                _ = audio_service.stt_model
+                _ = audio_service.speaker_model
                 
-            logger.info("Warm-up: AI Models Ready.")
-        except Exception as e:
-            logger.error(f"Warm-up process encountered an error: {e}")
-    
-    # Start warm-up in background thread so server starts instantly
-    # On HF Spaces, we skip local ML warmup to save memory and startup time
-    if not os.getenv("SPACE_ID"):
+                # Local LLM (Ollama) is often absent in cloud/HF environments
+                try:
+                    local_llm.invoke("Hello")
+                except Exception as llm_e:
+                    logger.info(f"Warm-up: Local LLM (Ollama) unreachable, skipping pre-warm: {llm_e}")
+                    
+                logger.info("Warm-up: AI Models Ready.")
+            except Exception as e:
+                logger.error(f"Warm-up process encountered an error: {e}")
+        
         threading.Thread(target=warm_up, daemon=True).start()
         logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
     else:
-        logger.info("Warm-up: Skipped local model pre-warm on Hugging Face Space.")
+        logger.info("Orchestrator Mode detected: Skipping local model pre-warm to save RAM.")
     
     logger.info("Lifespan: Initializing CameraService...")
     service = CameraService()
@@ -205,16 +206,20 @@ async def global_exception_handler(request: Request, exc: Exception):
         ).model_dump()
     )
 
+from .core.config import FRONTEND_URL
 from fastapi.middleware.cors import CORSMiddleware
-import os
 
-# SECURITY: Allow ALL origins (including localhost) for development convenience
-# WARNING: This effectively disables CORS protection.
-# ALLOW_ORIGIN_REGEX = r".*"
+# SECURITY: Restrict origins in production, allow development origins
+origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+if FRONTEND_URL:
+    if FRONTEND_URL not in origins:
+        origins.append(FRONTEND_URL)
+if os.getenv("ENV") == "development":
+    origins = ["*"] # Keep wildcard for local dev convenience if explicitly set
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -311,31 +316,45 @@ async def diagnostic_logging_middleware(request: Request, call_next):
         
     except Exception as e:
         process_time = (time.time() - start_time) * 1000
-        print(f"\n\033[91m====================== CRITICAL ERROR ======================\033[0m", flush=True)
+        print("\n\033[91m====================== CRITICAL ERROR ======================\033[0m", flush=True)
         print(f"\033[91mFailed Endpoint: {request.method} {request.url.path}\033[0m", flush=True)
         print(f"\033[91mExecution Time: {process_time:.2f}ms\033[0m", flush=True)
         print(f"\033[91mInput Payload that caused failure:\n{body_str}\033[0m", flush=True)
-        print(f"\033[91m------------------------------------------------------------\033[0m", flush=True)
+        print("\033[91m------------------------------------------------------------\033[0m", flush=True)
         import traceback
         traceback.print_exc()
-        print(f"\033[91m============================================================\033[0m\n", flush=True)
+        print("\033[91m============================================================\033[0m\n", flush=True)
         raise e
 
 # (Redundant endpoint removed. Use settings.router instead)
 
-# Lazy include routers to ensure AI models (imported within routers) 
-# don't conflict with database initialization logic.
-from .routers import video, settings, admin, interview, auth, candidate, teams, coding_papers, resume
+# --- Router Inclusion (Instrumented for Cloud Debugging) ---
+print("\n\033[94m[STARTUP] Loading routers...\033[0m", flush=True)
 
-app.include_router(video.router, prefix="/api")
+from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video
+
+print("\033[94m[STARTUP] Including Auth, Settings, Admin, Teams...\033[0m", flush=True)
+app.include_router(auth.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
-app.include_router(interview.router, prefix="/api")
-app.include_router(auth.router, prefix="/api")
-app.include_router(candidate.router, prefix="/api")
 app.include_router(teams.router, prefix="/api")
-app.include_router(coding_papers.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Resume, Coding, Interview...\033[0m", flush=True)
 app.include_router(resume.router, prefix="/api")
+app.include_router(coding_papers.router, prefix="/api")
+app.include_router(interview.router, prefix="/api")
+
+# Heavy ML Routers: Wrapped and Instrumented
+if os.getenv("RENDER") == "true" or os.getenv("SPACE_ID"):
+    print("\033[93m[STARTUP] Cloud Environment detected. Loading ML routers with caution...\033[0m", flush=True)
+
+print("\033[94m[STARTUP] Including Candidate Router...\033[0m", flush=True)
+app.include_router(candidate.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Video Router (Heavy)...\033[0m", flush=True)
+app.include_router(video.router, prefix="/api")
+
+print("\033[92m[STARTUP] All routers included successfully.\033[0m\n", flush=True)
 
 from fastapi.responses import RedirectResponse
 

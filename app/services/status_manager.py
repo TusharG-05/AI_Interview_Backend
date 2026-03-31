@@ -8,7 +8,7 @@ This service handles:
 - Status timeline recording
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from sqlmodel import Session, select
 
@@ -267,6 +267,66 @@ def check_and_suspend(
     return True
 
 
+def _get_timeline_data(session: Session, interview_id: int) -> List[Dict[str, Any]]:
+    """Helper to fetch and format timeline entries."""
+    timeline_stmt = select(StatusTimeline).where(
+        StatusTimeline.interview_id == interview_id
+    ).order_by(StatusTimeline.timestamp)
+    entries = session.exec(timeline_stmt).all()
+    return [
+        {
+            "status": e.status.value if hasattr(e.status, 'value') else str(e.status),
+            "timestamp": e.timestamp.isoformat(),
+            "metadata": json.loads(e.context_data) if e.context_data else None
+        }
+        for e in entries
+    ]
+
+
+def _get_warning_data(session: Session, interview_id: int, current_count: int, max_warnings: int) -> Dict[str, Any]:
+    """Helper to fetch violations and format warning summary."""
+    violations_stmt = select(ProctoringEvent).where(
+        ProctoringEvent.interview_id == interview_id,
+        ProctoringEvent.triggered_warning == True
+    ).order_by(ProctoringEvent.timestamp)
+    violations = session.exec(violations_stmt).all()
+    
+    return {
+        "total_warnings": current_count,
+        "warnings_remaining": max(0, max_warnings - current_count),
+        "max_warnings": max_warnings,
+        "violations": [
+            {
+                "type": v.event_type,
+                "severity": v.severity,
+                "timestamp": v.timestamp.isoformat(),
+                "details": v.details
+            }
+            for v in violations
+        ]
+    }
+
+
+def _get_progress_data(session: Session, interview_session: InterviewSession, result: Optional[InterviewResult]) -> Dict[str, Any]:
+    """Helper to calculate interview progress and current question."""
+    answered_questions = len(result.answers) if result else 0
+    total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
+    
+    current_question_id = None
+    if answered_questions < total_questions and interview_session.selected_questions:
+        answered_ids = {r.question_id for r in result.answers} if result else set()
+        for sq in sorted(interview_session.selected_questions, key=lambda x: x.sort_order):
+            if sq.question_id not in answered_ids:
+                current_question_id = sq.question_id
+                break
+                
+    return {
+        "questions_answered": answered_questions,
+        "total_questions": total_questions,
+        "current_question_id": current_question_id
+    }
+
+
 def get_status_summary(
     session: Session,
     interview_session: InterviewSession
@@ -281,49 +341,22 @@ def get_status_summary(
     Returns:
         Dictionary with timeline, warnings, progress, and current status
     """
-    # Get timeline
-    timeline_stmt = select(StatusTimeline).where(
-        StatusTimeline.interview_id == interview_session.id
-    ).order_by(StatusTimeline.timestamp)
-    timeline_entries = session.exec(timeline_stmt).all()
-    
-    # Get violations
-    violations_stmt = select(ProctoringEvent).where(
-        ProctoringEvent.interview_id == interview_session.id,
-        ProctoringEvent.triggered_warning == True
-    ).order_by(ProctoringEvent.timestamp)
-    violations = session.exec(violations_stmt).all()
-    # Check implementation:
-    # We need to find the InterviewResult for this session, then count answers
-    # Or count Answers joined with InterviewResult where interview_id matches
-    
     # Check if result exists
     result_stmt = select(InterviewResult).where(InterviewResult.interview_id == interview_session.id)
     result = session.exec(result_stmt).first()
     
-    answered_questions = 0
-    if result:
-        # Count answers linked to this result
-        # count() is not directly supported in all sqlmodel versions easily, using len of list or func.count
-        # simpler: 
-        answered_questions = len(result.answers)
+    # 1. Timeline
+    timeline = _get_timeline_data(session, interview_session.id)
     
-    total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
+    # 2. Warnings
+    max_warn = interview_session.max_warnings or 3
+    current_warn = interview_session.warning_count or 0
+    warnings = _get_warning_data(session, interview_session.id, current_warn, max_warn)
     
-    # Get current question (if any)
-    current_question_id = None
-    if answered_questions < total_questions and interview_session.selected_questions:
-        # Next unanswered question
-        if result and result.answers:
-            answered_ids = {r.question_id for r in result.answers}
-        else:
-            answered_ids = set()
-        for sq in sorted(interview_session.selected_questions, key=lambda x: x.sort_order):
-            if sq.question_id not in answered_ids:
-                current_question_id = sq.question_id
-                break
+    # 3. Progress
+    progress = _get_progress_data(session, interview_session, result)
     
-    # Serialize users
+    # 4. Serialize users
     candidate_dict = serialize_user(interview_session.candidate)
     admin_dict = serialize_user(interview_session.admin) if interview_session.admin else None
     
@@ -338,11 +371,11 @@ def get_status_summary(
             "start_time": interview_session.start_time.isoformat() if interview_session.start_time else None,
             "end_time": interview_session.end_time.isoformat() if interview_session.end_time else None,
             "status": interview_session.status.value if hasattr(interview_session.status, 'value') else str(interview_session.status),
-            "score": interview_session.total_score,
+            "score": (result.total_score if result else interview_session.total_score) or 0.0,
             "current_status": interview_session.current_status,
             "last_activity": interview_session.last_activity.isoformat() if interview_session.last_activity else None,
-            "warning_count": interview_session.warning_count or 0,
-            "max_warnings": interview_session.max_warnings or 3,
+            "warning_count": current_warn,
+            "max_warnings": max_warn,
             "is_suspended": interview_session.is_suspended or False,
             "suspension_reason": interview_session.suspension_reason,
             "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
@@ -355,33 +388,9 @@ def get_status_summary(
         "admin_user": admin_dict,
         "candidate_user": candidate_dict,
         "current_status": interview_session.current_status,
-        "timeline": [
-            {
-                "status": entry.status.value,
-                "timestamp": entry.timestamp.isoformat(),
-                "metadata": json.loads(entry.context_data) if entry.context_data else None
-            }
-            for entry in timeline_entries
-        ],
-        "warnings": {
-            "total_warnings": interview_session.warning_count or 0,
-            "warnings_remaining": max(0, (interview_session.max_warnings or 3) - (interview_session.warning_count or 0)),
-            "max_warnings": interview_session.max_warnings or 3,
-            "violations": [
-                {
-                    "type": v.event_type,
-                    "severity": v.severity,
-                    "timestamp": v.timestamp.isoformat(),
-                    "details": v.details
-                }
-                for v in violations
-            ]
-        },
-        "progress": {
-            "questions_answered": answered_questions,
-            "total_questions": total_questions,
-            "current_question_id": current_question_id
-        },
+        "timeline": timeline,
+        "warnings": warnings,
+        "progress": progress,
         "is_suspended": interview_session.is_suspended,
         "suspension_reason": interview_session.suspension_reason,
         "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,

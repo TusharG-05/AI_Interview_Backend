@@ -1,35 +1,49 @@
-# --- Optimized Runtime ---
-# Inherits from the local base containing heavy ML libs in /opt/venv
-FROM interview-base:latest
+# Hugging Face Spaces Dockerfile (v1 & v2)
+# Uses unified requirements.txt — includes core ML + app dependencies
 
-# Runtime environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PATH="/opt/venv/bin:$PATH"
-ENV CUDA_VISIBLE_DEVICES=-1
-ENV TF_CPP_MIN_LOG_LEVEL=2
+FROM python:3.11-slim
 
-# Clean inherited /app bloat from base image before copying fresh code
+# Set working directory
 WORKDIR /app
-RUN rm -rf /app/* && mkdir -p /app/models && chmod 777 /app/models
 
-# Only install application-level changes
-COPY requirements-app.txt .
-RUN pip install --no-cache-dir -r requirements-app.txt
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    libsm6 \
+    libxext6 \
+    libgl1 \
+    libglib2.0-0 \
+    git \
+    wget \
+    redis-server \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Redis server for Celery
-USER root
-RUN apt-get update && apt-get install -y redis-server && rm -rf /var/lib/apt/lists/*
-# USER user
+# Create a non-root user (Hugging Face requirement)
+RUN useradd -m -u 1000 user
+USER user
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH \
+    PYTHONPATH=/app \
+    ENV=production
 
-# Copy clean application code (filtered by .dockerignore)
-COPY . .
+# ── Install Python dependencies ──────────────────────────────────────────────
+# Copy unified requirements first to leverage Docker layer cache
+COPY --chown=user requirements.txt /app/requirements.txt
 
-# Ensure start script is executable
-RUN chmod +x start.sh
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Expose API Port
+# ── Copy application code ────────────────────────────────────────────────────
+COPY --chown=user . /app
+
+# ── Pre-download ML models at build time (avoids cold-start latency) ─────────
+RUN chmod +x /app/start.sh && \
+    mkdir -p /app/app/assets && \
+    wget -q -O /app/app/assets/face_landmarker.task \
+        https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task && \
+    python3 -c "from deepface import DeepFace; DeepFace.build_model('SFace')" || true
+
+# Expose port (Hugging Face Spaces default)
 EXPOSE 7860
 
-# Default Command
-CMD ["./start.sh"]
+CMD ["/app/start.sh"]

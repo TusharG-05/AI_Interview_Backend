@@ -1,26 +1,54 @@
 #!/bin/bash
+set -e
 
-# Start Redis in the background
-echo "Starting Redis server..."
-redis-server --daemonize yes --port 6379 --bind 127.0.0.1 --pidfile /tmp/redis.pid --dir /tmp --protected-mode no
+# --- Internal Infrastructure ---
+export PYTHONUNBUFFERED=TRUE
+export PYTHONPATH=$PYTHONPATH:.
 
-# Wait for Redis to be ready
-until redis-cli ping; do
-  echo "Waiting for Redis..."
-  sleep 1
-done
+if [ -f .env ]; then
+    export $(grep -v '^#' .env | xargs)
+fi
 
-echo "Redis is up and running!"
+# ── Start Redis (Only if not provided externally) ───────────────────────────
+# On Render/Managed environments, REDIS_URL is provided. On HF, we start local.
+if [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL" == *"localhost"* ]]; then
+    echo "🚀 Starting local Redis server..."
+    redis-server \
+        --daemonize yes \
+        --port 6379 \
+        --bind 127.0.0.1 \
+        --pidfile /tmp/redis.pid \
+        --dir /tmp \
+        --maxmemory 256mb \
+        --maxmemory-policy allkeys-lru \
+        --protected-mode no || { echo "❌ Redis failed to start"; exit 1; }
 
-# Start Celery worker in the background
+    # Wait for Redis to be ready (max 30 s)
+    MAX_WAIT=30
+    WAITED=0
+    until redis-cli ping 2>/dev/null | grep -q PONG; do
+        if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+            echo "ERROR: Redis did not start within ${MAX_WAIT}s. Exiting."
+            exit 1
+        fi
+        echo "Waiting for Redis... (${WAITED}s)"
+        sleep 1
+        WAITED=$((WAITED + 1))
+    done
+    echo "Local Redis is up and running!"
+fi
+
+# ── Start Celery worker ───────────────────────────────────────────────────────
 echo "Starting Celery worker..."
-celery -A app.core.celery_app worker --loglevel=info &
+celery -A app.core.celery_app worker --loglevel=info > /tmp/celery.log 2>&1 &
+CELERY_PID=$!
+echo "Celery worker started (PID: $CELERY_PID)"
 
-# Start the FastAPI application
+# ── Start FastAPI ─────────────────────────────────────────────────────────────
 echo "Starting FastAPI application (ENV: ${ENV:-production})..."
-if [ "$ENV" = "development" ]; then
+if [ "${ENV}" = "development" ]; then
     echo "Running in development mode with live reload!"
-    exec uvicorn app.server:app --host 0.0.0.0 --port 7860 --reload
+    exec uvicorn app.server:app --host 0.0.0.0 --port "${PORT:-7860}" --reload
 else
-    exec uvicorn app.server:app --host 0.0.0.0 --port 7860
+    exec uvicorn app.server:app --host 0.0.0.0 --port "${PORT:-7860}" --workers 1
 fi

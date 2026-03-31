@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Union
+import json as _json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole
@@ -23,13 +24,29 @@ from datetime import datetime, timedelta, timezone
 
 from pydub import AudioSegment
 import logging
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
 from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
-logger = logging.getLogger(__name__)
-audio_service = AudioService()
-cloudinary_service = CloudinaryService()
+_audio_service = None
+_cloudinary_service = None
+
+def get_audio_service():
+    global _audio_service
+    if _audio_service is None:
+        from ..services.audio import AudioService
+        _audio_service = AudioService()
+    return _audio_service
+
+def get_cloudinary_service():
+    global _cloudinary_service
+    if _cloudinary_service is None:
+        from ..services.cloudinary_service import CloudinaryService
+        _cloudinary_service = CloudinaryService()
+    return _cloudinary_service
 
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
@@ -74,7 +91,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=ans.interview_result_id,
                 candidate_answer=ans.candidate_answer or "",
                 feedback=ans.feedback or "",
-                score=ans.score or 0.0,
+                total_score=ans.total_score or 0.0,
                 audio_path=ans.audio_path or "",
                 transcribed_text=ans.transcribed_text or "",
                 timestamp=ans.timestamp
@@ -85,7 +102,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=cans.interview_result_id,
                 candidate_answer=cans.candidate_answer or "",
                 feedback=cans.feedback or "",
-                score=cans.score or 0.0,
+                total_score=cans.total_score or 0.0,
                 audio_path=cans.audio_path or "",
                 transcribed_text=cans.transcribed_text or "",
                 timestamp=cans.timestamp
@@ -157,7 +174,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
             question_count=session.coding_paper.question_count or len(coding_questions_list),
             total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
             created_at=session.coding_paper.created_at,
-            team_id=session.coding_paper.team_id,
+            team_id=session.coding_paper.admin.team.id if session.coding_paper.admin and session.coding_paper.admin.team else None,
             questions=coding_questions_list
         )
 
@@ -198,7 +215,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         last_activity=session.last_activity or now,
         result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
         max_marks=max_marks,
-        score=session.total_score or 0.0,
+        total_score=session.total_score or 0.0,
+        current_status=str(session.current_status.value if hasattr(session.current_status, 'value') else session.current_status),
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,
@@ -423,10 +441,14 @@ async def get_schedule_time(
     ).first()
     
     if not session:
-        return ApiResponse(
+        return Response(
+            content=_json.dumps(ApiResponse(
+                status_code=404,
+                data=None,
+                message="Invalid interview token"
+            ).model_dump()),
             status_code=404,
-            data=None,
-            message="Invalid interview token"
+            media_type="application/json"
         )
 
     # 1. Setup Time and Message Logic
@@ -443,7 +465,11 @@ async def get_schedule_time(
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="This interview has been cancelled.")
     elif session.is_completed or session.status == InterviewStatus.COMPLETED:
-        raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        return ApiResponse(
+            status_code=200,
+            data=None,
+            message="This interview has already been completed."
+        )
     elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
         raise HTTPException(status_code=403, detail="This interview link has expired.")
     elif session.status == InterviewStatus.LIVE:
@@ -459,14 +485,55 @@ async def get_schedule_time(
         p_dict = session.paper.model_dump()
         p_dict['questions'] = []
         p_dict['admin_user'] = None
-        paper_data = PaperNested.model_validate(p_dict).model_dump()
+        paper_data = PaperNestedWithoutAdmin.model_validate(p_dict).model_dump()
 
     coding_paper_data = None
     if session.coding_paper:
         cp_dict = session.coding_paper.model_dump()
         cp_dict['coding_questions'] = []
         cp_dict['admin_user'] = None
-        coding_paper_data = CodingPaperNested.model_validate(cp_dict).model_dump()
+        coding_paper_data = CodingPaperNestedWithoutAdmin.model_validate(cp_dict).model_dump()
+
+    # For cancelled/completed/expired interviews, still return the paper data
+    if session.status == InterviewStatus.CANCELLED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+            },
+            message="This interview has been cancelled."
+        )
+    elif session.is_completed or session.status == InterviewStatus.COMPLETED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+            },
+            message="This interview has already been completed."
+        )
+    elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+            },
+            message="This interview link has expired."
+        )
 
     return ApiResponse(
         status_code=200,
@@ -544,24 +611,31 @@ async def start_session_logic(
     warning = None
     try:
         if enrollment_audio:
-            os.makedirs("app/assets/audio/enrollment", exist_ok=True)
-            enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
-            content = await enrollment_audio.read()
-            audio_service.save_audio_blob(content, enrollment_path)
-            
-            # Silence/Quality Check
+            audio_service = get_audio_service()
             try:
-                if audio_service.calculate_energy(enrollment_path) < 50:
-                     warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
+                content = await enrollment_audio.read()
+                enrollment_path = f"app/assets/audio/enrollment_{uuid.uuid4().hex}.webm"
+                audio_service.save_audio_blob(content, enrollment_path)
+                
+                # Simple silence check
+                try:
+                    if audio_service.calculate_energy(enrollment_path) < 50:
+                        logger.warning(f"Session {interview_id}: Enrollment audio too silent.")
+                except: pass
+                
+                # Upload to Cloudinary
+                try:
+                    cloudinary_service = get_cloudinary_service()
+                    cloudinary_url = cloudinary_service.upload_audio(content)
+                    session.enrollment_audio_path = cloudinary_url
+                except Exception as e:
+                    logger.error(f"Failed to upload enrollment audio: {e}")
+                    session.enrollment_audio_path = enrollment_path
+
+                audio_service.cleanup_audio(enrollment_path)
             except Exception as e:
-                logger.warning(f"Energy check failed: {e}")
-            
-            # Cleanup only after processing
-            audio_service.cleanup_audio(enrollment_path)
-            
-            # Upload to Cloudinary
-            cloudinary_url = cloudinary_service.upload_audio(content)
-            session.enrollment_audio_path = cloudinary_url
+                logger.error(f"Failed to process enrollment audio: {e}")
+                warning = "Failed to process enrollment audio."
             
             # Track enrollment completion
             record_status_change(
@@ -749,25 +823,46 @@ async def upload_selfie_session(
         
         # Compare ArcFace embeddings (primary - high accuracy)
         if arcface_embedding and stored_arcface:
-            arcface_sim = float(np.dot(arcface_embedding, stored_arcface) / (
-                np.linalg.norm(arcface_embedding) * np.linalg.norm(stored_arcface)
-            ))
-            verification_results.append(arcface_sim >= ARCFACE_THRESHOLD)
-            _logger.info(f"ArcFace similarity: {arcface_sim:.4f}, Passed: {arcface_sim >= ARCFACE_THRESHOLD}")
+            try:
+                if len(arcface_embedding) > 0 and len(stored_arcface) > 0:
+                    arcface_sim = float(np.dot(arcface_embedding, stored_arcface) / (
+                        np.linalg.norm(arcface_embedding) * np.linalg.norm(stored_arcface)
+                    ))
+                    verification_results.append(arcface_sim >= ARCFACE_THRESHOLD)
+                    _logger.info(f"ArcFace similarity: {arcface_sim:.4f}, Passed: {arcface_sim >= ARCFACE_THRESHOLD}")
+                else:
+                    _logger.warning("Empty embeddings detected, skipping ArcFace comparison")
+            except ValueError as e:
+                _logger.warning(f"ArcFace comparison failed: {e}")
+                verification_results.append(False)
         
         # Compare SFace embeddings (fallback - lightweight)
         if sface_embedding and stored_sface:
-            sface_sim = float(np.dot(sface_embedding, stored_sface) / (
-                np.linalg.norm(sface_embedding) * np.linalg.norm(stored_sface)
-            ))
-            verification_results.append(sface_sim >= SFACE_THRESHOLD)
-            _logger.info(f"SFace similarity: {sface_sim:.4f}, Passed: {sface_sim >= SFACE_THRESHOLD}")
+            try:
+                if len(sface_embedding) > 0 and len(stored_sface) > 0:
+                    sface_sim = float(np.dot(sface_embedding, stored_sface) / (
+                        np.linalg.norm(sface_embedding) * np.linalg.norm(stored_sface)
+                    ))
+                    verification_results.append(sface_sim >= SFACE_THRESHOLD)
+                    _logger.info(f"SFace similarity: {sface_sim:.4f}, Passed: {sface_sim >= SFACE_THRESHOLD}")
+                else:
+                    _logger.warning("Empty embeddings detected, skipping SFace comparison")
+            except ValueError as e:
+                _logger.warning(f"SFace comparison failed: {e}")
+                verification_results.append(False)
         
         # Check if any comparison were possible
         if not verification_results:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not compute similarity - embedding mismatch."
+            # If no embeddings available, allow the upload but warn
+            _logger.warning("No face embeddings available for verification, allowing upload")
+            return ApiResponse(
+                status_code=200,
+                data={
+                    "candidate_id": candidate_id,
+                    "verification_status": "no_embeddings",
+                    "message": "Selfie uploaded successfully (no face verification available)"
+                },
+                message="Selfie uploaded successfully"
             )
         
         # 8. Final Verification: Both must pass if available
@@ -1025,6 +1120,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     os.makedirs("app/assets/audio/questions", exist_ok=True)
     audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
     if not os.path.exists(audio_path):
+        audio_service = get_audio_service()
         await audio_service.text_to_speech(question.question_text or question.content, audio_path)
     
     # Calculate progress
@@ -1113,6 +1209,7 @@ async def submit_answer_audio(
     os.makedirs("app/assets/audio/responses", exist_ok=True)
     audio_path = f"app/assets/audio/responses/resp_{interview_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
+    audio_service = get_audio_service()
     audio_service.save_audio_blob(content, audio_path)
     
     # Get or Create InterviewResult (Thread-safe-ish check)
@@ -1166,6 +1263,8 @@ async def submit_answer_audio(
     # Transcribe audio immediately so evaluation can run right away.
     # STT and LLM errors are caught inside the helpers; answer is already saved.
     transcribed_text = ""
+    audio_service = get_audio_service()
+    cloudinary_service = get_cloudinary_service()
     try:
         # REF: Using await instead of new_event_loop().run_until_complete()
         # triggering nested loops in Uvicorn is unstable and prone to 000 crashes.
@@ -1530,6 +1629,10 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
     # Process results in background using plain function (no Celery dependency)
     from ..tasks.interview_tasks import process_session_results
     background_tasks.add_task(process_session_results, interview_id)
+    
+    # Cleanup proctoring resources
+    from ..services.camera import CameraService
+    CameraService().clear_session(interview_id)
     return ApiResponse(
         status_code=200,
         data={"status": "finished"},
@@ -1829,6 +1932,7 @@ async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User 
         temp_path = f"app/assets/audio/standalone/{temp_filename}" 
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
         
+        audio_service = get_audio_service()
         audio_service.save_audio_blob(content, temp_path)
         
         # Perform STT
@@ -1864,6 +1968,7 @@ async def stt_evaluate_tool(
         temp_path = f"app/assets/audio/standalone/{temp_filename}"
         os.makedirs(os.path.dirname(temp_path), exist_ok=True)
         
+        audio_service = get_audio_service()
         audio_service.save_audio_blob(content, temp_path)
         
         # Perform STT
@@ -1906,9 +2011,9 @@ async def stt_evaluate_tool(
 async def standalone_tts(text: str, background_tasks: BackgroundTasks):
     return await _generate_tts_response(text, background_tasks)
 
-@router.post("/tts")
-async def standalone_tts_post(data: TTSRange, background_tasks: BackgroundTasks):
-    return await _generate_tts_response(data.text, background_tasks)
+# @router.post("/tts")
+# async def standalone_tts_post(data: TTSRange, background_tasks: BackgroundTasks):
+#     return await _generate_tts_response(data.text, background_tasks)
 
 async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
     """Internal helper for TTS generation and cleanup."""
@@ -1919,42 +2024,43 @@ async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
         os.makedirs(os.path.dirname(temp_mp3), exist_ok=True)
         
         # 1. Generate MP3 stream
+        audio_service = get_audio_service()
         await audio_service.text_to_speech(text, temp_mp3)
         
+        # Verify file creation to prevent pydub errors
+        if not os.path.exists(temp_mp3):
+            logger.error(f"TTS service failed to create file: {temp_mp3}. Check if 'edge-tts' is installed and working.")
+            raise FileNotFoundError(f"TTS file {temp_mp3} not found")
+
         # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
+        logger.info(f"Converting TTS MP3 to WAV: {wav_path}")
         from pydub import AudioSegment
         audio = AudioSegment.from_file(temp_mp3)
         audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
         audio.export(wav_path, format="wav")
         
-        # 3. Cleanup intermediate MP3
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
-
-        # 4. Return FileResponse and schedule cleanup
-        def cleanup():
-            if os.path.exists(wav_path):
-                try: os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"TTS Cleanup Error: {e}")
-
-        background_tasks.add_task(cleanup)
+        # 3. Upload to Cloudinary (as per requirement: audio saved in Cloudinary, not local)
+        with open(wav_path, "rb") as f:
+            wav_content = f.read()
         
-        return FileResponse(
-            wav_path,
-            media_type="audio/wav",
-            content_disposition_type="inline"
-        )
+        cloudinary_service = get_cloudinary_service()
+        cloudinary_url = cloudinary_service.upload_audio(wav_content, folder="standalone_tts")
+        
+        # 4. Cleanup intermediate files immediately
+        for p in [temp_mp3, wav_path]:
+            if os.path.exists(p): 
+                try: os.remove(p)
+                except Exception as e: logger.error(f"TTS Cleanup Error: {e}")
+
+        # 5. Return RedirectResponse to the Cloudinary URL
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=cloudinary_url)
 
     except Exception as e:
         logger.error(f"TTS Generation Error: {e}")
         # Final safety cleanup
         for p in [temp_mp3, wav_path]:
             if os.path.exists(p): 
-                try: 
-                    os.remove(p)
-                except Exception as e:
-                    logger.error(f"TTS Cleanup Error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")
-        
+                try: os.remove(p)
+                except Exception as e: logger.error(f"TTS Cleanup Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")

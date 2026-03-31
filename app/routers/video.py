@@ -8,14 +8,27 @@ import asyncio
 import json
 from ..core.logger import get_logger
 
+print("\033[94m[STARTUP] Routers: video.py module loading...\033[0m", flush=True)
 
-router = APIRouter(tags=["Gaze & Face Analysis"])
 logger = get_logger(__name__)
-camera_service = CameraService()
+
+router = APIRouter(prefix="/api/video", tags=["Video"])
+
+_camera_service = None
+
+def get_camera_service():
+    """Lazy-load the camera service to save memory on cloud startup."""
+    global _camera_service
+    if _camera_service is None:
+        print("\033[94m[MODELS] Initializing CameraService (Lazy)...\033[0m", flush=True)
+        from ..services.camera import CameraService
+        _camera_service = CameraService()
+    return _camera_service
 
 def frame_generator(interview_id: int):
     """Yields MJPEG frames synchronized with the camera service for a specific session."""
     last_id = -1
+    camera_service = get_camera_service()
     while True:
         frame, current_id = camera_service.get_frame(interview_id)
         if frame is None:
@@ -33,6 +46,7 @@ def frame_generator(interview_id: int):
 @router.get("/video/video_feed")
 async def video_feed(interview_id: Optional[int] = Query(None)):
     """Streams the isolated annotated video feed for a specific session."""
+    camera_service = get_camera_service()
     if not camera_service.running: camera_service.start()
     
     if interview_id is None:
@@ -50,8 +64,16 @@ async def video_feed(interview_id: Optional[int] = Query(None)):
 
 
 # --- WebRTC Signaling ---
-from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
-from ..services.webrtc import VideoTransformTrack
+# aiortc requires native system libs (libsrtp2, libav) that are unavailable on some
+# platforms (e.g. HF Spaces). Import it conditionally so startup never crashes.
+try:
+    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+    from ..services.webrtc import VideoTransformTrack
+    WEBRTC_AVAILABLE = True
+except ImportError:
+    WEBRTC_AVAILABLE = False
+    logger.warning("aiortc not installed — WebRTC endpoints are disabled on this deployment.")
+
 from pydantic import BaseModel
 
 class Offer(BaseModel):
@@ -70,6 +92,9 @@ async def offer(params: Offer):
     Candidate Connection (Proctoring Source). 
     Registers identity and initializes session-isolated AI.
     """
+    if not WEBRTC_AVAILABLE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="WebRTC (aiortc) is not available on this deployment.")
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     
     # Cloud Optimization: Add Google STUN servers for NAT traversal
@@ -94,7 +119,7 @@ async def offer(params: Offer):
         stmt = select(User).join(InterviewSession, InterviewSession.candidate_id == User.id).where(InterviewSession.id == interview_id)
         user = db_session.exec(stmt).first()
         if user and user.face_embedding:
-            camera_service.face_detector.register_session_identity(interview_id, user.face_embedding)
+            get_camera_service().face_detector.register_session_identity(interview_id, user.face_embedding)
             logger.info(f"Identity registered for Session {interview_id}")
 
     logger.info(f"WebRTC: New Candidate Connection {interview_id}")
@@ -134,6 +159,9 @@ async def watch(target_session_id: int, params: Offer):
     Admin Ghost Mode: Watch an active session.
     Waits up to 10 seconds for candidate stream to be available.
     """
+    if not WEBRTC_AVAILABLE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="WebRTC (aiortc) is not available on this deployment.")
     import asyncio
     import time
     

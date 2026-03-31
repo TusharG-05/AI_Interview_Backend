@@ -253,6 +253,32 @@ def evaluate_code_submission(
 
     code_eval_chain = code_evaluation_prompt | local_llm
 
+    # --- Groq Fallback (High Speed) ---
+    if groq_client:
+        try:
+            logger.info("evaluate_code: Attempting Groq API...")
+            system_instruction = (
+                "You are an expert technical interviewer. Evaluate the candidate's code. "
+                "Provide feedback on correctness, complexity, and issues. "
+                "Return a JSON object with 'feedback' (string), 'score' (float 0-10), "
+                "'correctness' (string), 'time_complexity' (string), "
+                "'space_complexity' (string), and 'issues' (array of strings)."
+            )
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": f"Problem: {problem_title}\nStatement: {problem_statement}\nCode: {code}"}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+            result = _json.loads(completion.choices[0].message.content)
+            logger.info(f"evaluate_code: Groq API score={result.get('score')}")
+            return _scale_code_result(result)
+        except Exception as e:
+            logger.warning(f"evaluate_code: Groq API failed: {e}")
+
     # --- Hugging Face Inference API ---
     hf_token = os.getenv("HF_TOKEN")
     if hf_token:
@@ -336,6 +362,35 @@ def generate_coding_questions_from_prompt(
         return data
 
     last_error = None
+
+    # --- Groq API ---
+    if groq_client:
+        try:
+            logger.info("generate_coding_questions: Attempting Groq API...")
+            system_instruction = (
+                "You are an expert technical interviewer. Generate LeetCode-style coding problems in JSON format. "
+                "Return a JSON array of objects with: 'title', 'problem_statement', 'examples', 'constraints', "
+                "'starter_code', 'topic', 'difficulty', 'marks', and 'response_type' (set to 'code')."
+            )
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": f"Topic/Prompt: {ai_prompt}\nDifficulty Mix: {difficulty_mix}\nNum: {num_questions}"}
+                ],
+                temperature=0.4,
+                response_format={"type": "json_object"},
+            )
+            content = completion.choices[0].message.content
+            result = _parse_json(content)
+            if isinstance(result, dict) and "questions" in result:
+                result = result["questions"]
+            if isinstance(result, list):
+                logger.info(f"generate_coding_questions: Groq API returned {len(result)} problems")
+                return result
+        except Exception as e:
+            last_error = f"Groq API failed: {str(e)}"
+            logger.warning(last_error)
 
     # --- Hugging Face Inference API ---
     hf_token = os.getenv("HF_TOKEN")
