@@ -37,11 +37,16 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY --chown=user . /app
 
 # ── Pre-download ML models at build time (avoids cold-start latency) ─────────
+USER root
+RUN mkdir -p /app/models/speechbrain /app/app/assets && \
+    chown -R user:user /app/models /app/app/assets
+
+USER user
 RUN chmod +x /app/start.sh && \
-    mkdir -p /app/app/assets && \
     wget -q -O /app/app/assets/face_landmarker.task \
         https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task && \
-    python3 -c "from deepface import DeepFace; DeepFace.build_model('SFace')" || true
+    python3 -c "from deepface import DeepFace; DeepFace.build_model('SFace')" || true && \
+    python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='speechbrain/spkrec-ecapa-voxceleb', local_dir='/app/models/speechbrain', local_dir_use_symlinks=False)" || true
 
 # Expose port (Hugging Face Spaces default)
 EXPOSE 7860

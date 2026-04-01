@@ -61,6 +61,11 @@ class CameraService:
         
         # Init Detectors in background (Stateless initialization)
         def init_detectors():
+            # HF/Cloud Optimization: Delay heavy initialization to ensure health check passes first
+            if os.getenv("SPACE_ID") or os.getenv("RENDER"):
+                logger.info("Cloud Environment: Delaying detector initialization (10s) for health check priority.")
+                time.sleep(10)
+
             logger.info("Background: Initializing Detectors...")
             gaze_path = "app/assets/face_landmarker.task"
             

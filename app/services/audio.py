@@ -69,8 +69,10 @@ class AudioService:
             logger.info(f"Loading Speaker Verification Model on {device}...")
             
             # Fix for HF Spaces Permission Error / Windows Symlink Error
-            # Use /tmp/models on HF Spaces as /app/models may be read-only
-            if os.getenv("SPACE_ID"):
+            # Priority: 1. /app/models/speechbrain (Pre-downloaded in Docker) 2. /tmp/models (Writeable)
+            if os.path.exists("/app/models/speechbrain"):
+                save_path = os.path.abspath("/app/models/speechbrain")
+            elif os.getenv("SPACE_ID"):
                 save_path = os.path.abspath("/tmp/models/speechbrain")
             else:
                 save_path = os.path.abspath("models/speechbrain")

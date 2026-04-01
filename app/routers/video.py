@@ -85,92 +85,92 @@ async def proctoring_status(interview_id: int = Query(0)):
     )
 
 
-class EnrollRequest(BaseModel):
-    image_b64: str    # Base64-encoded JPEG/PNG snapshot
-    interview_id: Optional[int] = 0
+# class EnrollRequest(BaseModel):
+#     image_b64: str    # Base64-encoded JPEG/PNG snapshot
+#     interview_id: Optional[int] = 0
 
 
-@router.post("/enroll", response_model=ApiResponse[dict])
-async def enroll_identity(params: EnrollRequest):
-    """
-    Registers the candidate's face from a snapshot for the current test session.
-    Extracts a DeepFace (SFace) embedding and stores it in memory only.
-    No data is persisted to the database.
-    """
-    import base64, json
-    import numpy as np
-    import cv2
-    from fastapi import HTTPException
+# @router.post("/enroll", response_model=ApiResponse[dict])
+# async def enroll_identity(params: EnrollRequest):
+#     """
+#     Registers the candidate's face from a snapshot for the current test session.
+#     Extracts a DeepFace (SFace) embedding and stores it in memory only.
+#     No data is persisted to the database.
+#     """
+#     import base64, json
+#     import numpy as np
+#     import cv2
+#     from fastapi import HTTPException
 
-    camera_service = get_camera_service()
-    if not camera_service._detectors_ready:
-        from fastapi import HTTPException as _HTTPException
-        raise _HTTPException(status_code=503, detail="AI detectors are still initializing. Please wait a moment.")
+#     camera_service = get_camera_service()
+#     if not camera_service._detectors_ready:
+#         from fastapi import HTTPException as _HTTPException
+#         raise _HTTPException(status_code=503, detail="AI detectors are still initializing. Please wait a moment.")
 
-    try:
-        img_bytes = base64.b64decode(params.image_b64)
-        arr = np.frombuffer(img_bytes, np.uint8)
-        img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img_bgr is None:
-            from fastapi import HTTPException as _HTTPException
-            raise _HTTPException(status_code=400, detail="Could not decode image.")
+#     try:
+#         img_bytes = base64.b64decode(params.image_b64)
+#         arr = np.frombuffer(img_bytes, np.uint8)
+#         img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+#         if img_bgr is None:
+#             from fastapi import HTTPException as _HTTPException
+#             raise _HTTPException(status_code=400, detail="Could not decode image.")
 
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+#         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-        # Detect face
-        from ..services.face import MediaPipeDetector
-        detector = MediaPipeDetector()
-        locs = detector.detect(img_rgb)
-        if not locs:
-            from fastapi import HTTPException as _HTTPException
-            raise _HTTPException(status_code=400, detail="No face detected in the snapshot. Try better lighting or move closer.")
+#         # Detect face
+#         from ..services.face import MediaPipeDetector
+#         detector = MediaPipeDetector()
+#         locs = detector.detect(img_rgb)
+#         if not locs:
+#             from fastapi import HTTPException as _HTTPException
+#             raise _HTTPException(status_code=400, detail="No face detected in the snapshot. Try better lighting or move closer.")
 
-        # Crop largest face (first result)
-        t, r, b, l = locs[0]
-        face_crop = img_rgb[t:b, l:r]
+#         # Crop largest face (first result)
+#         t, r, b, l = locs[0]
+#         face_crop = img_rgb[t:b, l:r]
 
-        # Get SFace embedding
-        from deepface import DeepFace
-        result = DeepFace.represent(
-            img_path=face_crop,
-            model_name="SFace",
-            enforce_detection=False,
-            detector_backend="skip",
-            align=False
-        )
-        embedding = result[0]["embedding"]
+#         # Get SFace embedding
+#         from deepface import DeepFace
+#         result = DeepFace.represent(
+#             img_path=face_crop,
+#             model_name="SFace",
+#             enforce_detection=False,
+#             detector_backend="skip",
+#             align=False
+#         )
+#         embedding = result[0]["embedding"]
 
-        # Register in-memory
-        encoding_json = json.dumps({"SFace": embedding})
-        camera_service.face_detector.register_session_identity(params.interview_id, encoding_json)
-        logger.info(f"Enrollment: Identity registered for Session {params.interview_id} (dim={len(embedding)})")
+#         # Register in-memory
+#         encoding_json = json.dumps({"SFace": embedding})
+#         camera_service.face_detector.register_session_identity(params.interview_id, encoding_json)
+#         logger.info(f"Enrollment: Identity registered for Session {params.interview_id} (dim={len(embedding)})")
 
-        return ApiResponse(
-            status_code=200,
-            data={"enrolled": True, "embedding_dim": len(embedding)},
-            message="Identity enrolled. You will now be authenticated in real-time."
-        )
+#         return ApiResponse(
+#             status_code=200,
+#             data={"enrolled": True, "embedding_dim": len(embedding)},
+#             message="Identity enrolled. You will now be authenticated in real-time."
+#         )
 
-    except Exception as e:
-        if hasattr(e, 'status_code'):
-            raise
-        logger.error(f"Enrollment error: {e}", exc_info=True)
-        from fastapi import HTTPException as _HTTPException
-        raise _HTTPException(status_code=500, detail=f"Enrollment failed: {str(e)}")
+#     except Exception as e:
+#         if hasattr(e, 'status_code'):
+#             raise
+#         logger.error(f"Enrollment error: {e}", exc_info=True)
+#         from fastapi import HTTPException as _HTTPException
+#         raise _HTTPException(status_code=500, detail=f"Enrollment failed: {str(e)}")
 
 
-@router.delete("/enroll", response_model=ApiResponse[dict])
-async def clear_identity(interview_id: int = Query(0)):
-    """Clears the in-memory enrolled identity when the session stops."""
-    camera_service = get_camera_service()
-    if camera_service.face_detector and hasattr(camera_service.face_detector, 'session_encodings'):
-        camera_service.face_detector.session_encodings.pop(interview_id, None)
-        logger.info(f"Enrollment: Identity cleared for Session {interview_id}")
-    return ApiResponse(
-        status_code=200,
-        data={"cleared": True},
-        message="Identity cleared."
-    )
+# @router.delete("/enroll", response_model=ApiResponse[dict])
+# async def clear_identity(interview_id: int = Query(0)):
+#     """Clears the in-memory enrolled identity when the session stops."""
+#     camera_service = get_camera_service()
+#     if camera_service.face_detector and hasattr(camera_service.face_detector, 'session_encodings'):
+#         camera_service.face_detector.session_encodings.pop(interview_id, None)
+#         logger.info(f"Enrollment: Identity cleared for Session {interview_id}")
+#     return ApiResponse(
+#         status_code=200,
+#         data={"cleared": True},
+#         message="Identity cleared."
+#     )
 
 
 # --- WebRTC Signaling ---

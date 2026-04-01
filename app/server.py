@@ -93,7 +93,15 @@ async def lifespan(app: FastAPI):
     from .core.config import ENV_MODE
     if ENV_MODE != "orchestrator":
         import threading
+        import time as _time
         def warm_up():
+            # HF Space Fix: Skip pre-warm during launch to avoid 503 timeout
+            if os.getenv("SPACE_ID"):
+                logger.info("Warm-up: Skipping intensive local model pre-warm on Hugging Face Space for fast startup.")
+                return
+
+            # Wait slightly before starting heavy work to allow health check to pass
+            _time.sleep(60) 
             logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
             from .core.config import local_llm
             try:
@@ -226,10 +234,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Static Files (Test UI) ---
-# Ensure the static directory exists
-os.makedirs("app/static", exist_ok=True)
-app.mount("/test", StaticFiles(directory="app/static"), name="static")
 
 # HF Proxy Fix: Support X-Forwarded-Proto and X-Forwarded-For
 # This ensures that WebSockets and Redirects use the correct protocol (https)
