@@ -84,6 +84,9 @@ CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
 
+# Cron authentication secret for manual/externally-scheduled tasks
+CRON_SECRET = os.getenv("CRON_SECRET", "")
+
 # Groq Configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 

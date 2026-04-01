@@ -1,6 +1,0 @@
-DEBUG_ROUTE_TEST: /test
-DEBUG_ROUTE_TEST: /api/admin/test-email
-DEBUG_ROUTE_TEST: /api/admin/test-email-sync
-DEBUG_ROUTE: ['GET'] '/api/video/video_feed'
-DEBUG_ROUTE: ['POST'] '/api/video/offer'
-DEBUG_ROUTE: ['POST'] '/api/video/watch/{target_session_id}'

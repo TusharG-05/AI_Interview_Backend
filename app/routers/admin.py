@@ -3,18 +3,18 @@ import json as _json
 from datetime import datetime
 from sqlalchemy import func
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form, Header
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
 from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, CodingAnswers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions, CandidateStatus
-from ..auth.dependencies import get_admin_user
+from ..auth.dependencies import get_current_user_optional, get_admin_user
 from ..auth.security import get_password_hash
 from ..services.nlp import NLPService
 from ..services.email import EmailService
 from ..services.status_manager import record_status_change
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 logger = get_logger(__name__)
@@ -2335,18 +2335,62 @@ async def delete_user(
         message="User and all associated data deleted successfully."
     )
 
-@router.post("/shutdown", response_model=ApiResponse[dict])
-def shutdown(current_user: User = Depends(get_admin_user)):
-    """Graceful shutdown trigger."""
-    if current_user.role != UserRole.SUPER_ADMIN: raise HTTPException(status_code=403)
+@router.post("/system/expire-interviews", response_model=ApiResponse[dict])
+async def expire_interviews_manually(
+    x_cron_secret: Optional[str] = Header(None, alias="X-CRON-SECRET"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    session: Session = Depends(get_session)
+):
+    """
+    Manually trigger interview expiration check.
+    This endpoint can be called by external cron services for platforms that don't support background processes.
     
-    # Graceful shutdown for Uvicorn
-    import signal
-    os.kill(os.getpid(), signal.SIGTERM) # SIGTERM allows cleaning up
+    For HF Spaces and Render free tier, set up a cron job to call this endpoint periodically.
+    Example cron: */5 * * * * curl -X POST https://your-app.com/api/admin/system/expire-interviews -H "X-CRON-SECRET: $CRON_SECRET"
+    """
+    authorized = False
+
+    if x_cron_secret and CRON_SECRET and x_cron_secret == CRON_SECRET:
+        authorized = True
+
+    if not authorized and current_user:
+        if current_user.role == UserRole.SUPER_ADMIN:
+            authorized = True
+
+    if not authorized:
+        raise HTTPException(status_code=403, detail="Unauthorized: invalid cron secret or admin token")
+    
+    from ..models.db_models import InterviewStatus
+    from datetime import timedelta
+    
+    now = datetime.now(timezone.utc)
+    expired_count = 0
+    
+    # Find interviews that are scheduled/live and have expired
+    candidate_sessions = session.exec(
+        select(InterviewSession).where(
+            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+        )
+    ).all()
+    
+    for interview_session in candidate_sessions:
+        schedule_time = interview_session.schedule_time
+        if schedule_time.tzinfo is None:
+            schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+        
+        expiration_time = schedule_time + timedelta(minutes=interview_session.duration_minutes)
+        if now > expiration_time:
+            interview_session.status = InterviewStatus.EXPIRED
+            session.add(interview_session)
+            expired_count += 1
+    
+    if expired_count > 0:
+        session.commit()
+    
     return ApiResponse(
         status_code=200,
-        data={},
-        message="Server shutting down..."
+        data={"expired_count": expired_count},
+        message=f"Expiration check completed. {expired_count} interviews marked as expired."
     )
 
 # --- Candidate Status Tracking ---

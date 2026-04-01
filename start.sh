@@ -38,11 +38,21 @@ if [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL"
     echo "Local Redis is up and running!"
 fi
 
-# ── Start Celery worker ───────────────────────────────────────────────────────
-echo "Starting Celery worker..."
-celery -A app.core.celery_app worker --loglevel=info > /tmp/celery.log 2>&1 &
-CELERY_PID=$!
-echo "Celery worker started (PID: $CELERY_PID)"
+# ── Start Celery worker and Beat (Only for environments that support background processes) ───────────────────────────────────────────────────────
+if [ -z "$RENDER" ] && [ -z "$SPACE_ID" ]; then
+    echo "Starting Celery worker..."
+    celery -A app.core.celery_app worker --loglevel=info > /tmp/celery.log 2>&1 &
+    CELERY_WORKER_PID=$!
+    echo "Celery worker started (PID: $CELERY_WORKER_PID)"
+
+    echo "Starting Celery Beat scheduler..."
+    celery -A app.core.celery_app beat --loglevel=info > /tmp/celery-beat.log 2>&1 &
+    CELERY_BEAT_PID=$!
+    echo "Celery Beat started (PID: $CELERY_BEAT_PID)"
+else
+    echo "Cloud environment detected (RENDER or SPACE_ID). Skipping Celery background processes."
+    echo "Use external cron services to call /api/admin/system/expire-interviews endpoint for expiration."
+fi
 
 # ── Start FastAPI ─────────────────────────────────────────────────────────────
 echo "Starting FastAPI application (ENV: ${ENV:-production})..."
