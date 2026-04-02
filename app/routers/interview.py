@@ -31,6 +31,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/interview", tags=["Interview"])
 from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
+from ..services.status_manager import record_status_change, update_last_activity, broadcast_interview_update, add_violation
 _audio_service = None
 _cloudinary_service = None
 
@@ -309,6 +310,9 @@ def _evaluate_and_update_score(
         logger.info(
             f"Interview {session_obj.id}: total_score updated to {new_total}"
         )
+        
+        # Broadcast full update to admins for real-time scoring
+        broadcast_interview_update(db, session_obj, update_type="score_update")
 
     except Exception as exc:
         # Roll back only the evaluation updates; the answer row itself was already
@@ -1629,6 +1633,9 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
     # Process results in background using plain function (no Celery dependency)
     from ..tasks.interview_tasks import process_session_results
     background_tasks.add_task(process_session_results, interview_id)
+    
+    # Broadcast finish event
+    broadcast_interview_update(session_db, interview_session, update_type="interview_finished")
     
     # Cleanup proctoring resources
     from ..services.camera import CameraService

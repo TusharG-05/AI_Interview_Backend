@@ -622,14 +622,32 @@ else
 fi
 
 # ================================================================
-# 10. VIDEO / WebRTC
+# 10. VIDEO / WebRTC / Fallbacks
 # ================================================================
 echo ""
-echo "━━━ 10. VIDEO / WebRTC ━━━"
+echo "━━━ 10. VIDEO / WebRTC / Fallbacks ━━━"
 
-RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -o /dev/null "$BASE/video/video_feed")
+# TEST: Binary WebSocket Video Handshake
+PORT=$(echo "$BASE" | sed -E "s/.*:([0-9]+).*/\1/")
+if [ -z "$PORT" ]; then PORT=7860; fi
+RESP=$(curl -s --max-time 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -w "\n%{http_code}" -o /dev/null "$BASE/video/stream/1")
 CODE=$(echo "$RESP" | tail -1)
-check "GET /video/video_feed" "200 422 500 404" "$CODE" ""
+check "WS /video/stream/1 (Binary Fallback Handshake)" "101 200" "$CODE" ""
+
+# TEST: Rate Limiting Enforcement (Burst check on Proctoring Status API)
+echo "  Testing Throttling (Burst)..."
+LIMIT_CHECK=0
+for i in {1..5}; do
+  RESP=$(curl -s --max-time 5 -w "\n%{http_code}" -o /dev/null "$BASE/video/status?interview_id=1")
+  CODE=$(echo "$RESP" | tail -1)
+  if [ "$CODE" = "429" ]; then LIMIT_CHECK=1; break; fi
+done
+if [ $LIMIT_CHECK -eq 1 ]; then
+    echo "  ✅ Rate Limiting (429 verified in burst)"
+    PASS=$((PASS+1))
+else
+    echo "  ℹ️  Rate Limiting (No 429 in 5-req burst - current limit 120/min)"
+fi
 
 RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/video/offer" \
   -H "Content-Type: application/json" \
