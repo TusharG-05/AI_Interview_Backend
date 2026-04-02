@@ -14,7 +14,7 @@ LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # Orchestrator & Environment Mode
-ENV_MODE = os.getenv("ENV_MODE", "full")  # "full" or "orchestrator"
+ENV_MODE = os.getenv("ENV_MODE", "full")
 IS_ORCHESTRATOR = ENV_MODE == "orchestrator"
 
 # Lazy-loaded LLM Initialization

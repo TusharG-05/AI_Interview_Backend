@@ -24,6 +24,8 @@ router = APIRouter(prefix="/video", tags=["Video"])
 async def proctoring_status(interview_id: int = Query(0)):
     """Returns the current proctoring warning and detection details for a session."""
     camera_service = get_camera_service()
+    if not camera_service._detectors_ready:
+        return ApiResponse(status_code=202, data={"status": "initializing"}, message="Detectors are not ready yet.")
     warning = camera_service.get_current_warning(interview_id)
     detectors_ready = camera_service._detectors_ready
     last_result = camera_service.session_results.get(interview_id, {})

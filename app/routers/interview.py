@@ -17,6 +17,7 @@ from ..schemas.interview.questions import NextQuestionResponse, CodingQuestionBa
 from ..schemas.interview.status import TabSwitchRequest, PingResponse, KeepAliveRequest
 
 from ..auth.dependencies import get_current_user
+from ..core.config import IS_ORCHESTRATOR
 from pydantic import BaseModel
 import os
 import uuid
@@ -767,7 +768,7 @@ async def upload_selfie_session(
                 _logger.warning(f"Modal ArcFace call failed: {e}")
         
         # 2. Local Fallback (Skip in Orchestrator mode to avoid importing DeepFace)
-        if arcface_embedding is None and not is_orchestrator:
+        if arcface_embedding is None and not IS_ORCHESTRATOR:
             from deepface import DeepFace
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                 tmp.write(image_bytes)

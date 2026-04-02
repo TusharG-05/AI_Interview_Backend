@@ -12,7 +12,7 @@ from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answe
 from ..auth.dependencies import get_current_user_optional, get_admin_user
 from ..auth.security import get_password_hash
 from ..services.status_manager import record_status_change
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 logger = get_logger(__name__)
@@ -1936,41 +1936,42 @@ async def create_user(
             new_user.profile_image_bytes = image_bytes
             
             # A. Generate Face Embeddings (Hybrid Strategy)
-            try:
-                from deepface import DeepFace
-                import json
-                import tempfile
-                import os
-
-                embeddings_map = {}
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(image_bytes)
-                    tmp_path = tmp.name
-                
+            if not IS_ORCHESTRATOR:
                 try:
-                    # ArcFace
-                    try:
-                        arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                        if arc_objs:
-                            embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-                    except Exception as e:
-                        logger.warning(f"ArcFace failed during user creation: {e}")
+                    from deepface import DeepFace
+                    import json
+                    import tempfile
+                    import os
 
-                    # SFace
+                    embeddings_map = {}
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                        tmp.write(image_bytes)
+                        tmp_path = tmp.name
+                    
                     try:
-                        sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                        if sface_objs:
-                            embeddings_map["SFace"] = sface_objs[0]["embedding"]
-                    except Exception as e:
-                        logger.warning(f"SFace failed during user creation: {e}")
+                        # ArcFace
+                        try:
+                            arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                            if arc_objs:
+                                embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                        except Exception as e:
+                            logger.warning(f"ArcFace failed during user creation: {e}")
 
-                    if embeddings_map:
-                        new_user.face_embedding = json.dumps(embeddings_map)
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-            except Exception as e:
-                logger.error(f"Embedding generation failed: {e}")
+                        # SFace
+                        try:
+                            sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                            if sface_objs:
+                                embeddings_map["SFace"] = sface_objs[0]["embedding"]
+                        except Exception as e:
+                            logger.warning(f"SFace failed during user creation: {e}")
+
+                        if embeddings_map:
+                            new_user.face_embedding = json.dumps(embeddings_map)
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                except Exception as e:
+                    logger.error(f"Embedding generation failed: {e}")
 
             # B. Upload to Cloudinary
             try:

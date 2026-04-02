@@ -1,6 +1,7 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Optional
 from ..services.camera import CameraService
+from ..services.interview import USE_MODAL, get_modal_evaluator
 from ..core.config import local_llm, IS_ORCHESTRATOR
 
 from ..schemas.shared.api_response import ApiResponse
@@ -113,6 +114,7 @@ async def get_system_status(interview_id: Optional[int] = Query(None)):
     db_status, db_detail = _get_db_status()
     hw_status = "active (streaming)" if get_camera_service().running else "idle"
     proctoring_status, proctoring_details = _get_proctoring_status()
+    modal_status = _get_llm_status() if USE_MODAL else "disabled"
     
     # Get current warning (handle None interview_id)
     current_warning = get_camera_service().get_current_warning(interview_id) if interview_id else None

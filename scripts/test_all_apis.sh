@@ -5,7 +5,7 @@
 # =============================================================================
 set -o pipefail
 
-BASE="${BASE:-http://localhost:8000/api}"
+BASE="${BASE:-http://127.0.0.1:7861/api}"
 PASS=0
 FAIL=0
 FAILED_LIST=""

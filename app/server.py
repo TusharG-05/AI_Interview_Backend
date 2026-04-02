@@ -45,8 +45,8 @@ if not shutil.which("ffmpeg"):
     except ImportError:
         logger.warning("PRE-INIT: static_ffmpeg not installed on host.")
 
-# logger.info("PRE-INIT: Initializing database...")
-# init_db()
+logger.info("PRE-INIT: Initializing database...")
+init_db()
 
 # SENTRY: Professional Error Tracking
 if SENTRY_DSN:
