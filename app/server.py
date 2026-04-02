@@ -271,10 +271,23 @@ import time
 import json
 
 
+# --- Rate Limiting Strategy ---
+from fastapi import Depends
+from fastapi_limiter.depends import RateLimiter
+
+# 1. Global / General Limit (for lightweight APIs)
+general_limiter = [Depends(RateLimiter(times=100, seconds=60))]
+# 2. Auth Limit (Stricter to prevent brute force)
+auth_limiter = [Depends(RateLimiter(times=20, seconds=60))]
+# 3. Proctoring / Heartbeat Limit (Allow 2 req/sec for status/pings)
+heavy_ai_limiter = [Depends(RateLimiter(times=120, seconds=60))]
+# 4. Ultra-Heavy ML Tasks (Paper generation, result processing)
+ml_task_limiter = [Depends(RateLimiter(times=10, seconds=60))]
+
 # --- Router Inclusion (Instrumented for Cloud Debugging) ---
 print("\n\033[94m[STARTUP] Loading routers...\033[0m", flush=True)
 
-from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video
+from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video, admin_ws
 
 print("\033[94m[STARTUP] Including Auth, Settings, Admin, Teams...\033[0m", flush=True)
 app.include_router(auth.router, prefix="/api")
@@ -297,6 +310,8 @@ else:
     print("\033[94m[STARTUP] Including Video Router (Heavy)...\033[0m", flush=True)
     app.include_router(video.router, prefix="/api")
 
+# General Dashboard Websocket (Real-time monitoring)
+app.include_router(admin_ws.router, prefix="/api")
 
 print("\033[92m[STARTUP] All routers included successfully.\033[0m\n", flush=True)
 

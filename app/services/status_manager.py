@@ -307,7 +307,7 @@ def _get_warning_data(session: Session, interview_id: int, current_count: int, m
     }
 
 
-def _get_progress_data(session: Session, interview_session: InterviewSession, result: Optional[InterviewResult]) -> Dict[str, Any]:
+def _get_progress_data(interview_session: InterviewSession, result: Optional[InterviewResult]) -> Dict[str, Any]:
     """Helper to calculate interview progress and current question."""
     answered_questions = len(result.answers) if result else 0
     total_questions = len(interview_session.selected_questions) if interview_session.selected_questions else 0
@@ -354,7 +354,7 @@ def get_status_summary(
     warnings = _get_warning_data(session, interview_session.id, current_warn, max_warn)
     
     # 3. Progress
-    progress = _get_progress_data(session, interview_session, result)
+    progress = _get_progress_data(interview_session, result)
     
     # 4. Serialize users
     candidate_dict = serialize_user(interview_session.candidate)
@@ -400,7 +400,8 @@ def get_status_summary(
 
 def update_last_activity(
     session: Session,
-    interview_session: InterviewSession
+    interview_session: InterviewSession,
+    broadcast: bool = True
 ) -> None:
     """
     Update the last activity timestamp for a session.
@@ -408,7 +409,53 @@ def update_last_activity(
     Args:
         session: Database session
         interview_session: The interview session
+        broadcast: Whether to broadcast the update to admins
     """
     interview_session.last_activity = datetime.now(timezone.utc)
     session.add(interview_session)
     session.commit()
+    
+    if broadcast:
+        broadcast_interview_update(session, interview_session)
+
+def broadcast_interview_update(
+    session: Session,
+    interview_session: InterviewSession,
+    update_type: str = "interview_update"
+) -> None:
+    """
+    Gather full status summary and broadcast it to all connected admin dashboards.
+    
+    Args:
+        session: Database session
+        interview_session: The interview session
+        update_type: The type of update event to send
+    """
+    # 1. Get summary
+    try:
+        summary = get_status_summary(session, interview_session)
+        
+        # 2. Broadcast via WebSocket
+        from .websocket_manager import manager
+        import asyncio
+        
+        # Determine current loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    manager.broadcast_to_admins({
+                        "type": update_type,
+                        "interview_id": interview_session.id,
+                        "data": summary
+                    }), 
+                    loop
+                )
+            else:
+                logger.warning(f"WS Broadcast: Event loop not running for interview {interview_session.id}")
+        except RuntimeError:
+            # Fallback for threads without an event loop
+            logger.debug("WS Broadcast: No event loop in thread, skipping real-time update.")
+            
+    except Exception as e:
+        logger.error(f"WS Broadcast Update Fail: {e}")
