@@ -8,25 +8,15 @@ from ..core.config import local_llm, IS_ORCHESTRATOR
 from ..prompts.evaluation import evaluation_prompt
 from ..prompts.code_evaluation import code_evaluation_prompt
 from ..core.logger import get_logger
+from ..core.ai_clients import get_groq_client, call_llm
 from huggingface_hub import InferenceClient
-from groq import Groq
 
 logger = get_logger(__name__)
 
 
-# Modal integration flag (shared with audio.py)
-USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = "llama-3.3-70b-versatile"
-
-# Initialize Groq Client if key is available
-groq_client = None
-if GROQ_API_KEY:
-    try:
-        groq_client = Groq(api_key=GROQ_API_KEY)
-        logger.info("Groq client initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize Groq client: {e}")
+# Initialize Groq Client lazily via centralized ai_clients
+def get_interview_groq():
+    return get_groq_client()
 
 # Chain initialization (moved inside functions for lazy loading)
 
@@ -140,7 +130,8 @@ def evaluate_answer_content(
                     logger.warning(f"Modal attempt {attempt + 1} failed: {e}")
 
         # 2. Groq Fallback
-        if groq_client:
+        client = get_interview_groq()
+        if client:
             try:
                 system_instruction = (
                     "You are an expert technical interviewer. Evaluate the candidate's answer. "
