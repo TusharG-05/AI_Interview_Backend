@@ -1,5 +1,5 @@
-# Hugging Face Spaces Dockerfile
-# Uses python:3.11-slim; no aiortc/WebRTC (requires native libs unavailable on HF)
+# Hugging Face Spaces Dockerfile (v1 & v2)
+# Uses unified requirements.txt — includes core ML + app dependencies
 
 FROM python:3.11-slim
 
@@ -27,8 +27,8 @@ ENV HOME=/home/user \
     ENV=production
 
 # ── Install Python dependencies ──────────────────────────────────────────────
-# Copy only requirements first to leverage Docker layer cache
-COPY --chown=user requirements-hf-final.txt /app/requirements.txt
+# Copy unified requirements first to leverage Docker layer cache
+COPY --chown=user requirements.txt /app/requirements.txt
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt

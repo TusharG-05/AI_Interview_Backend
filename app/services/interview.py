@@ -261,7 +261,7 @@ def evaluate_code_submission(
 
     code_eval_chain = code_evaluation_prompt | local_llm
 
-    # --- Groq API ---
+    # --- Groq Fallback (High Speed) ---
     if groq_client:
         try:
             logger.info("evaluate_code: Attempting Groq API...")
@@ -498,18 +498,21 @@ def generate_questions_from_prompt(
         num_questions=num_questions,
     )
 
-    def _parse_json(raw: str) -> list[dict]:
-        """Strip markdown fences and parse JSON array."""
+    def _parse_json(raw: str) -> Union[list, dict]:
+        """Strip markdown fences and parse JSON."""
         content = raw.strip()
-        # Remove ```json ... ``` or ``` ... ``` wrappers
         if content.startswith("```"):
             lines = content.split("\n")
-            lines = [l for l in lines if not l.startswith("```")]
+            if lines[0].startswith("```"): lines = lines[1:]
+            if lines and lines[-1].strip() == "```": lines = lines[:-1]
             content = "\n".join(lines).strip()
-        data = json.loads(content)
-        if not isinstance(data, list):
-            raise ValueError("LLM did not return a JSON array")
-        return data
+        
+        try:
+            data = json.loads(content)
+            return data
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM JSON: {e}\nContent: {content}")
+            raise ValueError(f"LLM returned invalid JSON: {str(e)}")
 
     last_error = None
 
@@ -545,13 +548,26 @@ def generate_questions_from_prompt(
             # and returns a JSON object, not a raw array.
             
             result = _parse_json(content)
-            # Some LLMs wrap the array in a "questions" key if forced into "json_object" mode
-            if isinstance(result, dict) and "questions" in result:
-                result = result["questions"]
+            # If result is a dict, extract the questions list
+            if isinstance(result, dict):
+                if "questions" in result:
+                    result = result["questions"]
+                elif "data" in result: # and "data" ...
+                    result = result["data"]
+                else:
+                    # If it's a dict but no obvious key, maybe it's just one question?
+                    # Or check for any list value
+                    for val in result.values():
+                        if isinstance(val, list):
+                            result = val
+                            break
             
             if isinstance(result, list):
                 logger.info(f"generate_questions: Groq API returned {len(result)} questions")
                 return result
+            else:
+                logger.error(f"Groq returned non-list result: {result}")
+                raise ValueError("AI service returned an unexpected response format.")
         except Exception as e:
             last_error = f"Groq API failed: {str(e)}"
             logger.warning(last_error)

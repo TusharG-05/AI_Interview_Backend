@@ -1,4 +1,4 @@
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import MediaStreamTrack
 import av
 import logging
 from typing import Optional
@@ -14,30 +14,26 @@ class VideoTransformTrack(MediaStreamTrack):
     kind = "video"
 
     def __init__(self, track, interview_id: Optional[int] = None):
-        super().__init__()  # don't forget this!
+        super().__init__()
         self.track = track
-        self.camera_service = CameraService()
+        self.camera_service = CameraService()  # Singleton — same instance everywhere
         self.interview_id = interview_id
         self.frame_count = 0
-        logger.info(f"WebRTC Track Initialized for Session: {interview_id} (Cloud Optimization: Every 5th frame)")
+        logger.info(f"WebRTC Track Initialized for Session: {interview_id}")
 
     async def recv(self):
         try:
             frame = await self.track.recv()
             self.frame_count += 1
             
-            # Cloud Optimization: Only process every 5th frame to save CPU
-            # (Maintains ~6fps processing which is plenty for gaze/proctoring)
-            if self.frame_count % 5 != 0:
-                # Still need to return a frame to keep the stream alive
-                return frame
+            # Log every 90 frames (~3 seconds at 30fps)
+            if self.frame_count % 90 == 0:
+                logger.info(f"WebRTC: Processed {self.frame_count} frames for Session {self.interview_id}")
 
             # Convert WebRTC frame to numpy (BGR)
-            # aiortc uses pyav. 
             img = frame.to_ndarray(format="bgr24")
             
-            # Process Frame
-            # This handles detection, DB logging, and updating the Admin MJPEG stream
+            # Process: detection + annotation + store in session_frames
             annotated_img, _ = self.camera_service.process_frame_ndarray(img, self.interview_id)
             
             # Convert back to WebRTC frame
@@ -47,5 +43,7 @@ class VideoTransformTrack(MediaStreamTrack):
             return new_frame
             
         except Exception as e:
-            logger.error(f"WebRTC Frame Error: {e}")
+            logger.error(f"WebRTC: Frame Error Session {self.interview_id}: {e}")
+            if 'frame' in locals():
+                return frame
             raise

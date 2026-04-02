@@ -188,7 +188,7 @@ class InterviewSession(SQLModel, table=True):
 
     # Timing
     schedule_time: datetime
-    duration_minutes: int = Field(default=1440)  # 1 Day default
+    duration_minutes: int = Field(default=60)  # 60 Minutes default
     max_questions: int = Field(default=0)   # 0 = use all questions
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None

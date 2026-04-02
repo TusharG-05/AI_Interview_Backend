@@ -39,6 +39,7 @@ class CameraService:
         self.session_frames: dict[int, bytes] = {}
         self.session_frame_ids: dict[int, int] = {}
         self.session_warnings: dict[int, str] = {}
+        self.session_results: dict[int, dict] = {}  # last detection details for debugging
         self.session_start_times: dict[int, float] = {} # {interview_id: timestamp}
         self.session_last_active: dict[int, float] = {} # {interview_id: timestamp}
         
@@ -68,6 +69,11 @@ class CameraService:
         
         # Init Detectors in background (Stateless initialization)
         def init_detectors():
+            # HF/Cloud Optimization: Delay heavy initialization to ensure health check passes first
+            if os.getenv("SPACE_ID") or os.getenv("RENDER"):
+                logger.info("Cloud Environment: Delaying detector initialization (10s) for health check priority.")
+                time.sleep(10)
+
             logger.info("Background: Initializing Detectors...")
             gaze_path = "app/assets/face_landmarker.task"
             
@@ -180,6 +186,15 @@ class CameraService:
 
             # Update state for external status calls (Isolate by session)
             self.session_warnings[interview_id] = warning if warning else "No Issues"
+            self.session_results[interview_id] = {
+                "faces": int(n_face),
+                "gaze": str(gaze_status),
+                "warning": warning,
+                "detectors": {
+                    "face": bool(self.face_detector),
+                    "gaze": bool(self.gaze_detector)
+                }
+            }
             for callback in self._listeners:
                 try: 
                     callback(interview_id, self.session_warnings[interview_id])

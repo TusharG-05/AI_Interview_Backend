@@ -14,7 +14,7 @@ LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # Orchestrator & Environment Mode
-ENV_MODE = os.getenv("ENV_MODE", "development")
+ENV_MODE = os.getenv("ENV_MODE", "full")  # "full" or "orchestrator"
 IS_ORCHESTRATOR = ENV_MODE == "orchestrator"
 
 # Lazy-loaded LLM Initialization
@@ -111,6 +111,9 @@ CLOUDINARY_URL = os.getenv("CLOUDINARY_URL")
 CLOUDINARY_CLOUD_NAME = os.getenv("CLOUDINARY_CLOUD_NAME")
 CLOUDINARY_API_KEY = os.getenv("CLOUDINARY_API_KEY")
 CLOUDINARY_API_SECRET = os.getenv("CLOUDINARY_API_SECRET")
+
+# Cron authentication secret for manual/externally-scheduled tasks
+CRON_SECRET = os.getenv("CRON_SECRET", "")
 
 # Groq Configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")

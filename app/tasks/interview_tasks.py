@@ -167,3 +167,64 @@ def process_session_results_task(interview_id: int):
     logger.info(f"--- CELERY TASK STARTING: Processing session {interview_id} ---")
     with Session(engine) as db:
         process_session_results(interview_id, db)
+
+
+@celery_app.task(name="app.tasks.interview_tasks.expire_interviews_task")
+def expire_interviews_task():
+    """
+    Periodic task to automatically mark expired interviews.
+    Runs every minute to check for interviews that have passed their expiration time.
+    """
+    logger.info("--- CHECKING FOR EXPIRED INTERVIEWS ---")
+    with Session(engine) as db:
+        try:
+            from ..models.db_models import InterviewStatus
+            from datetime import timedelta
+            
+            now = datetime.now(timezone.utc)
+            
+            # Find interviews that are scheduled/live and have expired
+            # We need to check expiration in Python since SQLModel doesn't support complex datetime arithmetic easily
+            all_sessions = db.exec(
+                select(InterviewSession).where(
+                    InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+                )
+            ).all()
+            
+            expired_sessions = []
+            for session in all_sessions:
+                schedule_time = session.schedule_time
+                if schedule_time.tzinfo is None:
+                    schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+                
+                expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+                if now > expiration_time:
+                    expired_sessions.append(session)
+            
+            expired_count = 0
+            for session in expired_sessions:
+                schedule_time = session.schedule_time
+                if schedule_time.tzinfo is None:
+                    schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+                
+                expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+                
+                if now > expiration_time:
+                    logger.info(f"Expiring interview {session.id} (scheduled: {schedule_time}, duration: {session.duration_minutes}min)")
+                    session.status = InterviewStatus.EXPIRED
+                    db.add(session)
+                    expired_count += 1
+            
+            if expired_count > 0:
+                db.commit()
+                logger.info(f"Marked {expired_count} interviews as expired")
+            else:
+                logger.debug("No interviews to expire")
+                
+        except Exception as e:
+            logger.error(f"Error in expire_interviews_task: {e}", exc_info=True)
+            db.rollback()
+
+
+# Update the celery_app include to include the new task
+from ..core.celery_app import celery_app  # Re-import to ensure it's updated

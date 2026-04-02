@@ -44,16 +44,22 @@ else
     echo "🔗 Using external Redis at: $REDIS_URL"
 fi
 
-# ── Start Celery worker (Only if enabled) ──────────────────────────────────
+# ── Start Celery worker and Beat (Only if enabled and environment supports background processes) ─────────
 # In Orchestrator mode (Render), we use FastAPI BackgroundTasks directly 
-# to save memory. Disable celery worker by default on Render.
-if [[ "$DISABLE_CELERY" == "true" ]] || [[ "$ENV_MODE" == "orchestrator" ]]; then
-    echo "⭕ Celery worker is DISABLED/Skipped (Orchestrator Mode)."
+# to save memory. Disable celery worker by default on Render / Spaces.
+if [[ "$DISABLE_CELERY" == "true" ]] || [[ "$ENV_MODE" == "orchestrator" ]] || [ -n "$RENDER" ] || [ -n "$SPACE_ID" ]; then
+    echo "⭕ Celery worker and Beat are DISABLED/Skipped (Orchestrator Mode or Cloud Environment detected)."
+    echo "Use external cron services to call /api/admin/system/expire-interviews endpoint for expiration."
 else
     echo "Starting Celery worker..."
     celery -A app.core.celery_app worker --loglevel=info --concurrency=1 > /tmp/celery.log 2>&1 &
-    CELERY_PID=$!
-    echo "Celery worker started (PID: $CELERY_PID)"
+    CELERY_WORKER_PID=$!
+    echo "Celery worker started (PID: $CELERY_WORKER_PID)"
+
+    echo "Starting Celery Beat scheduler..."
+    celery -A app.core.celery_app beat --loglevel=info > /tmp/celery-beat.log 2>&1 &
+    CELERY_BEAT_PID=$!
+    echo "Celery Beat started (PID: $CELERY_BEAT_PID)"
 fi
 
 # ── Start FastAPI ─────────────────────────────────────────────────────────────

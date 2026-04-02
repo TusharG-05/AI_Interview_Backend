@@ -3,16 +3,16 @@ import json as _json
 from datetime import datetime
 from sqlalchemy import func
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form, Header
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
 from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, CodingAnswers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions, CandidateStatus
-from ..auth.dependencies import get_admin_user
+from ..auth.dependencies import get_current_user_optional, get_admin_user
 from ..auth.security import get_password_hash
 from ..services.status_manager import record_status_change
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 logger = get_logger(__name__)
@@ -103,7 +103,10 @@ async def list_papers(
     session: Annotated[Session, Depends(get_session)]
 ):
     """List all question papers created by the admin."""
-    stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
+    if current_user.role == UserRole.SUPER_ADMIN:
+        stmt = select(QuestionPaper)
+    else:
+        stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
     papers = session.exec(stmt).all()
     papers_data = [GetPaperResponse(
         id=p.id, name=p.name, description=p.description, 
@@ -238,8 +241,12 @@ async def get_paper(
 ):
     """Get details of a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+    
+    # Super Admin can access everything; Admin only their own
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this paper")
     paper_read = GetPaperResponse(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions),
@@ -266,8 +273,11 @@ async def update_paper(
 ):
     """Update a question paper's name or description."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+    
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this paper")
     
     update_data = paper_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -308,8 +318,11 @@ async def delete_paper(
 ):
     """Delete a question paper and all its associated questions."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+        
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this paper")
     
     # Check for existing sessions using this paper
     existing_sessions = session.exec(select(InterviewSession).where(InterviewSession.paper_id == paper_id)).first()
@@ -342,8 +355,11 @@ async def add_question_to_paper(
 ):
     """API for manually adding a new interview question to a paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+        
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to add questions to this paper")
         
     new_q = Questions(
         paper_id=paper_id,
@@ -376,8 +392,11 @@ async def list_paper_questions(
 ):
     """List all questions belonging to a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+        
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to view questions for this paper")
     questions = session.exec(select(Questions).where(Questions.paper_id == paper_id)).all()
     return ApiResponse(
         status_code=200,
@@ -682,11 +701,14 @@ async def list_all_questions(
 ):
     """List all questions across all papers owned by the admin (including global ones)."""
     # Use outer join to include questions without a paper_id
-    stmt = (
-        select(Questions)
-        .join(QuestionPaper, isouter=True)
-        .where((QuestionPaper.admin_user == current_user.id) | (Questions.paper_id == None))
-    )
+    if current_user.role == UserRole.SUPER_ADMIN:
+        stmt = select(Questions)
+    else:
+        stmt = (
+            select(Questions)
+            .join(QuestionPaper, isouter=True)
+            .where((QuestionPaper.admin_user == current_user.id) | (Questions.paper_id == None))
+        )
     questions = session.exec(stmt).all()
     return ApiResponse(
         status_code=200,
@@ -705,7 +727,7 @@ async def get_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.admin_user != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and q.paper and q.paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
     return ApiResponse(
         status_code=200,
@@ -725,7 +747,7 @@ async def update_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.admin_user != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and q.paper and q.paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this question")
     
     update_data = q_update.model_dump(exclude_unset=True)
@@ -785,15 +807,19 @@ async def schedule_interview(
     paper = None
     if schedule_data.paper_id is not None:
         paper = session.get(QuestionPaper, schedule_data.paper_id)
-        if not paper or paper.admin_user != current_user.id:
+        if not paper:
             raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
+        if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to use this question paper")
 
     # Validate Coding Paper (optional)
     coding_paper = None
     if schedule_data.coding_paper_id is not None:
         coding_paper = session.get(CodingQuestionPaper, schedule_data.coding_paper_id)
-        if not coding_paper or coding_paper.admin_user != current_user.id:
-            raise HTTPException(status_code=400, detail="Invalid Coding Paper ID — paper not found or you do not own it")
+        if not coding_paper:
+            raise HTTPException(status_code=400, detail="Invalid Coding Paper ID — paper not found")
+        if current_user.role != UserRole.SUPER_ADMIN and coding_paper.admin_user != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to use this coding paper")
 
     # Access fields before any commits to prevent DetachedInstanceError in background tasks
     candidate_email = candidate.email.strip()
@@ -957,22 +983,24 @@ async def schedule_interview(
 @router.get("/interviews", response_model=ApiResponse[List[AdminInterviewsList]])
 async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
     """List interviews created by this admin."""
-    # Only show sessions created by this admin (including those where admin is NULL)
-    sessions = session.exec(
-        select(InterviewSession)
-        .where(
-            (InterviewSession.admin_id == current_user.id) | 
-            (InterviewSession.admin_id == None)
-        )
-        .options(
-            selectinload(InterviewSession.admin),
-            selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.result)
-        )
-    ).all()
+    # Super Admins see everything
     if current_user.role == UserRole.SUPER_ADMIN:
         sessions = session.exec(
             select(InterviewSession)
+            .options(
+                selectinload(InterviewSession.admin),
+                selectinload(InterviewSession.candidate),
+                selectinload(InterviewSession.result)
+            )
+        ).all()
+    else:
+        # Regular admins only see their own (or public) interviews
+        sessions = session.exec(
+            select(InterviewSession)
+            .where(
+                (InterviewSession.admin_id == current_user.id) | 
+                (InterviewSession.admin_id == None)
+            )
             .options(
                 selectinload(InterviewSession.admin),
                 selectinload(InterviewSession.candidate),
@@ -1014,15 +1042,24 @@ async def get_live_status_dashboard(
         List of active interviews with basic status, warnings, and progress
     """
     
-    # Get all active interviews for this admin
-    # Active = not completed/cancelled/suspended permanently
-    stmt = select(InterviewSession).where(
-        InterviewSession.admin_id == current_user.id,
-        InterviewSession.status.in_([
-            InterviewStatus.SCHEDULED,
-            InterviewStatus.LIVE
-        ])
-    ).options(
+    # Role-based visibility
+    if current_user.role == UserRole.SUPER_ADMIN:
+        stmt = select(InterviewSession).where(
+            InterviewSession.status.in_([
+                InterviewStatus.SCHEDULED,
+                InterviewStatus.LIVE
+            ])
+        )
+    else:
+        stmt = select(InterviewSession).where(
+            InterviewSession.admin_id == current_user.id,
+            InterviewSession.status.in_([
+                InterviewStatus.SCHEDULED,
+                InterviewStatus.LIVE
+            ])
+        )
+    
+    stmt = stmt.options(
         selectinload(InterviewSession.selected_questions),
         selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
         selectinload(InterviewSession.candidate)
@@ -1147,7 +1184,7 @@ async def update_interview(
         raise HTTPException(status_code=404, detail="Interview session not found")
     
     # Authorization: verify the session belongs to the requesting admin
-    if interview_session.admin_id != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and interview_session.admin_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="Not authorized to modify this interview session"
@@ -1166,8 +1203,10 @@ async def update_interview(
     # Validate paper_id if provided
     if "paper_id" in update_dict:
         paper = session.get(QuestionPaper, update_dict["paper_id"])
-        if not paper or paper.admin_user != current_user.id:
+        if not paper:
             raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
+        if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to assign this paper")
     
     # Validate and convert schedule_time if provided
     if "schedule_time" in update_dict:
@@ -1279,7 +1318,7 @@ async def delete_interview(
         raise HTTPException(status_code=404, detail="Interview session not found")
     
     # Authorization: verify the session belongs to the requesting admin (handle NULL admin_id)
-    if interview_session.admin_id and interview_session.admin_id != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and interview_session.admin_id and interview_session.admin_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="Not authorized to delete this interview session"
@@ -1365,10 +1404,13 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
     # 1. Join with InterviewResult to only show sessions that have a generated result.
     # This prevents 404 errors when viewing detailed results for scheduled/invited sessions.
     from ..models.db_models import InterviewResult
+    if current_user.role == UserRole.SUPER_ADMIN:
+        stmt = select(InterviewSession).join(InterviewResult)
+    else:
+        stmt = select(InterviewSession).join(InterviewResult).where(InterviewSession.admin_id == current_user.id)
+        
     sessions = session.exec(
-        select(InterviewSession)
-        .join(InterviewResult)
-        .where(InterviewSession.admin_id == current_user.id)
+        stmt
         .options(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.admin),
@@ -1863,6 +1905,20 @@ async def create_user(
 ):
     """Create a new user with resume, profile picture, and face embeddings."""
     
+    # Role-based creation logic
+    if current_user.role == UserRole.ADMIN:
+        if role != UserRole.CANDIDATE:
+            raise HTTPException(
+                status_code=403, 
+                detail="Admins can only create candidates. For creating admins or super admins, please contact a super admin."
+            )
+    elif current_user.role == UserRole.SUPER_ADMIN:
+        # Super Admin can create any role
+        pass
+    else:
+        # Just in case some other role hits this
+        raise HTTPException(status_code=403, detail="Operation not permitted")
+    
     # 1. Existing user check
     existing_user = session.exec(select(User).where(User.email == email)).first()
     if existing_user:
@@ -2299,18 +2355,62 @@ async def delete_user(
         message="User and all associated data deleted successfully."
     )
 
-@router.post("/shutdown", response_model=ApiResponse[dict])
-def shutdown(current_user: User = Depends(get_admin_user)):
-    """Graceful shutdown trigger."""
-    if current_user.role != UserRole.SUPER_ADMIN: raise HTTPException(status_code=403)
+@router.post("/system/expire-interviews", response_model=ApiResponse[dict])
+async def expire_interviews_manually(
+    x_cron_secret: Optional[str] = Header(None, alias="X-CRON-SECRET"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    session: Session = Depends(get_session)
+):
+    """
+    Manually trigger interview expiration check.
+    This endpoint can be called by external cron services for platforms that don't support background processes.
     
-    # Graceful shutdown for Uvicorn
-    import signal
-    os.kill(os.getpid(), signal.SIGTERM) # SIGTERM allows cleaning up
+    For HF Spaces and Render free tier, set up a cron job to call this endpoint periodically.
+    Example cron: */5 * * * * curl -X POST https://your-app.com/api/admin/system/expire-interviews -H "X-CRON-SECRET: $CRON_SECRET"
+    """
+    authorized = False
+
+    if x_cron_secret and CRON_SECRET and x_cron_secret == CRON_SECRET:
+        authorized = True
+
+    if not authorized and current_user:
+        if current_user.role == UserRole.SUPER_ADMIN:
+            authorized = True
+
+    if not authorized:
+        raise HTTPException(status_code=403, detail="Unauthorized: invalid cron secret or admin token")
+    
+    from ..models.db_models import InterviewStatus
+    from datetime import timedelta
+    
+    now = datetime.now(timezone.utc)
+    expired_count = 0
+    
+    # Find interviews that are scheduled/live and have expired
+    candidate_sessions = session.exec(
+        select(InterviewSession).where(
+            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+        )
+    ).all()
+    
+    for interview_session in candidate_sessions:
+        schedule_time = interview_session.schedule_time
+        if schedule_time.tzinfo is None:
+            schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+        
+        expiration_time = schedule_time + timedelta(minutes=interview_session.duration_minutes)
+        if now > expiration_time:
+            interview_session.status = InterviewStatus.EXPIRED
+            session.add(interview_session)
+            expired_count += 1
+    
+    if expired_count > 0:
+        session.commit()
+    
     return ApiResponse(
         status_code=200,
-        data={},
-        message="Server shutting down..."
+        data={"expired_count": expired_count},
+        message=f"Expiration check completed. {expired_count} interviews marked as expired."
     )
 
 # --- Candidate Status Tracking ---
@@ -2365,63 +2465,4 @@ async def get_candidate_status(
         data=GetCandidateStatusResponse(**status_data),
         message="Candidate status retrieved successfully"
     )
-
-@router.get("/test-email")
-async def test_email(
-    background_tasks: BackgroundTasks,
-    email: Optional[str] = None,
-    current_user: User = Depends(get_admin_user)
-):
-    """Simple endpoint to test email configuration without scheduling an interview."""
-    target_email = email or current_user.email
-    subject = "AI Interview Platform - Diagnostic Test (Async)"
-    link = f"{APP_BASE_URL}/admin/dashboard"
-    
-    logger.info(f"Queuing async test email for {target_email}")
-    background_tasks.add_task(
-        email_service.send_interview_invitation,
-        to_email=target_email,
-        candidate_name=current_user.full_name,
-        link=link,
-        time_str="Just Now (Diagnostic Async)",
-        duration_minutes=0
-    )
-    
-    return ApiResponse(
-        status_code=200,
-        data={"sent_to": target_email, "mode": "async"},
-        message="Test email queued. Check server logs for delivery status."
-    )
-
-@router.get("/test-email-sync")
-async def test_email_sync(
-    email: Optional[str] = None,
-    current_user: User = Depends(get_admin_user)
-):
-    """Synchronous version of test-email to see errors immediately in Swagger."""
-    target_email = email or current_user.email
-    link = f"{APP_BASE_URL}/admin/dashboard"
-    
-    logger.info(f"Sending SYNC test email for {target_email}")
-    success, message = email_service.send_interview_invitation(
-        to_email=target_email,
-        candidate_name=current_user.full_name,
-        link=link,
-        time_str="Just Now (Diagnostic Sync)",
-        duration_minutes=0
-    )
-    
-    if success:
-        return ApiResponse(
-            status_code=200,
-            data={"sent_to": target_email, "mode": "sync", "details": message},
-            message="Test email sent successfully (Synchronous)."
-        )
-    else:
-        return ApiResponse(
-            status_code=500,
-            data={"sent_to": target_email, "mode": "sync", "error": message},
-            message="Failed to send email. Check error details.",
-            success=False
-        )
 

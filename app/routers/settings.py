@@ -23,7 +23,6 @@ def get_camera_service():
         _camera_service = CameraService()
     return _camera_service
 
-
 class ConnectionManager:
     def __init__(self):
         # {interview_id: [WebSocket]}
@@ -60,92 +59,63 @@ def camera_status_callback(interview_id: int, warning_key: str):
     except Exception as e:
         print(f"Callback Bridge Error: {e}")
 
-@router.get("/", response_model=ApiResponse[dict])
-async def get_system_status(interview_id: Optional[int] = Query(None)):
-    """Comprehensive health check for AI services (Isolate by session)."""
+def _get_llm_status() -> str:
     from ..services.interview import USE_MODAL, get_modal_evaluator
-
-    llm_status = "error"
-    modal_status = "disabled"
-
     if USE_MODAL:
         try:
             evaluator_cls = get_modal_evaluator()
             if evaluator_cls:
-                # Check if we can obtain the remote method reference
-                # (This verifies the class exists in the remote registry)
-                if hasattr(evaluator_cls, "evaluate"):
-                    modal_status = "healthy (connected)"
-                else:
-                    modal_status = "error (method 'evaluate' not found on remote class)"
-            else:
-                from ..services.interview import _modal_lookup_error
-                modal_status = f"error ({_modal_lookup_error or 'evaluator ref not obtained'})"
+                return "healthy (connected)" if hasattr(evaluator_cls, "evaluate") else "error (method 'evaluate' not found on remote class)"
+            from ..services.interview import _modal_lookup_error
+            return f"error ({_modal_lookup_error or 'evaluator ref not obtained'})"
         except Exception as e:
             logger.error(f"Modal evaluator lookup failed: {e}", exc_info=True)
-            modal_status = "error (internal connection failure)"
-        llm_status = modal_status # Modal is the primary LLM
-    else:
-        # Check Groq First (Primary Fallback)
-        if os.getenv("GROQ_API_KEY"):
-            llm_status = "healthy (Groq API fallback)"
-        else:
-            if not IS_ORCHESTRATOR:
-                try:
-                    local_llm.invoke("ping")
-                    llm_status = "healthy (local Ollama)"
-                except Exception:
-                    # Fallback to Hugging Face Inference API check
-                    if os.getenv("HF_TOKEN"):
-                        llm_status = "healthy (HF Inference API fallback)"
-                    else:
-                        llm_status = "disconnected (local Ollama not found & no fallback keys)"
-            else:
-                # Orchestrator mode with no remote keys
-                if os.getenv("HF_TOKEN"):
-                    llm_status = "healthy (HF Inference API fallback)"
-                else:
-                    llm_status = "disabled (Orchestrator Mode - Local Ollama skipped)"
+            return "error (internal connection failure)"
+            
+    if os.getenv("GROQ_API_KEY"):
+        return "healthy (Groq API fallback)"
+        
+    if not IS_ORCHESTRATOR:
+        try:
+            from ..core.config import local_llm
+            local_llm.invoke("ping")
+            return "healthy (local Ollama)"
+        except Exception:
+            return "healthy (HF Inference API fallback)" if os.getenv("HF_TOKEN") else "disconnected (local Ollama not found & no fallback keys)"
+            
+    return "healthy (HF Inference API fallback)" if os.getenv("HF_TOKEN") else "disabled (Orchestrator Mode - Local Ollama skipped)"
 
-    
-    # Check Database Status
-    db_status = "unknown"
-    db_detail = ""
+def _get_db_status() -> tuple[str, str]:
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-            db_status = "healthy"
+            return "healthy", ""
     except Exception as e:
-        db_status = "unhealthy"
-        db_detail = str(e)
         logger.error(f"Database health check failed: {e}")
+        return "unhealthy", str(e)
 
-    hw_status = "idle"
-    if get_camera_service().running:
-
-        hw_status = "active (streaming)"
-    
-    # Enhanced proctoring status
-    proctoring_status = "initializing/off"
-    proctoring_details = {}
-    if get_camera_service()._detectors_ready:
-
-        proctoring_status = "healthy"
-        proctoring_details = {
-            "face_detector": "✓ active" if get_camera_service().face_detector else "✗ failed",
-            "gaze_detector": "✓ active" if get_camera_service().gaze_detector else "✗ failed"
-
+def _get_proctoring_status() -> tuple[str, dict]:
+    service = get_camera_service()
+    if service._detectors_ready:
+        return "healthy", {
+            "face_detector": "✓ active" if service.face_detector else "✗ failed",
+            "gaze_detector": "✓ active" if service.gaze_detector else "✗ failed"
         }
-    else:
-        proctoring_details = {
-            "status": "Initializing detectors...",
-            "face_detector": "initializing",
-            "gaze_detector": "initializing"
-        }
+    return "unknown", {
+        "status": "initializing / disabled",
+        "reason": "Wait for cameras to start or running in Orchestrator Mode"
+    }
+
+@router.get("/", response_model=ApiResponse[dict])
+async def get_system_status(interview_id: Optional[int] = Query(None)):
+    """Comprehensive health check for AI services (Isolate by session)."""
+    llm_status = _get_llm_status()
+    db_status, db_detail = _get_db_status()
+    hw_status = "active (streaming)" if get_camera_service().running else "idle"
+    proctoring_status, proctoring_details = _get_proctoring_status()
     
     # Get current warning (handle None interview_id)
     current_warning = get_camera_service().get_current_warning(interview_id) if interview_id else None
-
     
     return ApiResponse(
         status_code=200,
@@ -181,12 +151,10 @@ async def websocket_status(websocket: WebSocket, interview_id: int = None):
     
     if not _listener_registered:
         get_camera_service().add_listener(camera_status_callback)
-
         _listener_registered = True
         
     try:
         await websocket.send_json({"warning": get_camera_service().get_current_warning(interview_id)})
-
         while True:
             await websocket.receive_text() # Keep-alive
     except WebSocketDisconnect:

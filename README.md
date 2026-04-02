@@ -232,6 +232,28 @@ For detailed deployment instructions, see [deployment_guide.md](deployment_guide
 
 ---
 
+## Interview Expiration (Cloud Deployments)
+
+**HF Spaces and Render free tier don't support background processes**, so automatic expiration uses external cron services instead of Celery Beat.
+
+### Setting up Cron Jobs
+For platforms without background process support, use external services to periodically call the expiration endpoint:
+
+```bash
+# Manual trigger (replace YOUR_TOKEN with super admin JWT)
+curl -X POST https://your-app.com/api/admin/system/expire-interviews \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Recommended Cron Services
+- **Cron-Job.org** (Free) - Set up hourly jobs
+- **GitHub Actions** - Use workflow schedules
+- **Railway Cron** - If deploying on Railway
+
+See [CRON_SETUP.md](CRON_SETUP.md) for detailed instructions.
+
+---
+
 ## Database
 
 The system uses **PostgreSQL** with **SQLModel** (SQLAlchemy) and **Alembic** for migrations.
