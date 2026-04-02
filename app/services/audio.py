@@ -1,15 +1,9 @@
 import os
 import asyncio
 from pathlib import Path
-from ..core.config import IS_ORCHESTRATOR
+from ..core.config import IS_ORCHESTRATOR, USE_MODAL
 from ..core.logger import get_logger
-
-
 logger = get_logger(__name__)
-
-# Modal integration flag
-USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
-
 # Lazy import Modal only when needed
 _modal_transcribe = None
 

@@ -748,7 +748,8 @@ async def upload_selfie_session(
     
     # 5. Generate embeddings from uploaded selfie
     try:
-        from ..services.face import USE_MODAL, get_modal_embedding
+        from ..services.face import get_modal_embedding
+        from ..core.config import USE_MODAL
         
         arcface_embedding = None
         sface_embedding = None

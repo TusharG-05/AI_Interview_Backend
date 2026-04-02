@@ -4,7 +4,7 @@ import json
 from typing import Dict, Union, Optional, Any
 from sqlmodel import Session, select
 from ..models.db_models import Questions
-from ..core.config import local_llm, IS_ORCHESTRATOR
+from ..core.config import local_llm, IS_ORCHESTRATOR, USE_MODAL
 from ..prompts.evaluation import evaluation_prompt
 from ..prompts.code_evaluation import code_evaluation_prompt
 from ..core.logger import get_logger

@@ -1,8 +1,8 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from typing import Optional
 from ..services.camera import CameraService
-from ..services.interview import USE_MODAL, get_modal_evaluator
-from ..core.config import local_llm, IS_ORCHESTRATOR
+from ..services.interview import get_modal_evaluator
+from ..core.config import local_llm, IS_ORCHESTRATOR, USE_MODAL
 
 from ..schemas.shared.api_response import ApiResponse
 from ..core.database import engine
@@ -61,7 +61,8 @@ def camera_status_callback(interview_id: int, warning_key: str):
         print(f"Callback Bridge Error: {e}")
 
 def _get_llm_status() -> str:
-    from ..services.interview import USE_MODAL, get_modal_evaluator
+    from ..services.interview import get_modal_evaluator
+    from ..core.config import USE_MODAL
     if USE_MODAL:
         try:
             evaluator_cls = get_modal_evaluator()

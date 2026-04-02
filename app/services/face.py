@@ -10,8 +10,7 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 
-# Modal integration flag
-USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
+from ..core.config import IS_ORCHESTRATOR, USE_MODAL
 
 # Lazy import Modal DeepFace
 _modal_get_embedding = None

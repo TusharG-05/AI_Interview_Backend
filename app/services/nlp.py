@@ -1,5 +1,6 @@
 import re
 import uuid
+import os
 from ..core.logger import get_logger
 from ..core.ai_clients import call_llm
 
@@ -22,6 +23,58 @@ class NLPService:
         # Note: evaluate_answer_content returns a dict with "score"
         result = evaluate_answer_content(question=text2, answer=text1)
         return float(result.get("score", 0.0)) / 10.0 # Normalize 0-10 to 0-1
+
+    def get_interview_prompt_from_resume(self, resume_path: str) -> str:
+        """
+        Extracts text from a resume file and generates a structured interview prompt.
+        """
+        import requests
+        import tempfile
+        
+        temp_file_path = None
+        try:
+            # 1. Handle Cloudinary or Local Path
+            if resume_path.startswith(('http://', 'https://')):
+                response = requests.get(resume_path, timeout=30)
+                if response.status_code != 200:
+                    logger.error(f"Failed to download resume from {resume_path}")
+                    return ""
+                
+                ext = os.path.splitext(resume_path.split('?')[0])[1] or ".pdf"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                    tmp.write(response.content)
+                    temp_file_path = tmp.name
+            else:
+                if not os.path.exists(resume_path):
+                    logger.error(f"Resume file not found at {resume_path}")
+                    return ""
+                temp_file_path = resume_path
+
+            # 2. Extract and AI-Structure the Resume
+            resume_text = self.extract_text_from_file(temp_file_path)
+            if not resume_text:
+                return ""
+
+            structured_resume = self.arrange_resume_with_ai(resume_text)
+
+            # 3. Format Structured Prompt
+            prompt = (
+                f"Objective: Generate a comprehensive interview question paper based on the candidate's background summarized below.\n\n"
+                f"Instructions:\n"
+                f"1. Technical Depth: Align the question difficulty with the candidate's professional level.\n"
+                f"2. Question Mix: Include a balanced mix of core conceptual, practical, and situational questions.\n"
+                f"3. Focus Areas: Focus 70% of questions on the primary tech stack identified in the summary.\n"
+                f"4. Professionalism: Ensure industry-standard clarity.\n\n"
+                f"Candidate Profile Summary:\n"
+                f"{structured_resume}"
+            )
+            return prompt
+
+        finally:
+            # Clean up temp file if downloaded
+            if temp_file_path and resume_path.startswith('http') and os.path.exists(temp_file_path):
+                try: os.remove(temp_file_path)
+                except: pass
 
     def extract_text_from_file(self, file_path):
         """Extracts raw text from .txt, .pdf, or .docx files."""
@@ -83,57 +136,45 @@ class NLPService:
     def extract_qa_from_file(self, file_path, questions_only=False):
         """Extracts Q&A pairs (or just questions) from .txt, .pdf, .docx, or .xlsx files."""
         ext = os.path.splitext(file_path)[1].lower()
-        content = ""
-
+        
         try:
             if ext in ['.xlsx', '.xls']:
-                import pandas as pd
-                # For Excel, we use pandas
-                df = pd.read_excel(file_path)
-                
-                # Priority 1: Search for common column names
-                target_col = None
-                common_names = ['question', 'questions', 'q']
-                for col in df.columns:
-                    if str(col).lower() in common_names:
-                        target_col = col
-                        break
-                
-                if target_col is not None:
-                    questions = df[target_col].dropna().astype(str).tolist()
-                elif len(df.columns) >= 2:
-                    # Priority 2: 2nd column (skip serial no)
-                    questions = df.iloc[:, 1].dropna().astype(str).tolist()
-                else:
-                    # Priority 3: 1st column
-                    questions = df.iloc[:, 0].dropna().astype(str).tolist()
-                
-                return [{'question': q.strip()} for q in questions if q.strip()]
+                return self._extract_from_excel(file_path)
+            
+            content = self.extract_text_from_file(file_path)
+            if not content:
+                return []
 
-            if ext == '.txt':
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            elif ext == '.pdf':
-                import fitz  # PyMuPDF
-                doc = fitz.open(file_path)
-                content = "\n".join([page.get_text() for page in doc])
-                doc.close()
-            elif ext == '.docx':
-                from docx import Document
-                doc = Document(file_path)
-                content = "\n".join([para.text for para in doc.paragraphs])
-            else:
-                raise ValueError(f"Unsupported file format: {ext}")
+            # Debug: Print first 500 chars to see what was extracted
+            logger.debug(f"--- DOCUMENT CONTENT PREVIEW ({ext}) ---")
+            logger.debug(content[:500])
+            logger.debug("---------------------------------------")
+
+            return self.parse_qa_pairs(content, questions_only=questions_only)
         except Exception as e:
-            logger.error(f"Error reading file {file_path}: {e}")
+            logger.error(f"Error extracting QA from {file_path}: {e}")
             return []
 
-        # Debug: Print first 500 chars to see what was extracted
-        logger.debug(f"--- DOCUMENT CONTENT PREVIEW ({ext}) ---")
-        logger.debug(content[:500])
-        logger.debug("---------------------------------------")
-
-        return self.parse_qa_pairs(content, questions_only=questions_only)
+    def _extract_from_excel(self, file_path):
+        import pandas as pd
+        df = pd.read_excel(file_path)
+        
+        # Priority 1: Search for common column names
+        target_col = None
+        common_names = ['question', 'questions', 'q']
+        for col in df.columns:
+            if str(col).lower() in common_names:
+                target_col = col
+                break
+        
+        if target_col is not None:
+            questions = df[target_col].dropna().astype(str).tolist()
+        elif len(df.columns) >= 2:
+            questions = df.iloc[:, 1].dropna().astype(str).tolist()
+        else:
+            questions = df.iloc[:, 0].dropna().astype(str).tolist()
+        
+        return [{'question': q.strip()} for q in questions if q.strip()]
 
     def parse_qa_pairs(self, text, questions_only=False):
         """

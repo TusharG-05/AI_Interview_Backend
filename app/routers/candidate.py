@@ -133,7 +133,8 @@ async def upload_selfie(
     
         # 3. Generate Dual Embeddings (Hybrid Strategy)
     try:
-        from ..services.face import USE_MODAL, get_modal_embedding
+        from ..services.face import get_modal_embedding
+        from ..core.config import USE_MODAL
         import json
         import tempfile
         import os

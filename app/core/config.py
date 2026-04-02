@@ -16,6 +16,7 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # Orchestrator & Environment Mode
 ENV_MODE = os.getenv("ENV_MODE", "full")
 IS_ORCHESTRATOR = ENV_MODE == "orchestrator"
+USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
 
 # Lazy-loaded LLM Initialization
 _local_llm = None
