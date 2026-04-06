@@ -22,6 +22,28 @@ from pydantic import BaseModel
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+import random
+import redis.asyncio as redis
+from ..core.config import REDIS_URL
+from ..services.email import EmailService
+from ..schemas.auth.login import OtpRequest, OtpVerifyRequest
+from ..auth.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+
+def set_auth_cookie(response: Response, token: str):
+    """Sets the access_token cookie with secure flags."""
+    from ..core.config import ENV
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {token}",
+        httponly=True,
+        secure=ENV == "production",  # True in prod, False in dev (allows localhost)
+        samesite="lax",              # Required for cross-site requests (if frontend/backend are on diff domains)
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+
+# Initialize services for OTP
+email_service = EmailService()
+redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 from pydub import AudioSegment
 import logging
@@ -30,6 +52,124 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
+
+@router.post("/otp-send", response_model=ApiResponse[dict])
+async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_session)):
+    """
+    Generate and send a 6-digit OTP to the candidate's email.
+    Verifies that the candidate is assigned to the provided interview link.
+    """
+    # 1. Verify user exists and is a candidate
+    user = session.exec(select(User).where(User.email == otp_data.email.lower())).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found with this email.")
+    
+    if user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=400, 
+            detail="Email-based OTP login is currently restricted to candidates."
+        )
+
+    # 2. Verify interview session token matches the candidate
+    interview = session.exec(
+        select(InterviewSession).where(
+            InterviewSession.access_token == otp_data.access_token,
+            InterviewSession.candidate_id == user.id
+        )
+    ).first()
+    
+    if not interview:
+        raise HTTPException(
+            status_code=401, 
+            detail="Invalid interview link. Please ensure you are using the correct link from your invitation."
+        )
+
+    # 3. Generate a secure 6-digit OTP
+    otp = f"{random.randint(100000, 999999)}"
+    
+    # 4. Store in Redis with a 10-minute expiry
+    redis_key = f"otp:{user.email.lower()}:{otp_data.access_token}"
+    try:
+        await redis_client.set(redis_key, otp, ex=600)
+        logger.info(f"OTP generated and stored for {user.email}")
+    except Exception as e:
+        logger.error(f"Failed to store OTP in Redis: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error (Cache failure).")
+    
+    # 5. Send Email via EmailService
+    success = email_service.send_otp_email(user.email, otp)
+    if not success:
+        logger.error(f"Failed to send OTP email to {user.email}")
+        raise HTTPException(status_code=500, detail="Failed to deliver verification email. Please try again later.")
+        
+    return ApiResponse(
+        status_code=200, 
+        data={}, 
+        message="A verification code has been sent to your email. It will expire in 10 minutes."
+    )
+
+@router.post("/otp-verify", response_model=ApiResponse[dict])
+async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session: Session = Depends(get_session)):
+    """
+    Verify the OTP code and issue a JWT access token for the candidate.
+    """
+    # 1. Check Redis for the stored OTP
+    redis_key = f"otp:{verify_data.email.lower()}:{verify_data.access_token}"
+    try:
+        stored_otp = await redis_client.get(redis_key)
+    except Exception as e:
+        logger.error(f"Failed to retrieve OTP from Redis: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error (Cache failure).")
+    
+    if not stored_otp:
+        raise HTTPException(
+            status_code=401, 
+            detail="Verification code has expired or was never requested."
+        )
+    
+    if stored_otp != verify_data.otp:
+        # In a production app, we might count failed attempts here
+        raise HTTPException(
+            status_code=401, 
+            detail="Invalid verification code. Please check your email and try again."
+        )
+
+    # 2. Extract User and finish login
+    user = session.exec(select(User).where(User.email == verify_data.email.lower())).first()
+    if not user:
+         raise HTTPException(status_code=404, detail="User accounts out of sync. Please contact support.")
+
+    # 3. Clean up OTP from Redis
+    await redis_client.delete(redis_key)
+
+    # 4. Generate JWT Token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    
+    # 5. Set Auth Cookie (Secure HttpOnly)
+    set_auth_cookie(response, token)
+    
+    from .teams import _serialize_team_basic
+    team_data = _serialize_team_basic(user.team, session) if user.team else None
+
+    token_data = {
+        "access_token": token, 
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": str(user.role.value) if hasattr(user.role, "value") else str(user.role),
+        "profile_image": user.profile_image,
+        "team": team_data
+    }
+
+    return ApiResponse(
+        status_code=200,
+        data=token_data,
+        message="Login successful. Redirecting to your interview..."
+    )
+
 from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
 from ..services.status_manager import record_status_change, update_last_activity, broadcast_interview_update, add_violation

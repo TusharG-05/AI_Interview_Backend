@@ -7,6 +7,15 @@ class LoginRequest(BaseModel):
     password: str
     access_token: Optional[str] = None
 
+class OtpRequest(BaseModel):
+    email: str
+    access_token: str
+
+class OtpVerifyRequest(BaseModel):
+    email: str
+    otp: str
+    access_token: str
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str
