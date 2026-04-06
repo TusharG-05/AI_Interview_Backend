@@ -1,5 +1,5 @@
 from typing import Generator, Optional
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, status, Request, WebSocket, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlmodel import Session
@@ -82,3 +82,45 @@ def get_current_user_optional(
     
     user = session.query(User).filter(User.email == email).first()
     return user
+
+async def get_current_user_ws(
+    websocket: WebSocket,
+    token: Optional[str] = Query(None),
+    session: Session = Depends(get_session)
+) -> User:
+    """Validate current user for WebSocket connections."""
+    if not token:
+        token = websocket.cookies.get("access_token")
+        
+    if not token:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Token missing")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+    except JWTError:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+    
+    user = session.query(User).filter(User.email == email).first()
+    if user is None:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+    
+    return user
+
+async def get_admin_user_ws(current_user: User = Depends(get_current_user_ws)) -> User:
+    """Ensure the WebSocket user is an admin."""
+    if current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+        # Note: We can't easily close from here if we want to return the user, 
+        # but the endpoint can check the role or we can raise and let FastAPI handle it.
+        # However, for WS, it's better to be explicit.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="The user doesn't have enough privileges"
+        )
+    return current_user

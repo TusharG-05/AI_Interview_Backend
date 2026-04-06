@@ -1,4 +1,6 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from ..auth.dependencies import get_current_user_ws
+from ..models.db_models import User, UserRole
 from typing import Optional
 from ..services.camera import CameraService
 from ..services.interview import get_modal_evaluator
@@ -142,9 +144,28 @@ async def get_system_status(interview_id: Optional[int] = Query(None)):
     )
 
 @router.websocket("/ws")
-async def websocket_status(websocket: WebSocket, interview_id: int = None):
+async def websocket_status(
+    websocket: WebSocket, 
+    interview_id: int = None,
+    current_user: User = Depends(get_current_user_ws)
+):
     """Real-time proctoring alert feed (Isolate by Session)."""
     global _listener_registered
+    
+    if current_user is None:
+        return
+
+    # Security: Candidate can only listen to THEIR OWN session.
+    # Admin / SuperAdmin can listen to anyone.
+    if current_user.role == UserRole.CANDIDATE:
+         from ..core.database import engine
+         from sqlmodel import Session, select
+         from ..models.db_models import InterviewSession
+         with Session(engine) as db_session:
+             session_obj = db_session.get(InterviewSession, interview_id)
+             if not session_obj or session_obj.candidate_id != current_user.id:
+                 await websocket.close(code=4003, reason="Forbidden: Not your session")
+                 return
     
     if interview_id is None:
         await websocket.close(code=4000, reason="interview_id parameter is required")
