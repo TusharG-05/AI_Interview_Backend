@@ -27,7 +27,7 @@ from ..schemas.shared.team import TeamReadBasic
 from ..schemas.admin.coding import CodingQuestionFull, CodingPaperFull, GenerateCodingPaperRequest, CodingPaperCreateRequest, CodingPaperUpdateRequest, CodingQuestionCreateRequest, CodingQuestionUpdateRequest
 from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail,AdminInterviewsList
 InterviewSessionDetail = AdminInterviewSessionDetail
-from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
 from ..schemas.shared.user import UserNested, serialize_user
 
 
@@ -83,17 +83,30 @@ def get_cloudinary_service():
 
 # --- Question Paper & Question Management ---
 
-@router.get("/papers", response_model=ApiResponse[List[GetPaperResponse]])
+@router.get("/papers", response_model=ApiResponse[PaginatedResponse[GetPaperResponse]])
 async def list_papers(
     current_user: Annotated[User, Depends(get_admin_user)],
-    session: Annotated[Session, Depends(get_session)]
+    session: Annotated[Session, Depends(get_session)],
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None
 ):
     """List all question papers created by the admin."""
-    if current_user.role == UserRole.SUPER_ADMIN:
-        stmt = select(QuestionPaper)
-    else:
-        stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
-    papers = session.exec(stmt).all()
+    query = select(QuestionPaper)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where(QuestionPaper.admin_user == current_user.id)
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(QuestionPaper.name.ilike(search_filter))
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    papers = session.exec(
+        query.order_by(QuestionPaper.id.desc()).offset(skip).limit(limit)
+    ).all()
+    
     papers_data = [GetPaperResponse(
         id=p.id, name=p.name, description=p.description, 
         question_count=len(p.questions), 
@@ -105,9 +118,15 @@ async def list_papers(
         created_at=p.created_at.isoformat(),
         created_by=serialize_user(p.admin, fallback_role="admin")
     ) for p in papers]
+    
     return ApiResponse(
         status_code=200,
-        data=papers_data,
+        data={
+            "items": papers_data,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Question papers retrieved successfully"
     )
 
@@ -370,9 +389,12 @@ async def add_question_to_paper(
         message="Question added to paper successfully"
     )
 
-@router.get("/papers/{paper_id}/questions", response_model=ApiResponse[List[Questions]])
+@router.get("/papers/{paper_id}/questions", response_model=ApiResponse[PaginatedResponse[Questions]])
 async def list_paper_questions(
     paper_id: int,
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -383,10 +405,31 @@ async def list_paper_questions(
         
     if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view questions for this paper")
-    questions = session.exec(select(Questions).where(Questions.paper_id == paper_id)).all()
+        
+    query = select(Questions).where(Questions.paper_id == paper_id)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(
+            (Questions.content.ilike(search_filter)) | 
+            (Questions.question_text.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    questions = session.exec(
+        query.order_by(Questions.id.desc()).offset(skip).limit(limit)
+    ).all()
+        
     return ApiResponse(
         status_code=200,
-        data=questions,
+        data={
+            "items": questions,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message=f"Questions for paper '{paper.name}' retrieved successfully"
     )
 
@@ -680,25 +723,43 @@ async def delete_question(
         message="Question deleted successfully"
     )
 
-@router.get("/questions", response_model=ApiResponse[List[Questions]])
+@router.get("/questions", response_model=ApiResponse[PaginatedResponse[Questions]])
 async def list_all_questions(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """List all questions across all papers owned by the admin (including global ones)."""
     # Use outer join to include questions without a paper_id
-    if current_user.role == UserRole.SUPER_ADMIN:
-        stmt = select(Questions)
-    else:
-        stmt = (
-            select(Questions)
-            .join(QuestionPaper, isouter=True)
-            .where((QuestionPaper.admin_user == current_user.id) | (Questions.paper_id == None))
+    query = select(Questions).join(QuestionPaper, isouter=True)
+    
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where((QuestionPaper.admin_user == current_user.id) | (Questions.paper_id == None))
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(
+            (Questions.content.ilike(search_filter)) | 
+            (Questions.question_text.ilike(search_filter))
         )
-    questions = session.exec(stmt).all()
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    questions = session.exec(
+        query.order_by(Questions.id.desc()).offset(skip).limit(limit)
+    ).all()
+    
     return ApiResponse(
         status_code=200,
-        data=questions,
+        data={
+            "items": questions,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Questions retrieved successfully"
     )
 
@@ -966,33 +1027,43 @@ async def schedule_interview(
         message="Interview scheduled successfully"
     )
 
-@router.get("/interviews", response_model=ApiResponse[List[AdminInterviewsList]])
-async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+@router.get("/interviews", response_model=ApiResponse[PaginatedResponse[AdminInterviewsList]])
+async def list_interviews(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
     """List interviews created by this admin."""
-    # Super Admins see everything
-    if current_user.role == UserRole.SUPER_ADMIN:
-        sessions = session.exec(
-            select(InterviewSession)
-            .options(
-                selectinload(InterviewSession.admin),
-                selectinload(InterviewSession.candidate),
-                selectinload(InterviewSession.result)
-            )
-        ).all()
-    else:
-        # Regular admins only see their own (or public) interviews
-        sessions = session.exec(
-            select(InterviewSession)
-            .where(
-                (InterviewSession.admin_id == current_user.id) | 
-                (InterviewSession.admin_id == None)
-            )
-            .options(
-                selectinload(InterviewSession.admin),
-                selectinload(InterviewSession.candidate),
-                selectinload(InterviewSession.result)
-            )
-        ).all()
+    query = select(InterviewSession)
+    
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where(
+            (InterviewSession.admin_id == current_user.id) | 
+            (InterviewSession.admin_id == None)
+        )
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.join(InterviewSession.candidate).where(
+            (User.full_name.ilike(search_filter)) | (User.email.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .options(
+            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result)
+        )
+    ).all()
+
     results = []
     for s in sessions:
         # Serialize users with role-based keys, handling NULL users
@@ -1009,7 +1080,12 @@ async def list_interviews(current_user: User = Depends(get_admin_user), session:
         ))
     return ApiResponse(
         status_code=200,
-        data=results,
+        data={
+            "items": results,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Interviews retrieved successfully"
     )
 
@@ -1383,20 +1459,34 @@ async def list_candidates(
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=ApiResponse[List[GetAdminResultsListResponse]])
-async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+@router.get("/users/results", response_model=ApiResponse[PaginatedResponse[GetAdminResultsListResponse]])
+async def get_all_results(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
     """API for the admin dashboard: Returns a flat list of candidate interview sessions and their results."""
     
-    # 1. Join with InterviewResult to only show sessions that have a generated result.
-    # This prevents 404 errors when viewing detailed results for scheduled/invited sessions.
     from ..models.db_models import InterviewResult
-    if current_user.role == UserRole.SUPER_ADMIN:
-        stmt = select(InterviewSession).join(InterviewResult)
-    else:
-        stmt = select(InterviewSession).join(InterviewResult).where(InterviewSession.admin_id == current_user.id)
+    query = select(InterviewSession).join(InterviewResult)
+    
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where(InterviewSession.admin_id == current_user.id)
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.join(InterviewSession.candidate).where(
+            (User.full_name.ilike(search_filter)) | (User.email.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
         
     sessions = session.exec(
-        stmt
+        query.order_by(InterviewSession.id.desc())
+        .offset(skip).limit(limit)
         .options(
             selectinload(InterviewSession.candidate),
             selectinload(InterviewSession.admin),
@@ -1424,7 +1514,12 @@ async def get_all_results(current_user: User = Depends(get_admin_user), session:
 
     return ApiResponse(
         status_code=200,
-        data=[result.model_dump(by_alias=True) for result in results],
+        data={
+            "items": [result.model_dump(by_alias=True) for result in results],
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="All interview results retrieved successfully"
     )
 
@@ -2039,9 +2134,28 @@ async def create_user(
         media_type="application/json"
     )
 
-@router.get("/users", response_model=ApiResponse[List[UserRead]])
-async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    users_orm = session.exec(select(User)).all()
+@router.get("/users", response_model=ApiResponse[PaginatedResponse[UserRead]])
+async def list_users(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
+    query = select(User)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(
+            (User.full_name.ilike(search_filter)) | (User.email.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    users_orm = session.exec(
+        query.order_by(User.id.desc()).offset(skip).limit(limit)
+    ).all()
     from .teams import _serialize_team_basic
     
     users_data = []
@@ -2059,7 +2173,12 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
         
     return ApiResponse(
         status_code=200,
-        data=users_data,
+        data={
+            "items": users_data,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Users retrieved successfully"
     )
 

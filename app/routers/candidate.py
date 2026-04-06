@@ -2,11 +2,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
+from sqlalchemy import func
 from ..core.database import get_db as get_session
 import random
 from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions, InterviewStatus, CandidateStatus
 from ..services.status_manager import record_status_change
-from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
 
@@ -21,16 +22,23 @@ from ..utils import format_iso_datetime
 
 
 
-@router.get("/history", response_model=ApiResponse[List[HistoryItem]])
+@router.get("/history", response_model=ApiResponse[PaginatedResponse[HistoryItem]])
 async def my_history(
+    skip: int = 0,
+    limit: int = 20,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    statement = select(InterviewSession).where(
+    query = select(InterviewSession).where(
         InterviewSession.candidate_id == current_user.id
-    ).order_by(InterviewSession.schedule_time.desc())
+    )
     
-    sessions = session.exec(statement).all()
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.schedule_time.desc()).offset(skip).limit(limit)
+    ).all()
     
     history = []
     for s in sessions:
@@ -50,24 +58,37 @@ async def my_history(
             current_status=s.current_status,
             allow_copy_paste=s.allow_copy_paste or False,
         ))
+        
     return ApiResponse(
         status_code=200,
-        data=history,
+        data={
+            "items": history,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Interview history retrieved successfully"
     )
 
-@router.get("/interviews", response_model=ApiResponse[List[HistoryItem]])
+@router.get("/interviews", response_model=ApiResponse[PaginatedResponse[HistoryItem]])
 async def my_interviews(
+    skip: int = 0,
+    limit: int = 20,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     """Fetch scheduled and upcoming interviews for the candidate."""
-    statement = select(InterviewSession).where(
+    query = select(InterviewSession).where(
         InterviewSession.candidate_id == current_user.id,
         InterviewSession.status == InterviewStatus.SCHEDULED
-    ).order_by(InterviewSession.schedule_time.asc())
+    )
     
-    sessions = session.exec(statement).all()
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.schedule_time.asc()).offset(skip).limit(limit)
+    ).all()
     
     interviews = []
     for s in sessions:
@@ -87,9 +108,15 @@ async def my_interviews(
             current_status=s.current_status,
             allow_copy_paste=s.allow_copy_paste or False,
         ))
+        
     return ApiResponse(
         status_code=200,
-        data=interviews,
+        data={
+            "items": interviews,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Upcoming interviews retrieved successfully"
     )
 

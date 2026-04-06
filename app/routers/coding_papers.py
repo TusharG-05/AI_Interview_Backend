@@ -10,11 +10,12 @@ import json as _json
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
+from sqlalchemy import func
 
 from ..core.database import get_db as get_session
 from ..models.db_models import CodingQuestionPaper, CodingQuestions, InterviewSession, User, Team
 from ..auth.dependencies import get_admin_user
-from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
 from ..schemas.admin.coding import (
     CodingPaperFull, 
     CodingQuestionFull,
@@ -102,14 +103,27 @@ async def create_coding_paper(
     )
 
 
-@router.get("/", response_model=ApiResponse[List[CodingPaperFull]])
+@router.get("/", response_model=ApiResponse[PaginatedResponse[CodingPaperFull]])
 async def list_coding_papers(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session),
-) -> ApiResponse[List[CodingPaperFull]]:
+):
     """List all coding papers owned by the current admin."""
-    stmt = select(CodingQuestionPaper).where(CodingQuestionPaper.admin_user == current_user.id)
-    papers = session.exec(stmt).all()
+    query = select(CodingQuestionPaper).where(CodingQuestionPaper.admin_user == current_user.id)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(CodingQuestionPaper.name.ilike(search_filter))
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    papers = session.exec(
+        query.order_by(CodingQuestionPaper.id.desc()).offset(skip).limit(limit)
+    ).all()
 
     result = []
     for p in papers:
@@ -120,8 +134,13 @@ async def list_coding_papers(
 
     return ApiResponse(
         status_code=200,
-        data=result,
-        message=f"{len(result)} coding paper(s) retrieved",
+        data={
+            "items": result,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
+        message="Coding papers retrieved successfully",
     )
 
 
@@ -270,25 +289,45 @@ async def add_coding_question(
     )
 
 
-@router.get("/{paper_id}/questions", response_model=ApiResponse[List[CodingQuestionFull]])
+@router.get("/{paper_id}/questions", response_model=ApiResponse[PaginatedResponse[CodingQuestionFull]])
 async def list_coding_questions(
     paper_id: int,
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session),
-) -> ApiResponse[List[CodingQuestionFull]]:
+):
     """List all questions belonging to a specific coding paper."""
     paper = session.get(CodingQuestionPaper, paper_id)
     if not paper or paper.admin_user != current_user.id:
         raise HTTPException(status_code=404, detail="Coding paper not found")
 
+    query = select(CodingQuestions).where(CodingQuestions.paper_id == paper_id)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(
+            (CodingQuestions.title.ilike(search_filter)) | 
+            (CodingQuestions.problem_statement.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
     questions = session.exec(
-        select(CodingQuestions).where(CodingQuestions.paper_id == paper_id)
+        query.order_by(CodingQuestions.id.desc()).offset(skip).limit(limit)
     ).all()
 
     return ApiResponse(
         status_code=200,
-        data=[_build_question_full(q) for q in questions],
-        message=f"{len(questions)} question(s) retrieved",
+        data={
+            "items": [_build_question_full(q) for q in questions],
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
+        message="Coding questions retrieved successfully",
     )
 
 

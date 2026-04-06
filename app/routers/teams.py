@@ -10,7 +10,7 @@ from ..schemas.teams.management import TeamCreateRequest as TeamCreate, TeamUpda
 from ..schemas.teams.management import TeamDetailResponse as TeamRead
 from ..schemas.shared.team import TeamReadBasic
 from ..schemas.admin.papers import GetPaperResponse as PaperRead, AdminQuestionRead as QuestionRead
-from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
 from ..schemas.shared.user import UserNested
 from ..core.logger import get_logger
 from ..utils import format_iso_datetime
@@ -119,16 +119,32 @@ async def create_team(
 # LIST — Admin + Super Admin
 # ---------------------------------------------------------------------------
 
-@router.get("/teams", response_model=ApiResponse[List[TeamReadBasic]])
+@router.get("/teams", response_model=ApiResponse[PaginatedResponse[TeamReadBasic]])
 async def list_teams(
     current_user: Annotated[User, Depends(get_admin_user)],
-    session: Annotated[Session, Depends(get_session)]
+    session: Annotated[Session, Depends(get_session)],
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None
 ):
     """
     List all teams. Returns only basic team information without nested papers.
     *(Admin + Super Admin)*
     """
-    teams = session.exec(select(Team).order_by(Team.name)).all()
+    query = select(Team)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(Team.name.ilike(search_filter))
+        
+    from sqlalchemy import func
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    teams = session.exec(
+        query.order_by(Team.name.asc()).offset(skip).limit(limit)
+    ).all()
+    
     # Serialize, completely omitting nested data
     data = []
     for t in teams:
@@ -136,7 +152,12 @@ async def list_teams(
         
     return ApiResponse(
         status_code=200,
-        data=data,
+        data={
+            "items": data,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Teams retrieved successfully"
     )
 

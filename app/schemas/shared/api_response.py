@@ -22,3 +22,9 @@ class ApiErrorResponse(BaseModel):
     def model_dump(self, **kwargs):
         kwargs.setdefault("exclude_none", True)
         return super().model_dump(**kwargs)
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    items: list[T]
+    total: int
+    skip: int
+    limit: int
