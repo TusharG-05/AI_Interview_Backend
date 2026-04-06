@@ -6,7 +6,10 @@ from ..services.camera import CameraService
 from ..schemas.shared.api_response import ApiResponse
 from pydantic import BaseModel
 import json
+import time
 from ..core.logger import get_logger
+from ..auth.dependencies import get_current_user_ws
+from ..models.db_models import User, UserRole
 
 # Proctoring/Heartbeat Limit (2 req/sec)
 heavy_throttle = [Depends(RateLimiter(times=120, seconds=60))]
@@ -43,12 +46,31 @@ async def proctoring_status(interview_id: int = Query(0)):
     )
 
 @router.websocket("/stream/{interview_id}")
-async def websocket_video_stream(websocket: WebSocket, interview_id: int):
+async def websocket_video_stream(
+    websocket: WebSocket, 
+    interview_id: int,
+    current_user: User = Depends(get_current_user_ws)
+):
     """
     Binary WebSocket Fallback for Video Proctoring.
     Receives raw frames from client, processes them via CameraService,
     and returns real-time AI results (JSON) over the same connection.
     """
+    if current_user is None:
+        return
+
+    # Security: Candidate can only stream for THEIR OWN session.
+    # Admin / SuperAdmin can stream for anyone.
+    if current_user.role == UserRole.CANDIDATE:
+         from ..core.database import engine
+         from sqlmodel import Session, select
+         from ..models.db_models import InterviewSession
+         with Session(engine) as db_session:
+             session_obj = db_session.get(InterviewSession, interview_id)
+             if not session_obj or session_obj.candidate_id != current_user.id:
+                 await websocket.close(code=4003, reason="Forbidden: Not your session")
+                 return
+
     await websocket.accept()
     camera_service = get_camera_service()
     
