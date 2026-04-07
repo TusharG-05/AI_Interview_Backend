@@ -1,34 +1,53 @@
 import multiprocessing
 import time
-# Other imports moved inside worker for Windows spawn stability
+import logging
+
+logger = logging.getLogger(__name__)
 
 def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessing.Queue, max_faces: int, model_path: str):
     """
     Processes video frames using MediaPipe FaceLandmarker.
     Calculates eye ratios to determine gaze direction and blink state.
     """
-    print("GazeWorker: Process Started (Pre-Import)", flush=True)
+    import logging
+    worker_logger = logging.getLogger("gaze_worker")
+    worker_logger.info("GazeWorker: Process Started")
+    
     landmarker = None
     try:
         import os
-        print("GazeWorker: Imported os", flush=True)
         import cv2
-        print("GazeWorker: Imported cv2", flush=True)
         import numpy as np
-        print("GazeWorker: Imported numpy", flush=True)
         import mediapipe as mp
-        print("GazeWorker: Imported mediapipe", flush=True)
         from mediapipe.tasks import python
-        print("GazeWorker: Imported mediapipe.tasks.python", flush=True)
         from mediapipe.tasks.python import vision
-        print("GazeWorker: Imported mediapipe.tasks.python.vision", flush=True)
         from ..utils.image_processing import convert_to_rgb
         
         abs_model_path = os.path.abspath(model_path)
-        print(f"GazeWorker: Initializing MediaPipe with model: {abs_model_path}", flush=True)
+        
+        # Resolve model path relative to app/assets
+        if not os.path.exists(abs_model_path):
+            curr_dir = os.path.dirname(os.path.abspath(__file__))
+            potential_paths = [
+                os.path.join(curr_dir, "..", "assets", "face_landmarker.task"),
+                os.path.join(os.getcwd(), "app", "assets", "face_landmarker.task"),
+                "/app/app/assets/face_landmarker.task", # Docker/HF common path
+                "/app/assets/face_landmarker.task" # Alternative HF path
+            ]
+            for p in potential_paths:
+                if os.path.exists(p):
+                    abs_model_path = os.path.abspath(p)
+                    worker_logger.info(f"GazeWorker: Found model at: {p}")
+                    break
+
+        if os.getenv("SPACE_ID"):
+            worker_logger.info("Cloud Environment (HF Spaces) detected. Using CPU-optimized MediaPipe settings.")
+    
+        worker_logger.info(f"GazeWorker: Initializing MediaPipe FaceLandmarker with model: {abs_model_path}")
     
         if not os.path.exists(abs_model_path):
-            print(f"GazeWorker ERROR: Model file not found at {abs_model_path}", flush=True)
+            worker_logger.error(f"GazeWorker: CRITICAL ERROR - Model file missing at {abs_model_path}. Proctoring will fail.")
+            return
 
         base_options = python.BaseOptions(model_asset_path=abs_model_path)
         options = vision.FaceLandmarkerOptions(
@@ -41,27 +60,25 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
             min_tracking_confidence=0.25
         )
         
-        landmarker = vision.FaceLandmarker.create_from_options(options)
-        print("GazeWorker: MediaPipe Landmarker created successfully.", flush=True)
+        try:
+            landmarker = vision.FaceLandmarker.create_from_options(options)
+            worker_logger.info("GazeWorker: MediaPipe landmarker initialized successfully.")
+        except Exception as mp_e:
+            worker_logger.error(f"GazeWorker: MediaPipe creation failed: {mp_e}")
+            return
         
         # State tracking for grace period
         suspicious_start_time = None
-        SUSPICION_THRESHOLD = 2.5  # Seconds before flagging "Looking Down" (increased for natural glances)
-        
+        SUSPICION_THRESHOLD = 3.0  # Seconds before flagging any suspicious gaze
         
         # Thresholds (Tuned based on user feedback)
-        # Right gaze ratio is usually lower (towards 0.0), Left is higher (towards 1.0)
-        # User reported Right was less sensitive -> WE NEED TO RAISE THE MIN THRESHOLD slightly
-        # so it triggers "Right" sooner.
-        # New: 0.45 (was 0.42) - Triggers "Right" easier
-        # New: 0.58 (unchanged) - Keeps "Left" sensitivity
-        H_MIN, H_MAX = 0.45, 0.58
-        V_MIN, V_MAX = 0.38, 0.62 
+        H_MIN, H_MAX = 0.44, 0.56
+        V_MIN, V_MAX = 0.48, 0.62 
         
         while True:
             try:
                 bgr_frame = frame_queue.get(timeout=1)
-            except:
+            except multiprocessing.queues.Empty:
                 continue
                 
             if bgr_frame is None: 
@@ -97,7 +114,7 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                             # Helper for Iris Ratio (0.0=Left, 0.5=Center, 1.0=Right)
                             def get_iris_position(p1, p2, iris):
                                 total = np.linalg.norm(p2 - p1)
-                                if total <= 1e-6: return 0.5 # Avoid division by zero with small epsilon
+                                if total <= 1e-6: return 0.5
                                 return np.linalg.norm(iris - p1) / total
 
                             # -- Horizontal --
@@ -111,15 +128,11 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                             avg_v = (r_left_v + r_right_v) / 2
                             
                             # -- Distance-Adaptive Blink Detection --
-                            # Instead of absolute frame height, use face height (landmark 10 to 152)
                             face_height = np.linalg.norm(mesh[10] - mesh[152])
                             eye_height = np.linalg.norm(mesh[159] - mesh[145])
-                            # Adaptive threshold: if eyes are closed less than 6% of face height
                             is_blinking = eye_height < (face_height * 0.05)
 
                             # --- DECISION LOGIC ---
-                            # We separate "Immediate Warnings" (Left/Right/Up) from "Buffered Warnings" (Down/Blink)
-                            
                             raw_state = "Center"
                             
                             if avg_h < H_MIN: raw_state = "Right"
@@ -128,42 +141,37 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                             elif avg_v > V_MAX: raw_state = "Down"
                             elif is_blinking:   raw_state = "Blink"
                             
-                            # Process Grace Period
-                            if raw_state in ["Down", "Blink"]:
-                                # Potential suspicious activity (looking down or sleeping)
+                            # Process Unified Grace Period (5 Seconds)
+                            # Any state other than "Center" increments the timer
+                            if raw_state != "Center":
                                 if suspicious_start_time is None:
                                     suspicious_start_time = time.time()
                                 
                                 elapsed = time.time() - suspicious_start_time
                                 
                                 if elapsed > SUSPICION_THRESHOLD:
-                                    final_status = "WARNING: Looking Down/Sleeping"
+                                    # Formulate descriptive warning
+                                    msg = f"Looking {raw_state}" if raw_state != "Blink" else "Sleeping/Eyes Closed"
+                                    final_status = f"WARNING: {msg}"
                                 else:
-                                    # Within safe buffer time
-                                    final_status = "Safe: Center (Blinking/Glance)"
+                                    final_status = f"Safe: Center (Brief {raw_state})"
                                     
-                            elif raw_state in ["Left", "Right", "Up"]:
-                                # Immediate Warnings for other directions
-                                final_status = f"WARNING: Looking {raw_state}"
-                                suspicious_start_time = None
-                                
                             else:
-                                # Safe Center
                                 final_status = "Safe: Center"
                                 suspicious_start_time = None
                                 
                 if result_queue.full():
                     try: result_queue.get_nowait()
-                    except: pass
+                    except multiprocessing.queues.Empty: pass
                 result_queue.put(final_status)
 
             except Exception as e:
-                print(f"GazeWorker Logic Error: {e}", flush=True)
+                worker_logger.error(f"GazeWorker Logic Error: {e}")
 
     except Exception as e:
-        print(f"GazeWorker CRITICAL FAILURE: {e}", flush=True)
+        worker_logger.critical(f"GazeWorker CRITICAL FAILURE: {e}")
         import traceback
-        traceback.print_exc()
+        worker_logger.error(traceback.format_exc())
 
     if landmarker:
         landmarker.close()
@@ -171,23 +179,36 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
 # =============================================================================
 # BACKEND API: GazeDetector Class
 # =============================================================================
+from ..core.config import IS_ORCHESTRATOR
+
 class GazeDetector:
     def __init__(self, model_path='app/assets/face_landmarker.task', max_faces=1):
-        print("Initializing GazeDetector...")
+        logger.info("Initializing GazeDetector...")
         self.model_path = model_path
+        
+        # --- Skip initialization in Orchestrator Mode (Render Free Tier) ---
+        if IS_ORCHESTRATOR:
+            logger.info("GazeDetector: Orchestrator Mode enabled. Worker Process DISABLED to save memory.")
+            self.worker = None
+            self.frame_queue = None
+            self.result_queue = None
+            return
+
         self.frame_queue = multiprocessing.Queue(maxsize=1)
         self.result_queue = multiprocessing.Queue(maxsize=1)
         
-        print(f"GazeDetector initialized with model: {model_path}")
+        logger.info(f"GazeDetector initialized with model: {model_path}")
         self.worker = multiprocessing.Process(
             target=gaze_worker,
             args=(self.frame_queue, self.result_queue, max_faces, self.model_path)
         )
         self.worker.daemon = True
         self.worker.start()
-        print("Gaze Worker started.")
+        logger.info("Gaze Worker started.")
         
     def process_frame(self, frame_bgr):
+        if IS_ORCHESTRATOR:
+            return None
         try:
             # Send BGR directly; worker will convert to RGB
             if not self.frame_queue.full():
@@ -195,15 +216,16 @@ class GazeDetector:
                 
             try:
                 return self.result_queue.get_nowait()
-            except:
+            except multiprocessing.queues.Empty:
                 return None
         except Exception as e:
-            print(f"Gaze API Error: {e}")
+            logger.error(f"Gaze API Error: {e}")
             return None
             
     def close(self):
         try:
             self.frame_queue.put(None)
-            self.worker.join()
-        except:
+            self.worker.join(timeout=5)
+        except Exception as e:
+            logger.warning(f"Error closing gaze worker gracefully: {e}")
             self.worker.terminate()

@@ -1,15 +1,13 @@
-import cv2
 import threading
 import time
 import os
-import numpy as np
-from typing import Optional, Tuple
-from .face import FaceDetector
-from .gaze import GazeDetector
+from typing import Optional, Tuple, Any
+from ..core.config import IS_ORCHESTRATOR
 from ..utils.image_processing import decode_image
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
+
 
 class CameraService:
     """
@@ -31,18 +29,26 @@ class CameraService:
         if self._initialized: return
         self._initialized = True
         
-        self.face_detector: Optional[FaceDetector] = None
-        self.gaze_detector: Optional[GazeDetector] = None
+        self.face_detector: Optional[Any] = None
+        self.gaze_detector: Optional[Any] = None
+
         self.running: bool = False
         self._listeners = []
-        self._current_warning = "System Initializing..."
         
-        # We no longer strictly need these for WebSocket mode, but keeping for compatibility
-        self.latest_frame: Optional[bytes] = None
-        self.frame_id: int = 0
-        self.current_warning_text: str = ""
+        # Session Isolation: {interview_id: value}
+        self.session_frames: dict[int, bytes] = {}
+        self.session_frame_ids: dict[int, int] = {}
+        self.session_warnings: dict[int, str] = {}
+        self.session_results: dict[int, dict] = {}  # last detection details for debugging
+        self.session_start_times: dict[int, float] = {} # {interview_id: timestamp}
+        self.session_last_active: dict[int, float] = {} # {interview_id: timestamp}
+        
+        from concurrent.futures import ThreadPoolExecutor
+        self.executor = ThreadPoolExecutor(max_workers=5)
+        
         self.frame_lock = threading.Lock()
         self._detectors_ready = False
+        self._monitor_thread = None
 
     def start(self, video_source=None):
         """
@@ -50,33 +56,52 @@ class CameraService:
         video_source is ignored in Client-Side mode but kept for signature compatibility.
         """
         if self.running: return
+        
+        # --- Skip heavy detector initialization in Orchestrator Mode ---
+        if IS_ORCHESTRATOR:
+            logger.info("CameraService: Running in ORCHESTRATOR mode. Background detectors disabled.")
+
+            self.running = True
+            self._detectors_ready = True # Allow frames to pass through without analysis
+            return
+
         logger.info("Starting CameraService (Client-Side Streaming Mode)...")
         
-        # Init Detectors in background
+        # Init Detectors in background (Stateless initialization)
         def init_detectors():
+            # HF/Cloud Optimization: Delay heavy initialization to ensure health check passes first
+            if os.getenv("SPACE_ID") or os.getenv("RENDER"):
+                logger.info("Cloud Environment: Delaying detector initialization (10s) for health check priority.")
+                time.sleep(10)
+
             logger.info("Background: Initializing Detectors...")
-            known_path = "app/assets/known_person.jpg"
             gaze_path = "app/assets/face_landmarker.task"
             
-            if os.path.exists(known_path):
-                try:
-                    self.face_detector = FaceDetector(known_person_path=known_path)
-                    logger.info("Background: FaceDetector ready.")
-                except Exception as e:
-                    logger.error(f"Background: FaceDetector failed: {e}")
+            try:
+                from .face import FaceDetector
+                # FaceDetector no longer needs known_path in constructor (Multi-User Refactor)
+                self.face_detector = FaceDetector()
+                logger.info("Background: FaceDetector ready.")
+            except Exception as e:
+                logger.error(f"Background: FaceDetector failed: {e}", exc_info=True)
             
             if os.path.exists(gaze_path):
                 try:
+                    from .gaze import GazeDetector
                     self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
                     logger.info("Background: GazeDetector ready.")
                 except Exception as e:
-                    logger.error(f"Background: GazeDetector failed: {e}")
+                    logger.error(f"Background: GazeDetector failed: {e}", exc_info=True)
+            else:
+                logger.warning(f"Background: Gaze model not found at {gaze_path}. Checking alternative paths...")
             
+            # Mark ready even if one detector fails - allows partial proctoring
             self._detectors_ready = True
-            logger.info("Background: All Detectors Initialized.")
+            logger.info(f"Background: Detectors Initialized (Face: {'✓' if self.face_detector else '✗'}, Gaze: {'✓' if self.gaze_detector else '✗'}).")
 
         threading.Thread(target=init_detectors, daemon=True).start()
         self.running = True
+        self.start_monitor()
 
     def stop(self):
         self.running = False
@@ -85,22 +110,158 @@ class CameraService:
         if self.gaze_detector:
             self.gaze_detector.close()
 
-    def process_external_frame(self, image_bytes, session_id: Optional[int] = None):
+    def process_frame_ndarray(self, frame: Any, interview_id: int):
+
+        """
+        Core logic: Processes a numpy BGR frame (from WS or WebRTC).
+        Returns: (annotated_frame, result_dict)
+        """
+        try:
+            # Analyze
+            face_status = (False, 1.0, 0, [])
+            gaze_status = "No Gaze"
+            
+            if self.face_detector:
+                f_res = self.face_detector.process_frame(frame, interview_id)
+                if f_res: face_status = f_res
+            
+            if self.gaze_detector:
+                g_res = self.gaze_detector.process_frame(frame)
+                if g_res: gaze_status = g_res
+
+            found, dist, n_face, locs = face_status
+            
+            # --- ANNOTATE ---
+            if locs:
+                import cv2
+                for (top, right, bottom, left) in locs:
+                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+
+            
+            warning = ""
+            if n_face > 1: warning = "MULTIPLE FACES DETECTED"
+            elif n_face == 0: warning = "NO FACE DETECTED"
+            elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
+            elif "WARNING" in str(gaze_status): warning = str(gaze_status)
+
+            # Update latest frame for MJPEG stream (Isolate by session)
+            with self.frame_lock:
+                import cv2
+                success, buffer = cv2.imencode('.jpg', frame)
+                if success:
+                    self.session_frames[interview_id] = buffer.tobytes()
+                self.session_frame_ids[interview_id] = self.session_frame_ids.get(interview_id, 0) + 1
+
+                if interview_id not in self.session_start_times:
+                    self.session_start_times[interview_id] = time.time()
+                self.session_last_active[interview_id] = time.time()
+
+            # --- PERSIST PROCTORING EVENT (With Grace Period) ---
+            GRACE_PERIOD = 30 # Seconds
+            in_grace_period = (time.time() - self.session_start_times.get(interview_id, time.time())) < GRACE_PERIOD
+            
+            if warning and not in_grace_period:
+                def persist_violation(iid, warn, n_f, fnd, g_s):
+                    from ..core.database import engine
+                    from sqlmodel import Session
+                    from ..services.status_manager import add_violation
+                    from ..models.db_models import InterviewSession
+                    
+                    try:
+                        with Session(engine) as db_session:
+                            interview_session = db_session.get(InterviewSession, iid)
+                            if interview_session:
+                                add_violation(
+                                    session=db_session,
+                                    interview_session=interview_session,
+                                    event_type=warn,
+                                    details=f"Faces: {n_f}, Auth: {fnd}, Gaze: {g_s}"
+                                )
+                    except Exception as e:
+                        logger.error(f"Async Violation Persist Error: {e}")
+
+                self.executor.submit(persist_violation, interview_id, warning, n_face, found, gaze_status)
+            elif warning and in_grace_period:
+                logger.debug(f"Proctoring: Alert suppressed during grace period for Session {interview_id}")
+
+            # Update state for external status calls (Isolate by session)
+            self.session_warnings[interview_id] = warning if warning else "No Issues"
+            self.session_results[interview_id] = {
+                "faces": int(n_face),
+                "gaze": str(gaze_status),
+                "warning": warning,
+                "detectors": {
+                    "face": bool(self.face_detector),
+                    "gaze": bool(self.gaze_detector)
+                }
+            }
+            for callback in self._listeners:
+                try: 
+                    callback(interview_id, self.session_warnings[interview_id])
+                except Exception as e:
+                    logger.warning(f"Listener callback failed: {e}")
+
+            result_dict = {
+                "auth": bool(found),
+                "auth_dist": float(dist) if dist is not None else 1.0,
+                "faces": int(n_face),
+                "gaze": str(gaze_status),
+                "warning": warning,
+                "box": locs[0] if locs else None
+            }
+            return frame, result_dict
+
+        except Exception as e:
+            logger.error(f"Core Frame Process Error: {e}")
+            return frame, {"warning": "Server Error"}
+
+    def start_monitor(self):
+        """Starts background monitoring for detector health."""
+        if self._monitor_thread and self._monitor_thread.is_alive(): return
+        
+        def monitor_loop():
+            logger.info("Detector Monitor Started.")
+            while self.running:
+                time.sleep(5)
+                # Face Detector Check
+                if self.face_detector and not self.face_detector.worker.is_alive():
+                    logger.warning("MONITOR: FaceDetector worker died. Restarting...")
+                    try:
+                        from .face import FaceDetector
+                        self.face_detector = FaceDetector()
+                    except Exception as e:
+                        logger.error(f"MONITOR: Failed to restart FaceDetector: {e}")
+                
+                # Gaze Detector Check
+                if self.gaze_detector and not self.gaze_detector.worker.is_alive():
+                    logger.warning("MONITOR: GazeDetector worker died. Restarting...")
+                    try:
+                        from .gaze import GazeDetector
+                        self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
+                    except Exception as e:
+                        logger.error(f"MONITOR: Failed to restart GazeDetector: {e}")
+
+                # Cleanup stale sessions (TTL: 10 minutes)
+                STALE_TTL = 600
+                now = time.time()
+                stale_ids = [
+                    sid for sid, last_active in self.session_last_active.items()
+                    if (now - last_active) > STALE_TTL
+                ]
+                for sid in stale_ids:
+                    logger.info(f"MONITOR: Auto-clearing stale session {sid}")
+                    self.clear_session(sid)
+
+        self._monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+        self._monitor_thread.start()
+
+    def process_external_frame(self, image_bytes, interview_id: Optional[int] = None):
         """
         Processes a frame received from the client via WebSocket.
         Returns a dict of analysis results.
         """
         if not self._detectors_ready:
              return {"warning": "INITIALIZING AI...", "auth": False, "gaze": "Loading..."}
-
-        # Senior Dev Hardening: Worker Heartbeat Check
-        if self.face_detector and not self.face_detector.worker.is_alive():
-            logger.warning("RECOVERY: FaceDetector worker died. Restarting...")
-            self.face_detector = FaceDetector(known_person_path="app/assets/known_person.jpg")
-            
-        if self.gaze_detector and not self.gaze_detector.worker.is_alive():
-            logger.warning("RECOVERY: GazeDetector worker died. Restarting...")
-            self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
 
         try:
             # Decode image using utility
@@ -109,99 +270,37 @@ class CameraService:
             if frame is None:
                 return {"warning": "Bad Frame"}
 
-            # Analyze
-            face_status = (False, 1.0, 0, [])
-            gaze_status = "No Gaze"
-            
-            if self.face_detector:
-                f_res = self.face_detector.process_frame(frame)
-                if f_res: face_status = f_res
-            
-            if self.gaze_detector:
-                g_res = self.gaze_detector.process_frame(frame)
-                if g_res: gaze_status = g_res
-
-            # Logic
-            found, dist, n_face, locs = face_status
-            
-            # --- ANNOTATE FOR ADMIN VIEW ---
-            if locs:
-                for (top, right, bottom, left) in locs:
-                    cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            
-            warning = ""
-            if n_face > 1: warning = "MULTIPLE FACES DETECTED"
-            elif n_face == 0: warning = "NO FACE DETECTED"
-            elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
-            elif "WARNING" in str(gaze_status): warning = str(gaze_status)
-
-            # Update latest frame for MJPEG stream
-            with self.frame_lock:
-                _, buffer = cv2.imencode('.jpg', frame)
-                self.latest_frame = buffer.tobytes()
-                self.frame_id += 1
-
-            # --- PERSIST PROCTORING EVENT ---
-            if session_id and warning:
-                from ..core.database import engine
-                from sqlmodel import Session
-                from ..models.db_models import ProctoringEvent
-                
-                with Session(engine) as db_session:
-                    event = ProctoringEvent(
-                        session_id=session_id,
-                        event_type=warning,
-                        details=f"Faces: {n_face}, Auth: {found}, Gaze: {gaze_status}"
-                    )
-                    db_session.add(event)
-                    db_session.commit()
-
-            # Update state for external status calls
-            self._current_warning = warning if warning else "No Issues"
-            for callback in self._listeners:
-                try: callback(self._current_warning)
-                except: pass
-
-            return {
-                "auth": bool(found),
-                "auth_dist": float(dist) if dist is not None else 1.0,
-                "faces": int(n_face),
-                "gaze": str(gaze_status),
-                "warning": warning,
-                "box": locs[0] if locs else None
-            }
+            # Delegate to core logic
+            _, result = self.process_frame_ndarray(frame, interview_id)
+            return result
             
         except Exception as e:
             logger.error(f"Frame Process Error: {e}")
             return {"warning": "Server Error"}
 
-    def get_frame(self) -> Tuple[Optional[bytes], int]:
-        """Returns the latest annotated frame and its unique ID."""
+    def get_frame(self, interview_id: int) -> Tuple[Optional[bytes], int]:
+        """Returns the latest annotated frame and its unique ID for a specific session."""
         with self.frame_lock:
-            return self.latest_frame, self.frame_id
+            return self.session_frames.get(interview_id), self.session_frame_ids.get(interview_id, 0)
 
-    def update_identity(self, image_bytes: bytes) -> bool:
-        """Updates the known person identity and reloads the detector."""
-        filepath = "app/assets/known_person.jpg"
-        with open(filepath, "wb") as f:
-            f.write(image_bytes)
-        logger.info("Identity updated. Reloading FaceDetector...")
-        
-        # Stop old wrapper
-        if self.face_detector:
-            self.face_detector.close()
-        
-        # Start new
-        try:
-            self.face_detector = FaceDetector(known_person_path=filepath)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to reload FaceDetector: {e}")
-            return False
+
 
     def add_listener(self, callback):
         self._listeners.append(callback)
 
-    def get_current_warning(self):
-        return self._current_warning
+    def get_current_warning(self, interview_id: int):
+        return self.session_warnings.get(interview_id, "System Active")
+
+    def clear_session(self, interview_id: int):
+        """
+        Clears all cached session data for a specific interview.
+        Should be called when an interview finishes or the candidate disconnects.
+        """
+        with self.frame_lock:
+            self.session_frames.pop(interview_id, None)
+            self.session_frame_ids.pop(interview_id, None)
+            self.session_warnings.pop(interview_id, None)
+            self.session_start_times.pop(interview_id, None)
+            self.session_last_active.pop(interview_id, None)
+            logger.info(f"Proctoring: Cleared session data for Interview {interview_id}")
 

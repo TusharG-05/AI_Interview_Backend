@@ -1,86 +1,293 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import FileResponse
 from sqlmodel import Session, select
+from sqlalchemy import func
 from ..core.database import get_db as get_session
-from ..models.db_models import User, InterviewRoom, InterviewSession, InterviewResponse
-from ..auth.dependencies import get_current_user
-from pydantic import BaseModel
-from datetime import datetime
-
-templates = Jinja2Templates(directory="app/templates")
+import random
+from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions, InterviewStatus, CandidateStatus
+from ..services.status_manager import record_status_change
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
 
-@router.get("/dashboard", response_class=HTMLResponse)
-async def candidate_dashboard(request: Request):
-    return templates.TemplateResponse("dashboard_candidate.html", {"request": request})
+from ..schemas.admin.users import UserUpdate
+from ..schemas.candidate.history import HistoryItem, ListUpcomingInterviewsResponse, UpcomingInterviewItem
+from ..core.config import IS_ORCHESTRATOR
+from ..auth.dependencies import get_current_user
+from ..core.logger import get_logger
+logger = get_logger(__name__)
+from datetime import datetime
+from ..utils import format_iso_datetime
 
-from ..schemas.requests import JoinRoomRequest
-from ..schemas.responses import HistoryItem, JoinRoomResponse
 
-@router.post("/join", response_model=JoinRoomResponse)
-async def join_room(
-    request: JoinRoomRequest,
-    current_user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
-):
-    # 1. Find the room
-    statement = select(InterviewRoom).where(InterviewRoom.room_code == request.room_code)
-    room = session.exec(statement).first()
-    
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-        
-    if room.password != request.password:
-        raise HTTPException(status_code=401, detail="Invalid room password")
-        
-    if not room.is_active:
-        raise HTTPException(status_code=400, detail="Room is no longer active")
-        
-    # 2. Check if session already exists for this room/user? 
-    # For now, allow multiple sessions or maybe just one? Let's create a new session.
-    
-    # Check max sessions limit (Only count ACTIVE sessions)
-    if room.max_sessions is not None:
-        active_sessions_count = len([s for s in room.sessions if s.end_time is None])
-        if active_sessions_count >= room.max_sessions:
-             raise HTTPException(status_code=400, detail="Room has reached maximum active session limit. Please try again later.")
 
-    new_session = InterviewSession(
-        room_id=room.id,
-        candidate_id=current_user.id,
-        start_time=datetime.utcnow()
-    )
-    session.add(new_session)
-    session.commit()
-    session.refresh(new_session)
-    
-    return {
-        "session_id": new_session.id,
-        "room_code": room.room_code,
-        "message": "Successfully joined room"
-    }
-
-@router.get("/history", response_model=List[HistoryItem])
+@router.get("/history", response_model=ApiResponse[PaginatedResponse[HistoryItem]])
 async def my_history(
+    skip: int = 0,
+    limit: int = 20,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    statement = select(InterviewSession).where(
+    query = select(InterviewSession).where(
         InterviewSession.candidate_id == current_user.id
-    ).order_by(InterviewSession.start_time.desc())
+    )
     
-    sessions = session.exec(statement).all()
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.schedule_time.desc()).offset(skip).limit(limit)
+    ).all()
     
     history = []
     for s in sessions:
-        room = session.get(InterviewRoom, s.room_id)
-        history.append({
-            "session_id": s.id,
-            "room_code": room.room_code if room else "N/A",
-            "date": s.start_time.strftime("%Y-%m-%d %H:%M"),
-            "score": s.total_score
-        })
-    return history
+        history.append(HistoryItem(
+            interview_id=s.id,
+            access_token=s.access_token,
+            paper_name=s.paper.name if s.paper else "General",
+            date=format_iso_datetime(s.start_time) if s.start_time else "Scheduled",
+            status=s.status.value,
+            score=s.total_score,
+            duration_minutes=s.duration_minutes,
+            max_questions=s.max_questions,
+            start_time=format_iso_datetime(s.start_time) if s.start_time else None,
+            end_time=format_iso_datetime(s.end_time) if s.end_time else None,
+            warning_count=s.warning_count,
+            is_completed=s.is_completed,
+            current_status=s.current_status,
+            allow_copy_paste=s.allow_copy_paste or False,
+        ))
+        
+    return ApiResponse(
+        status_code=200,
+        data={
+            "items": history,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
+        message="Interview history retrieved successfully"
+    )
+
+@router.get("/interviews", response_model=ApiResponse[PaginatedResponse[HistoryItem]])
+async def my_interviews(
+    skip: int = 0,
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Fetch scheduled and upcoming interviews for the candidate."""
+    query = select(InterviewSession).where(
+        InterviewSession.candidate_id == current_user.id,
+        InterviewSession.status == InterviewStatus.SCHEDULED
+    )
+    
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.schedule_time.asc()).offset(skip).limit(limit)
+    ).all()
+    
+    interviews = []
+    for s in sessions:
+        interviews.append(HistoryItem(
+            interview_id=s.id,
+            access_token=s.access_token,
+            paper_name=s.paper.name if s.paper else "General",
+            date=format_iso_datetime(s.schedule_time) if s.schedule_time else "Scheduled",
+            status=s.status.value,
+            total_score=s.total_score,
+            duration_minutes=s.duration_minutes,
+            max_questions=s.max_questions,
+            start_time=format_iso_datetime(s.start_time) if s.start_time else None,
+            end_time=format_iso_datetime(s.end_time) if s.end_time else None,
+            warning_count=s.warning_count,
+            is_completed=s.is_completed,
+            current_status=s.current_status,
+            allow_copy_paste=s.allow_copy_paste or False,
+        ))
+        
+    return ApiResponse(
+        status_code=200,
+        data={
+            "items": interviews,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
+        message="Upcoming interviews retrieved successfully"
+    )
+
+import shutil
+import os
+from fastapi import UploadFile, File
+
+@router.post("/upload-selfie", response_model=ApiResponse[dict])
+async def upload_selfie(
+    file: UploadFile = File(...),
+    interview_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Candidate uploads their own selfie for face enrollment and identity verification.
+    Generates face embeddings (ArcFace + SFace) for proctoring during interview.
+    Optionally updates interview status to SELFIE_UPLOADED if interview_id provided.
+    """
+    if not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+        
+    # 1. Read bytes for processing
+    image_bytes = await file.read()
+    
+    # 2. Update Interview Status if requested
+    if interview_id:
+        statement = select(InterviewSession).where(
+            InterviewSession.id == interview_id,
+            InterviewSession.candidate_id == current_user.id
+        )
+        interview_session = session.exec(statement).first()
+        if interview_session:
+            record_status_change(
+                session=session,
+                interview_session=interview_session,
+                new_status=CandidateStatus.SELFIE_UPLOADED
+            )
+            logger.info(f"Updated status for interview {interview_id} to SELFIE_UPLOADED via candidate API")
+
+    
+        # 3. Generate Dual Embeddings (Hybrid Strategy)
+    try:
+        from ..services.face import get_modal_embedding
+        from ..core.config import USE_MODAL
+        import json
+        import tempfile
+        import os
+        
+        # 0. Check if we should skip local processing
+
+        embeddings_map = {}
+        
+        # 1. Generate ArcFace (High Accuracy)
+        # Try Modal.com if enabled
+        if USE_MODAL:
+            try:
+                modal_cls = get_modal_embedding()
+                if modal_cls:
+                    logger.info("Calling Modal for ArcFace enrollment...")
+                    result = modal_cls().get_embedding.remote(image_bytes)
+                    if result.get("success"):
+                        embeddings_map["ArcFace"] = result["embedding"]
+                        logger.info("ArcFace embedding generated via Modal")
+            except Exception as e:
+                logger.warning(f"Modal ArcFace enrollment failed: {e}")
+
+        # Fallback to local ArcFace if Modal failed/disabled (Skip in Orchestrator)
+        if "ArcFace" not in embeddings_map and not IS_ORCHESTRATOR:
+            from deepface import DeepFace
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(image_bytes)
+                    tmp_path = tmp.name
+                try:
+                    arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                    if arc_objs:
+                        embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                        logger.info("ArcFace embedding generated locally")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+            except Exception as e:
+                logger.warning(f"Local ArcFace fallback failed: {e}")
+
+        # 2. Generate SFace (Always local as lightweight backup, skip in Orchestrator)
+        if not IS_ORCHESTRATOR:
+            try:
+                from deepface import DeepFace
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(image_bytes)
+                    tmp_path = tmp.name
+                try:
+                    sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                    if sface_objs:
+                        embeddings_map["SFace"] = sface_objs[0]["embedding"]
+                        logger.info("SFace embedding generated locally")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+            except Exception as e:
+                logger.warning(f"SFace embedding failed: {e}")
+
+        if embeddings_map:
+            current_user.face_embedding = json.dumps(embeddings_map)
+            logger.info(f"Generated embeddings for: {list(embeddings_map.keys())}")
+                
+    except Exception as e:
+        logger.error(f"Embedding generation failed: {e}")
+        
+    # 4. Finalize
+    current_user.profile_image_bytes = image_bytes
+    session.add(current_user)
+    
+    try:
+        session.commit()
+        session.refresh(current_user)
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to save profile embeddings: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save profile embeddings")
+    
+    return ApiResponse(
+        status_code=200,
+        data={
+            "user_id": current_user.id,
+            "has_embeddings": current_user.face_embedding is not None,
+            "status_updated": interview_id is not None
+        },
+        message="Selfie identity verified and embeddings generated successfully"
+    )
+
+@router.get("/profile-image/{user_id}")
+async def get_profile_image(
+    user_id: int, 
+    session: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Streams the user's profile image (selfie) directly to the browser.
+    
+    Returns:
+        - Raw image bytes with appropriate Content-Type header if image found
+        - 404 if no image exists
+    """
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    # 1. Try DB Bytes (preferred storage location)
+    if user.profile_image_bytes:
+        from fastapi.responses import Response
+        import imghdr
+        ext = imghdr.what(None, h=user.profile_image_bytes) or "jpeg"
+        return Response(
+            content=user.profile_image_bytes, 
+            media_type=f"image/{ext}",
+            headers={"Content-Disposition": "inline"}
+        )
+        
+    # 2. Try URL (Cloudinary)
+    if user.profile_image and user.profile_image.startswith("http"):
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=user.profile_image)
+
+    # 3. Try Disk Fallback
+    if user.profile_image and os.path.exists(user.profile_image):
+        return FileResponse(
+            user.profile_image,
+            media_type="image/jpeg",
+            headers={"Content-Disposition": "inline"}
+        )
+        
+    raise HTTPException(status_code=404, detail="No profile image found for this user")

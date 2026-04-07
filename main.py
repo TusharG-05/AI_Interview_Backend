@@ -1,40 +1,31 @@
 import uvicorn
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+import shutil
 import multiprocessing
+from app.server import app
 
 if __name__ == "__main__":
-    multiprocessing.freeze_support()
-    # Ensure spawn method is used (default on Windows, but good to be explicit for stability)
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        pass
-        
-    print("Starting Server in STABLE mode (Reload Disabled for camera stability)...")
     
-    import os
-    import socket
-    import shutil
+    print("Starting Server in API-ONLY Mode...")
     
-    # Ensure ffmpeg is available for pydub
+    # Ensure ffmpeg is available
     if not shutil.which("ffmpeg"):
-        import static_ffmpeg
-        static_ffmpeg.add_paths()
-    
-    # Get local IP for easier connecting
-    hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
-    
+        try:
+            import static_ffmpeg
+            static_ffmpeg.add_paths()
+        except ImportError:
+            print("Warning: static_ffmpeg not installed.")
+            
     ssl_config = {}
     if os.path.exists("cert.pem") and os.path.exists("key.pem"):
         print(f"\n[SECURE MODE] SSL Certificates found.")
-        print(f" -> Access from your laptop at: https://{local_ip}:8000")
-        print(f" -> Access from your laptop at: https://0.0.0.0:8000 (if IP dynamic)")
         ssl_config = {
             "ssl_keyfile": "key.pem",
             "ssl_certfile": "cert.pem"
         }
     else:
-        print("\n[WARNING] No SSL Certificates found. Camera/Mic will ONLY work on localhost.")
-        print(" -> Run `python tools/generate_cert.py` to enable remote access.")
+        print("\n[WARNING] No SSL Certificates found. HTTPS disabled.")
 
-    uvicorn.run("app.server:app", host="0.0.0.0", port=8000, reload=False, **ssl_config)
+    port = int(os.getenv("PORT", 7427))
+    uvicorn.run("app.server:app", host="0.0.0.0", port=port, reload=True, **ssl_config)
