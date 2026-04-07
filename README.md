@@ -55,38 +55,24 @@ A full-stack platform for automated technical interviews, integrating computer v
 
 ```
 ├── app/
-│   ├── routers/         # API Endpoints
-│   │   ├── admin.py         # Paper, Question, Interview, User, Result CRUD
-│   │   ├── auth.py          # JWT Login / Registration
-│   │   ├── candidate.py     # Candidate-facing endpoints
-│   │   ├── interview.py     # Interview flow (access, questions, answers, finish)
-│   │   ├── settings.py      # Runtime configuration
-│   │   └── video.py         # Camera & WebRTC streaming
-│   ├── services/        # Core Business Logic
-│   │   ├── audio.py         # STT (Whisper), TTS (Edge-TTS), Speaker Verification
-│   │   ├── camera.py        # Frame capture & proctoring detectors
-│   │   ├── email.py         # SMTP + SendGrid email delivery
-│   │   ├── face.py          # DeepFace recognition & enrollment
-│   │   ├── gaze.py          # MediaPipe gaze direction analysis
-│   │   ├── interview.py     # Interview session orchestration
-│   │   ├── nlp.py           # LLM-powered question extraction & evaluation
-│   │   ├── status_manager.py# Candidate lifecycle state machine
-│   │   ├── webrtc.py        # WebRTC peer connections (aiortc)
-│   │   └── websocket_manager.py # Real-time admin dashboard broadcast
+│   ├── routers/         # API Endpoints (Admin, Candidate, Interview, Video)
+│   ├── services/        # Core Business Logic (Audio, Face, Gaze, NLP)
 │   ├── models/          # SQLModel Database Schemas
 │   ├── schemas/         # Pydantic Request/Response Models
-│   ├── tasks/           # Celery Background Tasks (email, result processing)
+│   ├── tasks/           # Celery Background Tasks
 │   ├── prompts/         # LLM Prompt Templates
 │   ├── core/            # Config, Database, Logger, Celery
 │   └── utils/           # Helpers & Image Processing
-├── frontend/            # React (Vite) Admin Dashboard & Candidate UI
+├── skills/              # OpenClaw skills (Experimental)
 ├── scripts/             # CLI Utilities (seed, migrate, deploy, certs)
-├── tests/               # Unit & Integration Test Suites
-├── docs/                # SSL Guide, API Testing Guide, DB Schema (DBML)
+├── tests/               # Unit & Integration Test Suites (Ignored in Git)
+├── docs/                # SSL Guide, API Testing Guide, DB Schema
 ├── alembic/             # Database Migrations
-├── Dockerfile           # Local dev (layered base image)
-├── Dockerfile.hf        # Hugging Face Spaces deployment
-└── docker-compose.yml   # Full stack: App + PostgreSQL + Ngrok
+├── Dockerfile           # Backend deployment
+├── Dockerfile.render    # Render Orchestrator deployment
+├── render.yaml          # Render Blueprint (Infrastructure as Code)
+├── deploy_hf_v2.sh      # Hugging Face deployment script (v2)
+└── docker-compose.yml   # Local orchestration
 ```
 
 ---
@@ -98,11 +84,11 @@ All endpoints are prefixed with `/api`. Full interactive docs are available at `
 | Module | Endpoint Group | Description |
 |--------|---------------|-------------|
 | **Auth** | `POST /auth/login`, `POST /auth/register` | JWT authentication & user registration |
-| **Admin — Papers** | `CRUD /admin/papers/{id}` | Create, list, update, delete question papers |
-| **Admin — Questions** | `CRUD /admin/papers/{id}/questions` | Manage questions; upload documents for AI extraction |
-| **Admin — Interviews** | `CRUD /admin/interviews/{id}` | Schedule, list, update, delete interview sessions |
-| **Admin — Users** | `CRUD /admin/users/{id}` | Create, list, update, delete users with role management |
-| **Admin — Results** | `GET /admin/results`, `GET /admin/result/{id}` | View & update scores, download response audio |
+| **Admin — Papers** | `CRUD /admin/papers/{id}` | Create, list, update, delete question papers (supports pagination & search) |
+| **Admin — Questions** | `CRUD /admin/papers/{id}/questions` | Manage questions (supports pagination & search) |
+| **Admin — Interviews** | `CRUD /admin/interviews/{id}` | Schedule, list, update, delete interview sessions (supports pagination & search) |
+| **Admin — Users** | `CRUD /admin/users/{id}` | Create, list, update, delete users with role management (supports pagination & search) |
+| **Admin — Results** | `GET /admin/results`, `GET /admin/result/{id}` | View & update scores (supports pagination & search) |
 | **Admin — Live** | `GET /admin/live-status`, `WS /admin/ws/dashboard` | Real-time interview monitoring dashboard |
 | **Interview** | `GET /interview/access/{token}` | Candidate validates and enters interview |
 | **Interview** | `POST /interview/start/{id}` | Start session with enrollment audio |
@@ -113,6 +99,12 @@ All endpoints are prefixed with `/api`. Full interactive docs are available at `
 | **Tools** | `POST /interview/stt`, `GET /interview/tts` | Standalone Speech-to-Text & Text-to-Speech |
 | **Video** | `POST /video/frame` | Submit frames for proctoring analysis |
 | **Settings** | `GET /settings/config` | Runtime application configuration |
+
+### 📄 API Pagination & Search
+The Admin listing endpoints support the following query parameters:
+- `skip`: (int) Number of records to skip (default: 0).
+- `limit`: (int) Number of records to return (default: 10).
+- `search`: (str) Filter records by a search term (e.g., name, title, email).
 
 ---
 
@@ -224,11 +216,36 @@ export USE_MODAL=true
 The project includes `Dockerfile.hf` optimized for Hugging Face Spaces:
 
 ```bash
-# Deploy using the HF deploy script
-bash scripts/deploy_hf.sh
+# Deploy using the HF deploy script (v2)
+bash deploy_hf_v2.sh
 ```
 
 For detailed deployment instructions, see [deployment_guide.md](deployment_guide.md).
+
+---
+
+## Render Deployment (Orchestrator Mode)
+
+For production-grade hosting on **Render**, the system uses an **Orchestrator Mode** configuration. This is a lightweight, high-performance setup that offloads heavy AI processing to **Modal** or **Hugging Face APIs**, allowing it to run on Render's **Free Tier** (512MB RAM).
+
+### 🚀 Deploy via Blueprint
+The repository includes a `render.yaml` Blueprint that automatically provisions:
+1. **Web Service** (FastAPI Orchestrator using `Dockerfile.render`)
+2. **Managed Postgres** (Database)
+3. **Managed Redis** (Task Queue)
+
+### 🔑 Required Secrets
+When deploying on Render, you must configure the following Environment Variables in the Dashboard:
+- `MODAL_TOKEN_ID` & `MODAL_TOKEN_SECRET`
+- `GROQ_API_KEY`
+- `HF_TOKEN`
+- `CLOUDINARY_URL`
+- `SENDGRID_API_KEY`
+
+### ⚙️ Architecture Details
+- **Dockerfile**: Uses `Dockerfile.render` for a lightweight runtime.
+- **Dependencies**: Uses `requirements-render.txt` to exclude heavy ML libraries (torch, tensorflow, etc.).
+- **Mode**: Sets `ENV_MODE=orchestrator` to skip local model loading.
 
 ---
 

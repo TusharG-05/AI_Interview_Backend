@@ -22,96 +22,64 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# === Environment & Virtual Envs ===
+# === Environments ===
 .env
-.env.local
-.env.*.local
-pip-log.txt
-pip-delete-this-directory.txt
+.env.*
+!.env.example
 .venv/
-.venv*/
-env/
 venv/
+env/
 ENV/
-env.bak/
-venv.bak/
-.python-version
-.env*
-! .env.example
+*.bak
 
 # === IDEs & Editors ===
-.idea/
 .vscode/
+.idea/
 *.swp
 *.swo
 .project
 .pydevproject
 .settings/
+.DS_Store
 
-# === Databases & State ===
+# === Databases & Persistence ===
 *.db
 *.sqlite3
 *.sqlite3-journal
 *.sqlite3-wal
+dump.rdb
 
-# === Logs ===
+# === Logs & Reports ===
 *.log
+logs/
+server.log
 error.log
+.coverage
+htmlcov/
+.pytest_cache/
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
 # === SSL & Security ===
 *.pem
-*.crt
 *.key
+*.crt
 *.p12
 *.pub
 
-# === App Specific - Media & Logs ===
+# === Project Specific (Ignored Folders) ===
+/scripts/
+/tests/
+/artifacts/
+/tmp/
+/uploads/resumes/*
+!/uploads/resumes/.gitkeep
+
+# === Models (Heavy Assets) ===
+/models/
+
+# === Proctoring Assets ===
 app/assets/audio/
 app/assets/proctoring_logs/*.json
 app/assets/images/*
 !app/assets/images/.gitkeep
 temp_uploads/
-*.pem
-*.key
-/models/
-
-# === OS ===
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# === Docker ===
-.docker-compose.un~
-app/assets/face_landmarker.task
-
-*.json
-# === API Testing ===
-api_tests/.admin_token
-api_tests/.candidate_token
-api_tests/.interview_token
-tests/api/.*_token
-
-# === Redundant Assets ===
-dump.rdb
-users_list.txt
-tests/logs/
-*.bak
-*.log
-server.log
-test_results_final*.log
-/temp_uploads/
-
-# === Automated Scripts & Tests ===
-/scripts/
-/tests/
-app/assets/*.jpg
-app/assets/*.png
-tests/assets/
-app/assets/audio/standalone/*.mp3
