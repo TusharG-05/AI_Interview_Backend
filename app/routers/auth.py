@@ -20,15 +20,12 @@ from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
 from ..models.db_models import User, UserRole, InterviewSession, Team
 from ..services.email import EmailService
-import redis.asyncio as redis
-from ..core.config import REDIS_URL
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
 
 # Initialize services
 email_service = EmailService()
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""

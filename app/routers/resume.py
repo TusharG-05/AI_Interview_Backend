@@ -14,9 +14,18 @@ from ..schemas.resume.extract import ResumeResponse
 router = APIRouter(prefix="/resume", tags=["Resume Management"])
 from ..auth.dependencies import get_current_user_optional
 from ..models.db_models import InterviewSession
+import os
 import requests
 import tempfile
-import os
+
+_nlp_service = None
+
+def get_nlp_service():
+    global _nlp_service
+    if _nlp_service is None:
+        from ..services.nlp import NLPService
+        _nlp_service = NLPService()
+    return _nlp_service
 
 @router.get("/", response_model=ApiResponse[ResumeResponse])
 async def get_resume(
@@ -122,6 +131,7 @@ async def generate_resume_prompt(
             temp_file_path = user.resume_path
 
         # 2. Extract and AI-Structure the Resume
+        nlp_service = get_nlp_service()
         resume_text = nlp_service.extract_text_from_file(temp_file_path)
         if not resume_text:
             raise HTTPException(status_code=400, detail="Could not extract text from the resume")

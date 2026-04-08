@@ -23,8 +23,7 @@ import os
 import uuid
 from datetime import datetime, timedelta, timezone
 import random
-import redis.asyncio as redis
-from ..core.config import REDIS_URL
+from ..core.cache import cache_client
 from ..services.email import EmailService
 from ..schemas.auth.login import OtpRequest, OtpVerifyRequest
 from ..auth.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
@@ -43,7 +42,6 @@ def set_auth_cookie(response: Response, token: str):
 
 # Initialize services for OTP
 email_service = EmailService()
-redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
 from pydub import AudioSegment
 import logging
@@ -87,13 +85,13 @@ async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_sessi
     # 3. Generate a secure 6-digit OTP
     otp = f"{random.randint(100000, 999999)}"
     
-    # 4. Store in Redis with a 10-minute expiry
+    # 4. Store in Cache (Redis/In-Memory) with a 10-minute expiry
     redis_key = f"otp:{user.email.lower()}:{otp_data.access_token}"
     try:
-        await redis_client.set(redis_key, otp, ex=600)
+        await cache_client.set(redis_key, otp, ex=600)
         logger.info(f"OTP generated and stored for {user.email}")
     except Exception as e:
-        logger.error(f"Failed to store OTP in Redis: {e}")
+        logger.error(f"Failed to store OTP in cache: {e}")
         raise HTTPException(status_code=500, detail="Internal server error (Cache failure).")
     
     # 5. Send Email via EmailService
@@ -113,12 +111,12 @@ async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session:
     """
     Verify the OTP code and issue a JWT access token for the candidate.
     """
-    # 1. Check Redis for the stored OTP
+    # 1. Check Cache for the stored OTP
     redis_key = f"otp:{verify_data.email.lower()}:{verify_data.access_token}"
     try:
-        stored_otp = await redis_client.get(redis_key)
+        stored_otp = await cache_client.get(redis_key)
     except Exception as e:
-        logger.error(f"Failed to retrieve OTP from Redis: {e}")
+        logger.error(f"Failed to retrieve OTP from cache: {e}")
         raise HTTPException(status_code=500, detail="Internal server error (Cache failure).")
     
     if not stored_otp:
@@ -139,8 +137,8 @@ async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session:
     if not user:
          raise HTTPException(status_code=404, detail="User accounts out of sync. Please contact support.")
 
-    # 3. Clean up OTP from Redis
-    await redis_client.delete(redis_key)
+    # 3. Clean up OTP from cache
+    await cache_client.delete(redis_key)
 
     # 4. Generate JWT Token
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
