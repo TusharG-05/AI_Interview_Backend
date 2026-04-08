@@ -317,13 +317,28 @@ class AudioService:
             await communicate.save(temp_path)
             
             # Upload to Cloudinary
-            with open(temp_path, "rb") as f:
-                cloudinary_url = self.cloudinary.upload_audio(f, folder=folder)
-            
-            logger.info(f"TTS generated and uploaded: {cloudinary_url}")
-            return cloudinary_url
+            try:
+                with open(temp_path, "rb") as f:
+                    cloudinary_url = self.cloudinary.upload_audio(f, folder=folder)
+                logger.info(f"TTS generated and uploaded: {cloudinary_url}")
+                return cloudinary_url
+            except Exception as e:
+                logger.error(f"TTS Cloudinary Error: {e}")
+                
+                # FALLBACK: Save to local storage
+                failover_dir = "app/assets/audio/failover"
+                os.makedirs(failover_dir, exist_ok=True)
+                import uuid
+                failover_filename = f"tts_{uuid.uuid4().hex[:8]}.mp3"
+                failover_path = os.path.join(failover_dir, failover_filename)
+                
+                import shutil
+                shutil.copy(temp_path, failover_path)
+                logger.warning(f"CRITICAL: TTS saved locally at {failover_path} (EPHEMERAL)")
+                return failover_path
+                
         except Exception as e:
-            logger.error(f"TTS Cloudinary Error: {e}")
+            logger.error(f"TTS Generation Error: {e}")
             return None
         finally:
             if temp_path and os.path.exists(temp_path):
