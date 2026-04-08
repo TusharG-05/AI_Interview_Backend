@@ -41,12 +41,20 @@ class LazyLLM:
         return getattr(get_local_llm(), name)
     
     def __or__(self, other):
-        # Support LangChain pipe operator
-        return get_local_llm() | other
+        # Support LangChain pipe operator (prompt | llm)
+        return other | get_local_llm()
     
     def __ror__(self, other):
-        # Support LangChain pipe operator
-        return other | get_local_llm()
+        # Support LangChain pipe operator (llm | output_parser)
+        return get_local_llm() | other
+    
+    def invoke(self, input_data, config=None, **kwargs):
+        # Support direct invocation
+        return get_local_llm().invoke(input_data, config=config, **kwargs)
+    
+    def __call__(self, *args, **kwargs):
+        # Support callable interface
+        return get_local_llm()(*args, **kwargs)
 
 local_llm = LazyLLM()
 

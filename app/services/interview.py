@@ -480,6 +480,9 @@ def generate_questions_from_prompt(
     """
     from ..prompts.question_generation import question_generation_prompt
 
+    # Initialize Groq client
+    groq_client = get_groq_client()
+
     generation_chain = question_generation_prompt | local_llm
 
     # Build the rendered prompt string to use for the HF fallback
