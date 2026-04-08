@@ -117,7 +117,7 @@ def ensure_web_url(path_or_url: Optional[str]) -> str:
         return "/" + path_or_url.replace("app/", "")
     return path_or_url
 
-@router.get("/next-question", response_model=ApiResponse[dict])
+@router.get("/verify-otp", response_model=ApiResponse[dict])
 async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session: Session = Depends(get_session)):
     """
     Verify the OTP code and issue a JWT access token for the candidate.
