@@ -156,6 +156,10 @@ app = FastAPI(
     route_class=ExcludeNoneRoute,
 )
 
+# MOUNT: Serve local assets (Failover storage for stateless cloud dependencies)
+os.makedirs("app/assets/audio/failover", exist_ok=True)
+app.mount("/assets", StaticFiles(directory="app/assets"), name="assets")
+
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
 

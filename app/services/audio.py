@@ -1,5 +1,6 @@
 import os
 import asyncio
+from typing import Optional, Any
 from pathlib import Path
 from ..core.config import IS_ORCHESTRATOR, USE_MODAL
 from ..core.logger import get_logger
@@ -34,6 +35,10 @@ class AudioService:
         self._stt_model = None
         self._speaker_model = None
         self.verification_threshold = 0.25
+        
+        # Cloudinary Service for stateless storage
+        from .cloudinary_service import CloudinaryService
+        self.cloudinary = CloudinaryService()
 
     @property
     def stt_model(self):
@@ -297,19 +302,69 @@ class AudioService:
                 try: os.remove(local_path)
                 except: pass
 
-    async def text_to_speech(self, text, output_path):
-        """Converts text to speech using edge-tts."""
+    async def text_to_speech(self, text: str, folder: str = "interview_questions") -> Optional[str]:
+        """Converts text to speech, uploads to Cloudinary, and returns the URL."""
+        import tempfile
+        import edge_tts
+        
+        temp_path = None
         try:
-            import edge_tts
+            # Create a temporary file for the TTS output
+            fd, temp_path = tempfile.mkstemp(suffix=".mp3")
+            os.close(fd)
+            
             communicate = edge_tts.Communicate(text, self.female_voice)
-            await communicate.save(output_path)
-            logger.info(f"TTS generated: {output_path}")
-            return output_path
+            await communicate.save(temp_path)
+            
+            # Upload to Cloudinary
+            with open(temp_path, "rb") as f:
+                cloudinary_url = self.cloudinary.upload_audio(f, folder=folder)
+            
+            logger.info(f"TTS generated and uploaded: {cloudinary_url}")
+            return cloudinary_url
         except Exception as e:
-            logger.error(f"TTS Error: {e}")
+            logger.error(f"TTS Cloudinary Error: {e}")
             return None
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except: pass
+
+    def upload_audio_blob(self, blob: bytes, folder: str = "interview_responses") -> Optional[str]:
+        """Uploads an audio blob directly to Cloudinary and returns the URL."""
+        import tempfile
+        temp_mp3 = None
+        try:
+            fd, temp_mp3 = tempfile.mkstemp(suffix=".mp3")
+            with os.fdopen(fd, 'wb') as f:
+                f.write(blob)
+            
+            # Upload to Cloudinary
+            try:
+                cloudinary_url = self.cloudinary.upload_audio(blob, folder=folder)
+                if cloudinary_url:
+                    return cloudinary_url
+            except Exception as e:
+                logger.error(f"Cloudinary upload failed (Failover active): {e}")
+
+            # FALLBACK: Return local path
+            failover_dir = "app/assets/audio/failover"
+            os.makedirs(failover_dir, exist_ok=True)
+            failover_path = os.path.join(failover_dir, os.path.basename(temp_mp3))
+            import shutil
+            shutil.copy(temp_mp3, failover_path)
+            logger.warning(f"CRITICAL: Stored audio blob locally at {failover_path} (EPHEMERAL)")
+            return failover_path
+        except Exception as e:
+            logger.error(f"Audio Blob Upload Error: {e}")
+            return None
+        finally:
+            if temp_mp3 and os.path.exists(temp_mp3):
+                try: os.remove(temp_mp3)
+                except: pass
 
     def save_audio_blob(self, blob, output_path):
+        """DEPRECATED: Use upload_audio_blob instead. Still saves locally for legacy support in this call."""
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, "wb") as f:
             f.write(blob)

@@ -115,3 +115,4 @@ app/assets/*.jpg
 app/assets/*.png
 tests/assets/
 app/assets/audio/standalone/*.mp3
+/scratch/*

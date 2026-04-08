@@ -106,7 +106,18 @@ async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_sessi
         message="A verification code has been sent to your email. It will expire in 10 minutes."
     )
 
-@router.post("/otp-verify", response_model=ApiResponse[dict])
+def ensure_web_url(path_or_url: Optional[str]) -> str:
+    """Converts a local file path to a web-accessible URL if needed."""
+    if not path_or_url:
+        return ""
+    if path_or_url.startswith("http"):
+        return path_or_url
+    if path_or_url.startswith("app/assets"):
+        # Convert app/assets/audio/failover/x.wav -> /assets/audio/failover/x.wav
+        return "/" + path_or_url.replace("app/", "")
+    return path_or_url
+
+@router.get("/next-question", response_model=ApiResponse[dict])
 async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session: Session = Depends(get_session)):
     """
     Verify the OTP code and issue a JWT access token for the candidate.
@@ -757,25 +768,27 @@ async def start_session_logic(
             audio_service = get_audio_service()
             try:
                 content = await enrollment_audio.read()
-                enrollment_path = f"app/assets/audio/enrollment_{uuid.uuid4().hex}.webm"
-                audio_service.save_audio_blob(content, enrollment_path)
                 
-                # Simple silence check
-                try:
-                    if audio_service.calculate_energy(enrollment_path) < 50:
-                        logger.warning(f"Session {interview_id}: Enrollment audio too silent.")
-                except: pass
-                
-                # Upload to Cloudinary
-                try:
-                    cloudinary_service = get_cloudinary_service()
-                    cloudinary_url = cloudinary_service.upload_audio(content)
+                # Upload to Cloudinary (Stateless)
+                cloudinary_url = audio_service.upload_audio_blob(content, folder="interview_enrollments")
+                if cloudinary_url:
                     session.enrollment_audio_path = cloudinary_url
-                except Exception as e:
-                    logger.error(f"Failed to upload enrollment audio: {e}")
-                    session.enrollment_audio_path = enrollment_path
+                else:
+                    logger.error(f"Failed to upload enrollment audio for session {interview_id}")
+                    warning = "Enrollment audio could not be saved to cloud storage."
+                
+                # Simple silence check (Using a temp file locally since energy calculation needs it)
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+                    tmp.write(content)
+                    tmp_path = tmp.name
+                
+                try:
+                    if audio_service.calculate_energy(tmp_path) < 50:
+                        logger.warning(f"Session {interview_id}: Enrollment audio too silent.")
+                finally:
+                    if os.path.exists(tmp_path): os.remove(tmp_path)
 
-                audio_service.cleanup_audio(enrollment_path)
             except Exception as e:
                 logger.error(f"Failed to process enrollment audio: {e}")
                 warning = "Failed to process enrollment audio."
@@ -1220,11 +1233,8 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                     session_db.rollback()
                     raise HTTPException(status_code=500, detail="An error occurred while loading the coding question.")
 
-            # Generate TTS for the coding question title
-            os.makedirs("app/assets/audio/questions", exist_ok=True)
-            audio_path = f"app/assets/audio/questions/q_{proxy_q.id}.mp3"
-            if not os.path.exists(audio_path):
-                await get_audio_service().text_to_speech(next_cq.title, audio_path)
+            # Generate TTS for the coding question title (returns Cloudinary URL)
+            audio_url = await get_audio_service().text_to_speech(next_cq.title, folder="interview_questions")
 
 
             question_index = len(answered_ids) + 1
@@ -1244,7 +1254,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                     "coding_question_id": next_cq.id,  # The REAL CodingQuestions ID — use this for submit-answer-code
                     "coding_question": next_cq,
                     "text": next_cq.title,
-                    "audio_url": f"/interview/audio/question/{proxy_q.id}",
+                    "audio_url": ensure_web_url(audio_url),
                     "response_type": "code",
                     "question_index": question_index,
                     "total_questions": total_questions + total_coding,
@@ -1265,10 +1275,8 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             message="All questions completed"
         )
     
-    os.makedirs("app/assets/audio/questions", exist_ok=True)
-    audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
-    if not os.path.exists(audio_path):
-        await get_audio_service().text_to_speech(question.question_text or question.content, audio_path)
+    # Generate TTS for the question (returns Cloudinary URL)
+    audio_url = await get_audio_service().text_to_speech(question.question_text or question.content, folder="interview_questions")
     
     # Calculate progress
     total_questions = 0
@@ -1285,7 +1293,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     response_data: dict = {
         "question_id": question.id,
         "text": question.question_text or question.content,
-        "audio_url": f"/interview/audio/question/{question.id}",
+        "audio_url": ensure_web_url(audio_url),
         "response_type": question.response_type,
         "question_index": question_index,
         "total_questions": total_questions,
@@ -1321,11 +1329,10 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
         message="Next question retrieved successfully"
     )
 
-@router.get("/audio/question/{q_id}")
-async def stream_question_audio(q_id: int, current_user: User = Depends(get_current_user)):
-    audio_path = f"app/assets/audio/questions/q_{q_id}.mp3"
-    if not os.path.exists(audio_path): raise HTTPException(status_code=404)
-    return FileResponse(audio_path, media_type="audio/mpeg")
+@router.get("/audio/question/{q_id}", deprecated=True)
+async def stream_question_audio(q_id: int):
+    """DEPRECATED: Questions are now served via direct Cloudinary URLs in next-question."""
+    raise HTTPException(status_code=410, detail="Endpoint deprecated. Use direct Cloudinary URLs from access data.")
 
 @router.post("/submit-answer-audio", response_model=ApiResponse[dict])
 async def submit_answer_audio(
@@ -1353,10 +1360,13 @@ async def submit_answer_audio(
     # Check for tab-switch timeout
     enforce_tab_timeout(session_db, session_obj)
     
-    os.makedirs("app/assets/audio/responses", exist_ok=True)
-    audio_path = f"app/assets/audio/responses/resp_{interview_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
-    get_audio_service().save_audio_blob(content, audio_path)
+    cloudinary_url = get_audio_service().upload_audio_blob(content, folder="interview_responses")
+    
+    if not cloudinary_url:
+        logger.error(f"Failed to upload response audio for session {interview_id}")
+        # We allow it to continue with a blank path if critical, or fail
+        raise HTTPException(status_code=500, detail="Failed to save audio answer to cloud storage.")
     
     # Get or Create InterviewResult (Thread-safe-ish check)
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
@@ -1382,7 +1392,7 @@ async def submit_answer_audio(
     ).first()
 
     if answer:
-        answer.audio_path = audio_path
+        answer.audio_path = cloudinary_url
         if feedback is not None:
             answer.feedback = feedback
         if score is not None:
@@ -1392,7 +1402,7 @@ async def submit_answer_audio(
         answer = Answers(
             interview_result_id=result.id, 
             question_id=question_id, 
-            audio_path=audio_path,
+            audio_path=cloudinary_url,
             feedback=feedback or "",
             score=score if score is not None else 0.0
         )
@@ -1406,23 +1416,20 @@ async def submit_answer_audio(
     session_db.refresh(answer)
 
     # ── Real-time: Transcribe + Evaluate ─────────────────────────────────────
-    # Transcribe audio immediately so evaluation can run right away.
-    # STT and LLM errors are caught inside the helpers; answer is already saved.
+    # Transcribe audio immediately using the Cloudinary URL.
     transcribed_text = ""
     audio_service = get_audio_service()
-    cloudinary_service = get_cloudinary_service()
     try:
-        # REF: Using await instead of new_event_loop().run_until_complete()
-        # triggering nested loops in Uvicorn is unstable and prone to 000 crashes.
-        transcribed_text = await get_audio_service().speech_to_text(audio_path)
+        # Pass the Cloudinary URL directly to speech_to_text (it handles downloading if needed)
+        transcribed_text = await audio_service.speech_to_text(cloudinary_url)
 
-        
         # Speaker verification (best-effort)
         if session_obj.enrollment_audio_path:
             try:
-                match, _ = await get_audio_service().verify_speaker(
-
-                    session_obj.enrollment_audio_path, audio_path
+                # Both enrollment and test are now Cloudinary URLs
+                match, _ = await audio_service.verify_speaker(
+                    session_obj.enrollment_audio_path, 
+                    cloudinary_url
                 )
                 if not match:
                     transcribed_text = f"[VOICE MISMATCH] {transcribed_text}"
@@ -1434,19 +1441,6 @@ async def submit_answer_audio(
         if transcribed_text:
             answer.transcribed_text = transcribed_text
             answer.candidate_answer = transcribed_text
-            
-            # Upload to Cloudinary after processing local analysis
-            try:
-                with open(audio_path, "rb") as f:
-                    audio_content = f.read()
-                cloudinary_url = cloudinary_service.upload_audio(audio_content)
-                answer.audio_path = cloudinary_url
-                # Cleanup local file
-                get_audio_service().cleanup_audio(audio_path)
-
-            except Exception as cloud_exc:
-                logger.error(f"Cloudinary upload failed for answer {answer.id}: {cloud_exc}")
-
             session_db.add(answer)
             session_db.commit()
             session_db.refresh(answer)
@@ -2072,31 +2066,22 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
 async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """
     Public standalone tool to convert speech to text.
-    No authentication required.
     """
     try:
-        # Create a temp file to process
-        temp_filename = f"temp_stt_{uuid.uuid4().hex}.wav"
         content = await audio.read()
         
-        # Using a temporary path, but reusing audio service logic
-        # Note: In a real prod env, might want a specific temp dir
-        temp_path = f"app/assets/audio/standalone/{temp_filename}" 
-        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
-        
-        get_audio_service().save_audio_blob(content, temp_path)
-        
-        # Perform STT
-        text = await get_audio_service().speech_to_text(temp_path)
-
-        
-        # Cleanup
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Perform STT directly using bytes via a temp file inside the service
+        # We can pass the bytes or upload to Cloudinary and pass the URL
+        # For simplicity and speed for a 'tool', we'll upload to Cloudinary first
+        audio_url = get_audio_service().upload_audio_blob(content, folder="standalone_tools")
+        if not audio_url:
+            raise Exception("Failed to upload audio for processing")
             
+        text = await get_audio_service().speech_to_text(audio_url)
+
         return ApiResponse(
             status_code=200,
-            data={"text": text},
+            data={"text": text, "audio_url": audio_url},
             message="Speech converted to text successfully"
         )
     except Exception as e:
@@ -2114,21 +2099,12 @@ async def stt_evaluate_tool(
     Standalone tool to convert speech to text AND evaluate it against a question.
     """
     try:
-        # 1. Save and Transcribe
-        temp_filename = f"temp_stteval_{uuid.uuid4().hex}.wav"
         content = await audio.read()
-        temp_path = f"app/assets/audio/standalone/{temp_filename}"
-        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
-        
-        get_audio_service().save_audio_blob(content, temp_path)
-        
-        # Perform STT
-        transcribed_text = await get_audio_service().speech_to_text(temp_path)
-
-        
-        # Cleanup audio immediately if transcribed
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        audio_url = get_audio_service().upload_audio_blob(content, folder="standalone_tools")
+        if not audio_url:
+            raise Exception("Failed to upload audio for processing")
+            
+        transcribed_text = await get_audio_service().speech_to_text(audio_url)
             
         if not transcribed_text:
             return ApiResponse(
@@ -2137,20 +2113,19 @@ async def stt_evaluate_tool(
                 message="Speech transcription failed or returned empty text."
             )
             
-        # 2. Evaluate
-        # We pass the question_text as the context for evaluation
+        # Evaluate
         evaluation = interview_service.evaluate_answer_content(
             question=question_text,
             answer=transcribed_text
         )
         
-        # If expected_answer was provided, we return it as well in the data
         return ApiResponse(
             status_code=200,
             data={
                 "transcribed_text": transcribed_text,
                 "evaluation": evaluation,
-                "expected_answer": expected_answer
+                "expected_answer": expected_answer,
+                "audio_url": audio_url
             },
             message="Speech evaluated successfully"
         )
@@ -2163,55 +2138,19 @@ async def stt_evaluate_tool(
 async def standalone_tts(text: str, background_tasks: BackgroundTasks):
     return await _generate_tts_response(text, background_tasks)
 
-# @router.post("/tts")
-# async def standalone_tts_post(data: TTSRange, background_tasks: BackgroundTasks):
-#     return await _generate_tts_response(data.text, background_tasks)
-
 async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
     """Internal helper for TTS generation and cleanup."""
-    temp_mp3 = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.mp3"
-    wav_path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.wav"
-    
+    # Use the refactored text_to_speech which returns a Cloudinary URL
     try:
-        os.makedirs(os.path.dirname(temp_mp3), exist_ok=True)
+        cloudinary_url = await get_audio_service().text_to_speech(text, folder="standalone_tts")
         
-        # 1. Generate MP3 stream
-        await get_audio_service().text_to_speech(text, temp_mp3)
-        
-        # Verify file creation to prevent pydub errors
-        if not os.path.exists(temp_mp3):
-            logger.error(f"TTS service failed to create file: {temp_mp3}. Check if 'edge-tts' is installed and working.")
-            raise FileNotFoundError(f"TTS file {temp_mp3} not found")
+        if not cloudinary_url:
+            raise Exception("TTS generation failed")
 
-        # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
-        logger.info(f"Converting TTS MP3 to WAV: {wav_path}")
-        from pydub import AudioSegment
-        audio = AudioSegment.from_file(temp_mp3)
-        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
-        audio.export(wav_path, format="wav")
-        
-        # 3. Upload to Cloudinary (as per requirement: audio saved in Cloudinary, not local)
-        with open(wav_path, "rb") as f:
-            wav_content = f.read()
-        
-        cloudinary_service = get_cloudinary_service()
-        cloudinary_url = cloudinary_service.upload_audio(wav_content, folder="standalone_tts")
-        
-        # 4. Cleanup intermediate files immediately
-        for p in [temp_mp3, wav_path]:
-            if os.path.exists(p): 
-                try: os.remove(p)
-                except Exception as e: logger.error(f"TTS Cleanup Error: {e}")
-
-        # 5. Return RedirectResponse to the Cloudinary URL
+        # Return RedirectResponse to the Cloudinary URL
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url=cloudinary_url)
 
     except Exception as e:
         logger.error(f"TTS Generation Error: {e}")
-        # Final safety cleanup
-        for p in [temp_mp3, wav_path]:
-            if os.path.exists(p): 
-                try: os.remove(p)
-                except Exception as e: logger.error(f"TTS Cleanup Error: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")

@@ -1,5 +1,7 @@
 import logging
 import asyncio
+import os
+import json
 from typing import Optional, Any
 import redis.asyncio as redis
 from .config import REDIS_URL
@@ -7,32 +9,39 @@ from .config import REDIS_URL
 logger = logging.getLogger(__name__)
 
 class InMemoryCache:
-    """A simple in-memory cache fallback for when Redis is unavailable."""
-    def __init__(self):
+    def __init__(self, persistence_file="app/assets/cache_failover.json"):
         self._data = {}
-        self._expiry = {}
+        self._persistence_file = persistence_file
+        self._load_from_disk()
+
+    def _load_from_disk(self):
+        if os.path.exists(self._persistence_file):
+            try:
+                with open(self._persistence_file, "r") as f:
+                    self._data = json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load cache failover file: {e}")
+
+    def _save_to_disk(self):
+        try:
+            os.makedirs(os.path.dirname(self._persistence_file), exist_ok=True)
+            with open(self._persistence_file, "w") as f:
+                json.dump(self._data, f)
+        except Exception as e:
+            logger.error(f"Failed to save cache failover file: {e}")
 
     async def get(self, key: str) -> Optional[str]:
-        if key in self._data:
-            # Check expiry
-            if key in self._expiry and asyncio.get_event_loop().time() > self._expiry[key]:
-                del self._data[key]
-                del self._expiry[key]
-                return None
-            return self._data[key]
-        return None
+        return self._data.get(key)
 
     async def set(self, key: str, value: str, ex: Optional[int] = None) -> bool:
         self._data[key] = value
-        if ex:
-            self._expiry[key] = asyncio.get_event_loop().time() + ex
+        self._save_to_disk()
         return True
 
     async def delete(self, key: str) -> bool:
         if key in self._data:
             del self._data[key]
-            if key in self._expiry:
-                del self._expiry[key]
+            self._save_to_disk()
             return True
         return False
 
@@ -49,12 +58,14 @@ class CacheClient:
             return
         
         try:
-            self.redis = redis.from_url(self.url, decode_responses=True)
+            self.redis = redis.from_url(self.url, decode_responses=True, ssl_cert_reqs=None)
             # Test connection
-            await asyncio.wait_for(self.redis.ping(), timeout=1.0)
+            await asyncio.wait_for(self.redis.ping(), timeout=5.0)
             logger.info("Successfully connected to Redis.")
         except Exception as e:
-            logger.warning(f"Failed to connect to Redis ({e}). Using in-memory fallback.")
+            logger.warning(f"Failed to connect to Redis ({type(e).__name__}: {e}). Using in-memory fallback.")
+            import traceback
+            logger.debug(traceback.format_exc())
             self.redis = None
         
         self._initialized = True
