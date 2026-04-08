@@ -8,7 +8,7 @@ from ..core.config import local_llm, IS_ORCHESTRATOR, USE_MODAL
 from ..prompts.evaluation import evaluation_prompt
 from ..prompts.code_evaluation import code_evaluation_prompt
 from ..core.logger import get_logger
-from ..core.ai_clients import get_groq_client, call_llm
+from ..core.ai_clients import get_groq_client, call_llm, GROQ_MODEL
 from huggingface_hub import InferenceClient
 
 logger = get_logger(__name__)
@@ -130,8 +130,8 @@ def evaluate_answer_content(
                     logger.warning(f"Modal attempt {attempt + 1} failed: {e}")
 
         # 2. Groq Fallback
-        client = get_interview_groq()
-        if client:
+        groq_client = get_interview_groq()
+        if groq_client:
             try:
                 system_instruction = (
                     "You are an expert technical interviewer. Evaluate the candidate's answer. "
@@ -253,6 +253,7 @@ def evaluate_code_submission(
     code_eval_chain = code_evaluation_prompt | local_llm
 
     # --- Groq Fallback (High Speed) ---
+    groq_client = get_interview_groq()
     if groq_client:
         try:
             logger.info("evaluate_code: Attempting Groq API...")
@@ -369,6 +370,7 @@ def generate_coding_questions_from_prompt(
         return data
 
     last_error = None
+    groq_client = get_interview_groq()
 
     # --- Groq API ---
     if groq_client:

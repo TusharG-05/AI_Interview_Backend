@@ -291,6 +291,11 @@ ml_task_limiter = [Depends(RateLimiter(times=10, seconds=60))]
 # --- Router Inclusion (Instrumented for Cloud Debugging) ---
 print("\n\033[94m[STARTUP] Loading routers...\033[0m", flush=True)
 
+# Diagnostic
+from .core.config import SECRET_KEY as C_SEC
+from .auth.security import SECRET_KEY as S_SEC
+print(f"DEBUG AUTH: Match={C_SEC == S_SEC} Config={C_SEC[:5]} Security={S_SEC[:5]}")
+
 from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video, admin_ws
 
 print("\033[94m[STARTUP] Including Auth, Settings, Admin, Teams...\033[0m", flush=True)
@@ -304,15 +309,17 @@ app.include_router(resume.router, prefix="/api")
 app.include_router(coding_papers.router, prefix="/api")
 app.include_router(interview.router, prefix="/api")
 
+print("\033[94m[STARTUP] Including Candidate Router...\033[0m", flush=True)
+app.include_router(candidate.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Video Router (Heavy)...\033[0m", flush=True)
+app.include_router(video.router, prefix="/api")
+
 # Heavy ML Routers: Only load if not in orchestrator-only mode
 if IS_ORCHESTRATOR:
-    logger.info("Orchestrator Mode: Skipping /api/video and /api/candidate routers.")
+    logger.info("Orchestrator Mode: ML services are disabled but routers are active.")
 else:
-    print("\033[94m[STARTUP] Including Candidate Router...\033[0m", flush=True)
-    app.include_router(candidate.router, prefix="/api")
-
-    print("\033[94m[STARTUP] Including Video Router (Heavy)...\033[0m", flush=True)
-    app.include_router(video.router, prefix="/api")
+    pass
 
 # General Dashboard Websocket (Real-time monitoring)
 app.include_router(admin_ws.router, prefix="/api")

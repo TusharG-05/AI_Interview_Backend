@@ -6,6 +6,9 @@ from sqlmodel import Session
 from ..core.database import get_db as get_session
 from ..models.db_models import User, UserRole
 from .security import SECRET_KEY, ALGORITHM
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
 
@@ -14,6 +17,7 @@ def get_current_user(
     token: Optional[str] = Depends(oauth2_scheme), 
     session: Session = Depends(get_session)
 ) -> User:
+    logger.info(f"DEBUG AUTH: get_current_user START. Token exists: {token is not None}")
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -28,6 +32,7 @@ def get_current_user(
         raise credentials_exception
 
     try:
+        logger.info(f"DEBUG: Decoding token starting: {token[:20]}... with key starting: {SECRET_KEY[:5]}...")
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
