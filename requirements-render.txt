@@ -45,6 +45,7 @@ loguru
 tenacity==9.1.2
 edge-tts==7.2.7
 redis==5.2.0
+aiortc==1.9.0
 static_ffmpeg==3.0
 orjson==3.11.5
 pyyaml

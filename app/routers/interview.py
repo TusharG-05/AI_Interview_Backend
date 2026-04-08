@@ -2070,6 +2070,10 @@ async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User 
     try:
         content = await audio.read()
         
+        # Validate audio file is not empty
+        if not content or len(content) < 1024:  # Less than 1KB is likely empty/corrupted
+            raise HTTPException(status_code=400, detail="Audio file is empty or too small. Please upload a valid audio file.")
+        
         # Perform STT directly using bytes via a temp file inside the service
         # We can pass the bytes or upload to Cloudinary and pass the URL
         # For simplicity and speed for a 'tool', we'll upload to Cloudinary first

@@ -349,6 +349,12 @@ class AudioService:
         """Uploads an audio blob directly to Cloudinary and returns the URL."""
         import tempfile
         temp_mp3 = None
+        
+        # Validate blob is not empty
+        if not blob or len(blob) < 1024:  # Less than 1KB is likely empty/corrupted
+            logger.error("Audio blob is empty or too small")
+            return None
+            
         try:
             fd, temp_mp3 = tempfile.mkstemp(suffix=".mp3")
             with os.fdopen(fd, 'wb') as f:
@@ -356,7 +362,8 @@ class AudioService:
             
             # Upload to Cloudinary
             try:
-                cloudinary_url = self.cloudinary.upload_audio(blob, folder=folder)
+                with open(temp_mp3, 'rb') as f:
+                    cloudinary_url = self.cloudinary.upload_audio(f, folder=folder)
                 if cloudinary_url:
                     return cloudinary_url
             except Exception as e:
