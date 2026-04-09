@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Union
 import json as _json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, RedirectResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole
@@ -117,7 +117,7 @@ def ensure_web_url(path_or_url: Optional[str]) -> str:
         return "/" + path_or_url.replace("app/", "")
     return path_or_url
 
-@router.get("/verify-otp", response_model=ApiResponse[dict])
+@router.post("/verify-otp", response_model=ApiResponse[dict])
 async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session: Session = Depends(get_session)):
     """
     Verify the OTP code and issue a JWT access token for the candidate.
@@ -1329,10 +1329,32 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
         message="Next question retrieved successfully"
     )
 
-@router.get("/audio/question/{q_id}", deprecated=True)
-async def stream_question_audio(q_id: int):
-    """DEPRECATED: Questions are now served via direct Cloudinary URLs in next-question."""
-    raise HTTPException(status_code=410, detail="Endpoint deprecated. Use direct Cloudinary URLs from access data.")
+@router.get("/audio/question/{q_id}")
+async def stream_question_audio(q_id: int, session_db: Session = Depends(get_session)):
+    """Restored: Questions audio served via redirection to Cloudinary URLs."""
+    # 1. Fetch Question
+    question = session_db.get(Questions, q_id)
+    text = None
+    if question:
+        text = question.question_text or question.content
+    else:
+        # Fallback: Check if it's a coding question ID
+        coding_q = session_db.get(CodingQuestions, q_id)
+        if coding_q:
+            text = coding_q.title
+            
+    if not text:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    # 2. Generate/Get TTS URL
+    audio_service = get_audio_service()
+    audio_url = await audio_service.text_to_speech(text, folder="interview_questions")
+    
+    if not audio_url:
+        raise HTTPException(status_code=500, detail="Failed to generate question audio")
+    
+    # 3. Redirect to Cloudinary (Frontend handles the redirect in <audio> or <img> tags)
+    return RedirectResponse(url=ensure_web_url(audio_url))
 
 @router.post("/submit-answer-audio", response_model=ApiResponse[dict])
 async def submit_answer_audio(
