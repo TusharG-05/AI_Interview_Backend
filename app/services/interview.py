@@ -134,7 +134,8 @@ def evaluate_answer_content(
         if groq_client:
             try:
                 system_instruction = (
-                    "You are an expert technical interviewer. Evaluate the candidate's answer. "
+                    "You are an expert technical interviewer. Evaluate the answer. "
+                    "Address the user directly as 'You' and 'Your' in your feedback (e.g., 'Your answer is...'). "
                     "Provide constructive feedback. Return a JSON object with "
                     "'feedback' (string) and 'score_out_of_10' (float 0-10)."
                 )
@@ -258,7 +259,8 @@ def evaluate_code_submission(
         try:
             logger.info("evaluate_code: Attempting Groq API...")
             system_instruction = (
-                "You are an expert technical interviewer. Evaluate the candidate's code submission. "
+                "You are an expert technical interviewer. Evaluate the code submission. "
+                "Address the user directly as 'You' and 'Your' in your feedback (e.g., 'Your code is...'). "
                 "Provide constructive feedback. Return a JSON object with 'feedback' (string), "
                 "'score' (float 0-10), 'correctness' (string), 'time_complexity' (string), "
                 "'space_complexity' (string), and 'issues' (array of strings)."
