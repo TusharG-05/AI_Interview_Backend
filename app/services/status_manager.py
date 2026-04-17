@@ -381,6 +381,9 @@ def get_status_summary(
             "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
             "enrollment_audio_path": interview_session.enrollment_audio_path,
             "is_completed": interview_session.is_completed or False,
+            "allow_proctoring": interview_session.allow_proctoring,
+            "allow_copy_paste": interview_session.allow_copy_paste,
+            "allow_question_navigate": interview_session.allow_question_navigate,
             "tab_switch_count": interview_session.tab_switch_count,
             "tab_switch_timestamp": interview_session.tab_switch_timestamp.isoformat() if interview_session.tab_switch_timestamp else None,
             "tab_warning_active": interview_session.tab_warning_active

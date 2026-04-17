@@ -53,6 +53,7 @@ class AdminInterviewSessionDetail(BaseModel):
     warning_count: int
     allow_copy_paste: bool = False
     allow_question_navigate: bool = False
+    allow_proctoring: bool = True
     max_warnings: int
     is_suspended: bool = False
     suspension_reason: Optional[str] = None

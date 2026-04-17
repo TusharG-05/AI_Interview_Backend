@@ -79,6 +79,7 @@ class AdminProctoringEvent(BaseModel):
     suspended_at: Optional[datetime] = None
     allow_copy_paste: bool = False
     allow_question_navigation: bool = False
+    allow_proctoring: bool = True
 
     class Config:
         from_attributes = True
@@ -108,6 +109,9 @@ class InterviewSessionNested(BaseModel):
     suspended_at: Optional[datetime] = None
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
+    allow_proctoring: bool = True
+    allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
 
     class Config:
         from_attributes = True
@@ -149,6 +153,7 @@ class GetInterviewResultResponse(BaseModel):
     enrollment_audio_path: Optional[str] = None
     enrollment_audio_url: Optional[str] = None
     is_completed: bool = False
+    allow_proctoring: bool = True
     proctoring_event: Optional[AdminProctoringEvent] = None
 
     class Config:

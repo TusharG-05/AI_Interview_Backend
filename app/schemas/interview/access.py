@@ -87,6 +87,7 @@ class AccessInterviewResponse(BaseModel):
     is_completed: bool = False
     tab_switch_count: int = 0
     tab_warning_active: bool = False
+    allow_proctoring: bool = True
     proctoring_event: Optional["ProctoringEvent"] = None
 
     class Config:
@@ -101,6 +102,7 @@ class ProctoringEvent(BaseModel):
     suspended_at: Optional[datetime] = None
     allow_copy_paste: bool = False
     allow_question_navigation: bool = False
+    allow_proctoring: bool = True
 
     class Config:
         from_attributes = True
