@@ -1,6 +1,7 @@
 import os
 import random
 import json
+import re
 from typing import Dict, Union, Optional, Any
 from sqlmodel import Session, select
 from ..models.db_models import Questions
@@ -70,6 +71,125 @@ def calculate_scaled_score(llm_score: Any, question_marks: float) -> float:
     return round(final_score_clamped, 1)
 
 
+def _safe_feedback_from_score(score_out_of_10: Any) -> str:
+    """Fallback coaching feedback when model feedback is empty or fully unsafe."""
+    try:
+        s = float(score_out_of_10)
+    except (TypeError, ValueError):
+        s = 5.0
+
+    if s >= 8.0:
+        return (
+            "Your answer is strong overall. Keep your explanation structured and verify key details before submitting."
+        )
+    if s >= 6.0:
+        return (
+            "Your answer is partially correct. Improve precision and explain your reasoning more clearly."
+        )
+    if s >= 4.0:
+        return (
+            "Your answer needs improvement. Focus on the core concept and organize your response step-by-step."
+        )
+    return (
+        "Your answer is currently incorrect or incomplete. Revisit the fundamentals and answer with clearer reasoning."
+    )
+
+
+def _extract_target_term(question: str) -> str:
+    """Extract the main concept from definition-style questions."""
+    q = re.sub(r"\s+", " ", (question or "").strip().lower())
+    patterns = [
+        r"^what\s+is\s+an?\s+(.+?)\??$",
+        r"^what\s+are\s+(.+?)\??$",
+        r"^define\s+(.+?)\??$",
+        r"^explain\s+(.+?)\??$",
+    ]
+    for pattern in patterns:
+        m = re.match(pattern, q)
+        if m:
+            term = m.group(1).strip(" .?")
+            # Remove trailing context words that are usually not part of the term.
+            term = re.sub(r"\s+in\s+python$", "", term).strip()
+            term = re.sub(r"^(a|an|the)\s+", "", term).strip()
+            return term
+    return ""
+
+
+def _contains_target_keyword(sentence_lower: str, target_term: str) -> bool:
+    """Check if sentence mentions target concept keywords with simple singular/plural matching."""
+    if not target_term:
+        return False
+
+    stop_words = {"a", "an", "the", "of", "in", "on", "for", "to", "and", "or"}
+    keywords = [w for w in re.findall(r"[a-zA-Z]+", target_term.lower()) if w not in stop_words and len(w) >= 4]
+    for kw in keywords:
+        # Match both singular/plural forms for common cases (decorator/decorators).
+        if re.search(rf"\b{re.escape(kw)}s?\b", sentence_lower):
+            return True
+    return False
+
+
+def _is_pronoun_definition(sentence_lower: str) -> bool:
+    """Check if sentence looks like a definition starting with pronoun/article (it/they/this/that are/is...)."""
+    # Pattern: (pronoun/article) + (definition verb) = likely defining something mentioned before
+    pattern = r"^(it|they|this|that|these|those|such|one)\s+(are|is|can be|refers to|means|defines)"
+    return bool(re.match(pattern, sentence_lower.strip()))
+
+
+def _sanitize_feedback_no_answer_leak(feedback: str, score_out_of_10: Any, question: str) -> str:
+    """Keep dynamic feedback but remove answer-revealing statements."""
+    if not feedback or not str(feedback).strip():
+        return _safe_feedback_from_score(score_out_of_10)
+
+    clean = re.sub(r"\s+", " ", str(feedback)).strip()
+
+    # If model emitted code blocks/solutions, do not return them.
+    if "```" in clean:
+        return _safe_feedback_from_score(score_out_of_10)
+
+    leak_patterns = [
+        r"\b(correct|ideal|expected|model|sample)\s+answer\b",
+        r"\bthe\s+answer\s+is\b",
+        r"\b(correct\s+response|best\s+answer|correct\s+result)\b",
+        r"\byou\s+should\s+(have\s+)?answered\b",
+        r"\bhere('?s|\s+is)\s+the\s+answer\b",
+    ]
+    definition_verbs = [
+        " is ", " are ", " means ", " refers to ", " can be defined as ", " is defined as ", " used to "
+    ]
+    target_term = _extract_target_term(question)
+    is_definition_question = bool(target_term)  # If we extracted a term, it's a definition question
+
+    sentences = re.split(r"(?<=[.!?])\s+", clean)
+    safe_sentences = []
+    for sentence in sentences:
+        s = sentence.strip()
+        if not s:
+            continue
+        lowered = s.lower()
+        if any(re.search(pattern, lowered) for pattern in leak_patterns):
+            continue
+
+        # Semantic leak guard: for definition-style questions, drop sentences that define or describe the target term.
+        if target_term and _contains_target_keyword(lowered, target_term) and any(v in lowered for v in definition_verbs):
+            continue
+        
+        # Pronoun-based definition guard: for definition questions, drop sentences like "They are..." or "It is..."
+        # that follow directly after mentioning the concept (these are typically answer-defining sentences)
+        if is_definition_question and _is_pronoun_definition(lowered) and any(v in lowered for v in definition_verbs):
+            continue
+
+        safe_sentences.append(s)
+
+    if not safe_sentences:
+        return _safe_feedback_from_score(score_out_of_10)
+
+    sanitized = " ".join(safe_sentences).strip()
+    if len(sanitized) > 500:
+        sanitized = sanitized[:500].rsplit(" ", 1)[0].rstrip(".,;: ") + "."
+    return sanitized
+
+
 def evaluate_answer_content(
     question: str,
     answer: str,
@@ -103,13 +223,17 @@ def evaluate_answer_content(
             
             data = json.loads(clean_content)
             # Normalize keys
-            feedback = data.get("feedback") or data.get("reason") or ""
+            feedback_raw = data.get("feedback") or data.get("reason") or ""
             score_raw = data.get("score_out_of_10")
             if score_raw is None:
                 score_raw = data.get("score", 5.0)
+
+            safe_feedback = _sanitize_feedback_no_answer_leak(feedback_raw, score_raw, question)
+            if feedback_raw and safe_feedback != str(feedback_raw).strip():
+                logger.info("Evaluation feedback sanitized to prevent answer leakage.")
             
             return {
-                "feedback": feedback,
+                "feedback": safe_feedback,
                 "score": calculate_scaled_score(score_raw, question_marks)
             }
         except Exception:
@@ -136,7 +260,9 @@ def evaluate_answer_content(
                 system_instruction = (
                     "You are an expert technical interviewer. Evaluate the answer. "
                     "Address the user directly as 'You' and 'Your' in your feedback (e.g., 'Your answer is...'). "
-                    "Provide constructive feedback. Return a JSON object with "
+                    "Never reveal, quote, paraphrase, or hint at the correct/ideal/expected answer. "
+                    "Do not provide model answers, sample answers, exact fixes, final code, or direct solution steps. "
+                    "Provide constructive and high-level coaching feedback. Return a JSON object with "
                     "'feedback' (string) and 'score_out_of_10' (float 0-10)."
                 )
                 completion = groq_client.chat.completions.create(
@@ -165,7 +291,7 @@ def evaluate_answer_content(
                     response = client.chat_completion(
                         model="Qwen/Qwen2.5-7B-Instruct",
                         messages=[
-                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10)."},
+                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10). Never reveal, quote, paraphrase, or hint at the correct answer. Do not provide model answers, exact fixes, or direct solution steps. Provide high-level coaching feedback only."},
                             {"role": "user", "content": f"Q: {question}\nA: {answer}"}
                         ],
                         max_tokens=512,

@@ -107,7 +107,12 @@ async def lifespan(app: FastAPI):
         import redis.asyncio as redis
         from fastapi_limiter import FastAPILimiter
             
-        redis_conn = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        # Robust connection options for Rate Limiter
+        conn_kwargs = {"decode_responses": True}
+        if REDIS_URL.startswith("rediss://"):
+            conn_kwargs["ssl_cert_reqs"] = "none"
+            
+        redis_conn = redis.from_url(REDIS_URL, **conn_kwargs)
         await FastAPILimiter.init(redis_conn)
         logger.info("Lifespan: API Rate Limiting initialized successfully.")
     except ImportError:
@@ -234,9 +239,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # SECURITY: Restrict origins in production, allow development origins
 origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
-if FRONTEND_URL:
-    if FRONTEND_URL not in origins:
-        origins.append(FRONTEND_URL)
+if FRONTEND_URL and FRONTEND_URL not in origins:
+    origins.append(FRONTEND_URL)
 if os.getenv("ENV") == "development":
     origins = ["*"] # Keep wildcard for local dev convenience if explicitly set
 
@@ -318,8 +322,6 @@ app.include_router(video.router, prefix="/api")
 # Heavy ML Routers: Only load if not in orchestrator-only mode
 if IS_ORCHESTRATOR:
     logger.info("Orchestrator Mode: ML services are disabled but routers are active.")
-else:
-    pass
 
 # General Dashboard Websocket (Real-time monitoring)
 app.include_router(admin_ws.router, prefix="/api")

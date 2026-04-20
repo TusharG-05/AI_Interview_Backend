@@ -338,7 +338,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         suspension_reason=session.suspension_reason,
         suspended_at=session.suspended_at,
         allow_copy_paste=session.allow_copy_paste or False,
-        allow_question_navigation=session.allow_question_navigate or False,
+        allow_question_navigate=session.allow_question_navigate or False,
         allow_proctoring=getattr(session, "allow_proctoring", True)
     )
 

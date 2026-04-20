@@ -102,7 +102,7 @@ def serialize_interview_admin_detail(session_obj: InterviewSession) -> Dict[str,
         "suspension_reason": session_obj.suspension_reason,
         "suspended_at": session_obj.suspended_at,
         "allow_copy_paste": bool(session_obj.allow_copy_paste),
-        "allow_question_navigation": bool(session_obj.allow_question_navigate),
+        "allow_question_navigate": bool(session_obj.allow_question_navigate),
         "allow_proctoring": bool(session_obj.allow_proctoring)
     }
     if session_obj.proctoring_events:

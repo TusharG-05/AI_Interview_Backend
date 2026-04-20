@@ -58,7 +58,20 @@ class CacheClient:
             return
         
         try:
-            self.redis = redis.from_url(self.url, decode_responses=True, ssl_cert_reqs=None)
+            # Robust connection options
+            conn_kwargs = {
+                "decode_responses": True,
+            }
+            
+            # Only add SSL parameters if the URL uses SSL (rediss://)
+            if self.url.startswith("rediss://"):
+                # Default to skipping cert verification for cloud Redis (Upstash/Render)
+                # This prevents common SSL handshake errors.
+                conn_kwargs["ssl_cert_reqs"] = "none"
+                logger.debug("Connecting to Redis with SSL (cert_reqs=none)")
+            
+            self.redis = redis.from_url(self.url, **conn_kwargs)
+            
             # Test connection
             await asyncio.wait_for(self.redis.ping(), timeout=5.0)
             logger.info("Successfully connected to Redis.")

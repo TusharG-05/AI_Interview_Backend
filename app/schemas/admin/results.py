@@ -78,7 +78,7 @@ class AdminProctoringEvent(BaseModel):
     suspension_reason: Optional[str] = None
     suspended_at: Optional[datetime] = None
     allow_copy_paste: bool = False
-    allow_question_navigation: bool = False
+    allow_question_navigate: bool = False
     allow_proctoring: bool = True
 
     class Config:
