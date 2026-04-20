@@ -102,7 +102,8 @@ def serialize_interview_admin_detail(session_obj: InterviewSession) -> Dict[str,
         "suspension_reason": session_obj.suspension_reason,
         "suspended_at": session_obj.suspended_at,
         "allow_copy_paste": bool(session_obj.allow_copy_paste),
-        "allow_question_navigation": bool(session_obj.allow_question_navigate)
+        "allow_question_navigation": bool(session_obj.allow_question_navigate),
+        "allow_proctoring": bool(session_obj.allow_proctoring)
     }
     if session_obj.proctoring_events:
         proctoring_event["id"] = session_obj.proctoring_events[0].id
@@ -137,5 +138,6 @@ def serialize_interview_admin_detail(session_obj: InterviewSession) -> Dict[str,
         "enrollment_audio_path": session_obj.enrollment_audio_path,
         "enrollment_audio_url": f"/api/admin/interviews/enrollment-audio/{session_obj.id}" if session_obj.enrollment_audio_path else None,
         "is_completed": bool(session_obj.is_completed),
+        "allow_proctoring": bool(session_obj.allow_proctoring),
         "proctoring_event": proctoring_event
     }

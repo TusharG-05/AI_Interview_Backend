@@ -14,6 +14,8 @@ class TeamDetailResponse(BaseModel):
     id: int
     name: str
     description: Optional[str] = None
+    created_at: Optional[str] = None
+    user_count: Optional[int] = 0
     users: List[UserNested] = []
 
     class Config:

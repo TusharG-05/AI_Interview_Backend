@@ -15,6 +15,7 @@ class ScheduleInterviewRequest(BaseModel):
     max_questions: Optional[int] = None
     allow_copy_paste: bool = False
     allow_question_navigate: bool = False
+    allow_proctoring: bool = True
 
     @model_validator(mode="after")
     def at_least_one_paper(self) -> "ScheduleInterviewRequest":
@@ -31,6 +32,7 @@ class UpdateInterviewRequest(BaseModel):
     max_questions: Optional[int] = None
     allow_copy_paste: Optional[bool] = None
     allow_question_navigate: Optional[bool] = None
+    allow_proctoring: Optional[bool] = None
 
 class InterviewLinkResponse(BaseModel):
     interview: AdminInterviewSessionDetail

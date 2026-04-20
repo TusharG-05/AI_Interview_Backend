@@ -338,7 +338,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         suspension_reason=session.suspension_reason,
         suspended_at=session.suspended_at,
         allow_copy_paste=session.allow_copy_paste or False,
-        allow_question_navigation=session.allow_question_navigate or False
+        allow_question_navigation=session.allow_question_navigate or False,
+        allow_proctoring=getattr(session, "allow_proctoring", True)
     )
 
     now = datetime.now(timezone.utc)
@@ -372,6 +373,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,
         tab_warning_active=session.tab_warning_active or False,
+        allow_proctoring=getattr(session, "allow_proctoring", True),
         proctoring_event=proctoring_event
     )
 
@@ -659,6 +661,7 @@ async def get_schedule_time(
                 "duration_minutes": session.duration_minutes,
                 "max_questions": session.max_questions,
                 "allow_question_navigate": session.allow_question_navigate,
+                "allow_proctoring": session.allow_proctoring,
             },
             message="This interview has been cancelled."
         )
@@ -672,6 +675,7 @@ async def get_schedule_time(
                 "duration_minutes": session.duration_minutes,
                 "max_questions": session.max_questions,
                 "allow_question_navigate": session.allow_question_navigate,
+                "allow_proctoring": session.allow_proctoring,
             },
             message="This interview has already been completed."
         )
@@ -685,6 +689,7 @@ async def get_schedule_time(
                 "duration_minutes": session.duration_minutes,
                 "max_questions": session.max_questions,
                 "allow_question_navigate": session.allow_question_navigate,
+                "allow_proctoring": session.allow_proctoring,
             },
             message="This interview link has expired."
         )
@@ -696,6 +701,7 @@ async def get_schedule_time(
             "duration_minutes": session.duration_minutes,
             "max_questions": session.max_questions,
             "allow_question_navigate": session.allow_question_navigate,
+            "allow_proctoring": session.allow_proctoring,
             "paper": paper_data,
             "coding_paper": coding_paper_data,
         },

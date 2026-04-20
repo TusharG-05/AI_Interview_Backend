@@ -215,6 +215,7 @@ class InterviewSession(SQLModel, table=True):
     # Control Flags
     allow_copy_paste: bool = Field(default=False)
     allow_question_navigate: bool = Field(default=False)
+    allow_proctoring: bool = Field(default=True)
 
     # Tab-Switch Monitoring
     tab_switch_count: int = Field(default=0)

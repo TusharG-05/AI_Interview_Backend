@@ -896,7 +896,8 @@ async def schedule_interview(
         is_suspended=False,
         is_completed=False,
         allow_copy_paste=schedule_data.allow_copy_paste,
-        allow_question_navigate=schedule_data.allow_question_navigate
+        allow_question_navigate=schedule_data.allow_question_navigate,
+        allow_proctoring=schedule_data.allow_proctoring
     )
     
     session.add(new_session)
@@ -963,7 +964,7 @@ async def schedule_interview(
     # Send Email Invitation Asynchronously (prevent UI hang without Redis)
     try:
         background_tasks.add_task(
-            email_service.send_interview_invitation,
+            get_email_service().send_interview_invitation,
             to_email=candidate_email, 
             candidate_name=candidate_full_name,
             link=link,
@@ -1007,6 +1008,7 @@ async def schedule_interview(
         is_completed=new_session.is_completed or False,
         allow_copy_paste=new_session.allow_copy_paste,
         allow_question_navigate=new_session.allow_question_navigate,
+        allow_proctoring=new_session.allow_proctoring,
         team_id=candidate.team_id,
         admin_user=admin_dict,
         candidate_user=candidate_dict
@@ -1164,6 +1166,7 @@ async def get_live_status_dashboard(
             "is_completed": interview_session.is_completed or False,
             "allow_copy_paste": interview_session.allow_copy_paste,
             "allow_question_navigate": interview_session.allow_question_navigate,
+            "allow_proctoring": interview_session.allow_proctoring,
             "interview_round": interview_session.interview_round.value if interview_session.interview_round else None
         }
         
@@ -2073,7 +2076,7 @@ async def create_user(
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
-                        cloudinary_service.upload_image, 
+                        get_cloudinary_service().upload_image, 
                         image_bytes, 
                         folder="profile_pictures" 
                     )
@@ -2092,7 +2095,7 @@ async def create_user(
         try:
             await resume.seek(0)
             # Upload to Cloudinary
-            resume_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            resume_url = get_cloudinary_service().upload_resume(resume.file, folder="resumes")
             if resume_url:
                 new_user.resume_path = resume_url
                 updates_made = True
@@ -2289,7 +2292,7 @@ async def update_user(
         
         try:
             await resume.seek(0)
-            cloudinary_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            cloudinary_url = get_cloudinary_service().upload_resume(resume.file, folder="resumes")
             print(cloudinary_url)
 
             if cloudinary_url:
@@ -2428,6 +2431,12 @@ async def delete_user(
         select(QuestionPaper).where(QuestionPaper.admin_user == user_id)
     ).all())
     
+    coding_papers_count = len(session.exec(
+        select(CodingQuestionPaper).where(CodingQuestionPaper.admin_user == user_id)
+    ).all())
+    
+    total_papers_count = papers_count + coding_papers_count
+    
     # Store info for response
     user_email = user.email
     user_name = user.full_name
@@ -2438,6 +2447,13 @@ async def delete_user(
     ).all()
     for paper in papers:
         session.delete(paper)
+
+    # Also delete coding question papers
+    coding_papers = session.exec(
+        select(CodingQuestionPaper).where(CodingQuestionPaper.admin_user == user_id)
+    ).all()
+    for cp in coding_papers:
+        session.delete(cp)
 
     # Hard delete: user is permanently removed
     # DB ON DELETE CASCADE handles InterviewSession → Result → Answers, etc.
@@ -2456,7 +2472,7 @@ async def delete_user(
             "email": user_email,
             "full_name": user_name,
             "interviews_deleted": interviews_as_admin + interviews_as_candidate,
-            "papers_deleted": papers_count
+            "papers_deleted": total_papers_count
         },
         message="User and all associated data deleted successfully."
     )
