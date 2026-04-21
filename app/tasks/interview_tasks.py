@@ -1,7 +1,8 @@
 from ..core.celery_app import celery_app
 from ..services.audio import AudioService
 from ..services import interview as interview_service
-from ..models.db_models import InterviewSession, InterviewResult, Answers, Questions, CandidateStatus
+from ..models.db_models import InterviewSession, InterviewResult, Answers, Questions, CandidateStatus, User
+from ..services.email import EmailService
 from ..core.database import engine
 from ..core.logger import get_logger
 from ..utils import format_iso_datetime, calculate_total_score, calculate_total_marks
@@ -152,6 +153,39 @@ def process_session_results(interview_id: int, db: Session = None):
         db.add(session)
         db.commit()
         logger.info(f"Session {interview_id} processing complete. Final score: {computed_score}, Status: {result_obj.result_status}")
+
+        # ── Send Result Email to Candidate ──────────────────────────────
+        try:
+            admin_user = db.get(User, session.admin_id)
+            admin_name = admin_user.full_name if admin_user else "Platform Admin"
+            
+            candidate_user = db.get(User, session.candidate_id)
+            candidate_name = candidate_user.full_name if candidate_user else "Candidate"
+            candidate_email = candidate_user.email if candidate_user else "tushar@chicmicstudios.in"
+
+            # Format detailed result data for the template
+            report_data = {
+                "candidate_name": candidate_name,
+                "date_str": format_iso_datetime(datetime.now(timezone.utc)),
+                "id": str(session.id),
+                "score": float(computed_score),
+                "max_score": float(total_marks),
+                "status": result_obj.result_status,
+                "theory_count": len(fresh_answers),
+                "coding_count": len(fresh_coding_answers),
+                "admin_name": admin_name,
+                "round_name": session.interview_round or "General Interview",
+                "scheduled_time": format_iso_datetime(session.schedule_time),
+                "start_time": format_iso_datetime(session.start_time) if session.start_time else "N/A",
+                "duration_mins": str(session.duration_minutes),
+                "proctoring_warnings": f"{session.tab_switch_count}/{session.tab_switch_limit}" if session.tab_switch_limit else "0"
+            }
+            
+            email_service = EmailService()
+            email_service.send_interview_result_email(candidate_email, report_data)
+            logger.info(f"Result email dispatched to {session.candidate_email}")
+        except Exception as email_err:
+            logger.error(f"Failed to send result email for session {interview_id}: {email_err}")
 
     except Exception as e:
         logger.error(f"Session {interview_id} processing failed: {e}", exc_info=True)
