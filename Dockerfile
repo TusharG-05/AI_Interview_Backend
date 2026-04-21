@@ -1,12 +1,12 @@
-# Hugging Face Spaces Dockerfile (v1 & v2)
-# Uses unified requirements.txt — includes core ML + app dependencies
+# Render Orchestrator Dockerfile (High Performance, Low Memory)
+# This container runs the FastAPI app WITHOUT heavy ML libraries.
 
 FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies (Lightweight)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsm6 \
@@ -18,32 +18,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     redis-server \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user (Hugging Face requirement)
-RUN useradd -m -u 1000 user
-USER user
-ENV HOME=/home/user \
-    PATH=/home/user/.local/bin:$PATH \
+# Environment variables
+ENV PYTHONUNBUFFERED=TRUE \
     PYTHONPATH=/app \
-    ENV=production
+    ENV=production \
+    RENDER=true \
+    ENV_MODE=orchestrator
 
-# ── Install Python dependencies ──────────────────────────────────────────────
-# Copy unified requirements first to leverage Docker layer cache
-COPY --chown=user requirements.txt /app/requirements.txt
-
+# ── Install Python dependencies (Orchestrator Mode) ─────────────────────────
+# Uses requirements-render.txt which excludes torch, tensorflow, etc.
+COPY requirements-render.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # ── Copy application code ────────────────────────────────────────────────────
-COPY --chown=user . /app
+COPY . /app
 
-# ── Pre-download ML models at build time (avoids cold-start latency) ─────────
-RUN chmod +x /app/start.sh && \
-    mkdir -p /app/app/assets && \
-    wget -q -O /app/app/assets/face_landmarker.task \
-        https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task && \
-    python3 -c "from deepface import DeepFace; DeepFace.build_model('SFace')" || true
+# ── Skip ML model pre-download ──────────────────────────────────────────────
+# In orchestrator mode, models are offloaded to Modal/HF API.
+RUN chmod +x /app/start.sh
 
-# Expose port (Hugging Face Spaces default)
+# Expose port (Render will provide PORT env var)
+# Note: Render provides PORT env var dynamically, this is just documentation
 EXPOSE 7860
 
 CMD ["/app/start.sh"]
