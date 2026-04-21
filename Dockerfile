@@ -28,7 +28,12 @@ ENV PYTHONUNBUFFERED=TRUE \
 # ── Install Python dependencies (Orchestrator Mode) ─────────────────────────
 # Use requirements-render.txt directly (keeps logs/source of truth explicit).
 COPY requirements-render.txt /app/requirements-render.txt
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN set -eux; \
+    if [ -f /app/requirements.txt ]; then \
+        echo "ERROR: unexpected /app/requirements.txt found during orchestrator dependency install"; \
+        exit 1; \
+    fi; \
+    pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements-render.txt
 
 # ── Copy application code ────────────────────────────────────────────────────
