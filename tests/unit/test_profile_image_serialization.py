@@ -49,15 +49,15 @@ def test_serialize_interview_admin_detail_profile_image(session, test_users):
     result = _serialize_interview_admin_detail(interview_loaded)
     
     # 4. Assertions
-    assert isinstance(result, GetInterviewResultResponse)
+    assert isinstance(result, dict)
     
     # Check Admin
-    assert result.admin_user.profile_image == "https://cloudinary.com/admin_avatar.jpg"
-    assert not hasattr(result.admin_user, "profile_image_url") or result.admin_user.profile_image_url is None
+    assert result["admin_user"]["profile_image"] == "https://cloudinary.com/admin_avatar.jpg"
+    assert "profile_image_url" not in result["admin_user"]
     
     # Check Candidate
-    assert result.candidate_user.profile_image == "https://cloudinary.com/candidate_selfie.jpg"
-    assert not hasattr(result.candidate_user, "profile_image_url") or result.candidate_user.profile_image_url is None
+    assert result["candidate_user"]["profile_image"] == "https://cloudinary.com/candidate_selfie.jpg"
+    assert "profile_image_url" not in result["candidate_user"]
 
 def test_admin_list_users_profile_image(client, session, test_users, auth_headers):
     """
@@ -71,7 +71,8 @@ def test_admin_list_users_profile_image(client, session, test_users, auth_header
     response = client.get("/api/admin/users", headers=auth_headers)
     assert response.status_code == 200
     
-    users = response.json()["data"]
+    data = response.json()["data"]
+    users = data["items"]
     # Find our candidate in the list
     cand_data = next((u for u in users if u["id"] == candidate.id), None)
     assert cand_data is not None

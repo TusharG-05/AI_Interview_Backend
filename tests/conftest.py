@@ -38,9 +38,16 @@ sys.modules["pydub"] = pydub
 sys.modules["app.services.camera"] = MagicMock()
 sys.modules["app.services.webrtc"] = MagicMock()
 
-# Mock External APIs (Modal, HF)
+# Mock External APIs (Modal, HF, Cloudinary)
 sys.modules["modal"] = MagicMock()
 sys.modules["huggingface_hub"] = MagicMock()
+mock_cloudinary = MagicMock()
+mock_uploader = MagicMock()
+# Configure upload to return a realistic dict so CloudinaryService returns a string
+mock_uploader.upload.return_value = {"secure_url": "https://res.cloudinary.com/mock/resume_file.pdf"}
+mock_cloudinary.uploader = mock_uploader
+sys.modules["cloudinary"] = mock_cloudinary
+sys.modules["cloudinary.uploader"] = mock_uploader
 
 # --- 2. DB MOCKS & FIXTURES ---
 from sqlmodel import SQLModel, Session, create_engine

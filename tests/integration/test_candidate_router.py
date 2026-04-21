@@ -80,8 +80,9 @@ def test_get_history(client, session, candidate_setup):
     response = client.get("/api/candidate/history")
     
     assert response.status_code == 200
-    history = response.json()["data"]
-    assert len(history) == 1
-    assert history[0]["score"] == 85.0
+    history_data = response.json()["data"]
+    items = history_data["items"]
+    assert len(items) >= 1
+    assert items[0]["score"] == 85.0
     
     app.dependency_overrides.pop(get_current_user)

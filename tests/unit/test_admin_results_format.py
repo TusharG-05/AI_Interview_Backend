@@ -91,10 +91,9 @@ def test_print_admin_results_format(session, client):
     
     # Simple assertions to verify top-level requested keys exist
     data = response.json()["data"]
-    assert "interview" in data
     
-    # Answers are now nested within the paper questions
-    paper = data["interview"]["paper"]
+    # Paper is at the top level of data now, not nested in "interview"
+    paper = data.get("paper")
     assert paper is not None
     assert len(paper["questions"]) > 0
     assert paper["questions"][0]["answer"] is not None

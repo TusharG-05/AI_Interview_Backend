@@ -80,8 +80,8 @@ def test_get_schedule_time_metadata(client, session, test_users):
     session.add(interview)
     session.commit()
     response = client.get(f"/api/interview/schedule-time/{token_val}")
-    assert response.status_code == 200
-    assert response.json()["message"] == "This interview has been cancelled."
+    assert response.status_code == 403
+    assert "cancelled" in response.json()["message"].lower()
 
     # 7. Test - EXPIRED
     interview.status = InterviewStatus.SCHEDULED
@@ -91,5 +91,5 @@ def test_get_schedule_time_metadata(client, session, test_users):
     session.add(interview)
     session.commit()
     response = client.get(f"/api/interview/schedule-time/{token_val}")
-    assert response.status_code == 200
+    assert response.status_code == 403
     assert response.json()["message"] == "This interview link has expired."

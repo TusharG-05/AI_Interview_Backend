@@ -286,9 +286,9 @@ class AudioService:
                     text = await loop.run_in_executor(None, _transcribe)
                     return text if text else "[Silence/No Speech Detected]"
             else:
-                msg = f"Orchestrator/Cloud Environment detected. Skipping local STT fallback to prevent OOM."
+                msg = "Cloud Environment detected. Skipping local STT fallback."
                 logger.warning(msg)
-                return ""
+                return f"[STT Error: {msg}]"
 
 
             # If all failed, return the accumulated last error

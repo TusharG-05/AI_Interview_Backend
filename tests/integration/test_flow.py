@@ -55,11 +55,11 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
     
     # --- 3. START SESSION ---
     # Mock Audio Service
-    with patch("app.services.audio.AudioService.save_audio_blob"), \
+    with patch("app.services.audio.AudioService.upload_audio_blob", return_value="https://cloudinary.com/enroll.mp3"), \
          patch("app.services.audio.AudioService.calculate_energy", return_value=80), \
          patch("app.services.audio.AudioService.cleanup_audio"):
         
-        files = {"enrollment_audio": ("enroll.wav", b"riff-wave-header...", "audio/wav")}
+        files = {"enrollment_audio": ("enroll.wav", b"riff-wave-header" + b"0" * 2000, "audio/wav")}
         response = client.post(f"/api/interview/start-session/{interview.id}", files=files)
         assert response.status_code == 200
         assert response.json()["data"]["status"] == "LIVE"
@@ -80,9 +80,9 @@ def test_full_interview_lifecycle(client, session, auth_headers, test_users):
         assert interview.current_status.lower() == "interview_active"
         
     # --- 5. SUBMIT ANSWER ---
-    with patch("app.services.audio.AudioService.save_audio_blob"):
+    with patch("app.services.audio.AudioService.upload_audio_blob", return_value="https://cloudinary.com/answer.mp3"):
         files = {
-            "audio": ("answer.wav", b"answer-audio", "audio/wav")
+            "audio": ("answer.wav", b"answer-audio" + b"0" * 2000, "audio/wav")
         }
         data = {
             "interview_id": interview.id,

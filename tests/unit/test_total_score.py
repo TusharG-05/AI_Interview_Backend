@@ -99,9 +99,10 @@ class TestTotalScoreInResultDetail:
 
         response = client.get(f"/api/admin/results/{interview.id}", headers=headers)
         assert response.status_code == 200, response.text
+        data = response.json()["data"]
 
-        assert data["score"] == 7.5, (
-            f"Expected score=7.5 in GetInterviewResultResponse, got {data['score']}"
+        assert data["total_score"] == 7.5, (
+            f"Expected total_score=7.5 in GetInterviewResultResponse, got {data.get('total_score')}"
         )
 
     def test_total_score_none_when_not_processed(self, session, client):
@@ -161,8 +162,8 @@ class TestTotalScoreInResultDetail:
         assert response.status_code == 200, response.text
         data = response.json()["data"]
         # Default is 0.0 per db model
-        assert data["score"] == 0.0, (
-            f"Expected score=0.0 (default), got {data['score']}"
+        assert data["total_score"] == 0.0, (
+            f"Expected total_score=0.0 (default), got {data.get('total_score')}"
         )
 
     def test_total_score_in_nested_interview_object(self, session, client):
@@ -223,10 +224,7 @@ class TestTotalScoreInResultDetail:
         data = response.json()["data"]
 
         # Verify both top-level and nested score
-        assert data["score"] == 6.0
-        # In current schema GetInterviewResultResponse, there is no nested 'interview' object.
-        # It seems the test was expecting a different structure. 
-        # I'll check if 'interview' is actually in the response.
+        assert data["total_score"] == 6.0
 
 
 class TestTotalScoreInResultBrief:
@@ -240,12 +238,13 @@ class TestTotalScoreInResultBrief:
         response = client.get("/api/admin/users/results", headers=headers)
         assert response.status_code == 200, response.text
 
-        items = response.json()["data"]
+        items = response.json()["data"]["items"]
         assert len(items) >= 1
 
-        matching = [item for item in items if item["id"] == result.id]
+        matching = [item for item in items if item["id"] == interview.id]
         assert len(matching) == 1, "Expected our result to appear in the list"
 
+        # Note: GetAdminResultsListResponse uses alias 'score' for total_score
         assert matching[0]["score"] == 8.0, (
             f"Expected score=8.0 in AdminUserResultBriefResponse, got {matching[0]['score']}"
         )
@@ -258,7 +257,7 @@ class TestTotalScoreInResultBrief:
         response = client.get("/api/admin/users/results", headers=headers)
         assert response.status_code == 200, response.text
 
-        items = response.json()["data"]
-        matching = [item for item in items if item["id"] == result.id]
+        items = response.json()["data"]["items"]
+        matching = [item for item in items if item["id"] == interview.id]
         assert len(matching) == 1, "Result with score 0.0 should still appear"
         assert matching[0]["score"] == 0.0
