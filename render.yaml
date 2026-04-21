@@ -38,6 +38,16 @@ services:
         sync: false
       - key: CLOUDINARY_URL
         sync: false
+      - key: MAIL_USERNAME
+        sync: false
+      - key: MAIL_PASSWORD
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_STARTTLS
+        sync: false
       - key: JWT_SECRET
         generateValue: true
 
