@@ -105,3 +105,12 @@ def test_team_id_in_responses(session, client):
     else:
         assert data["candidate_user"]["team"]["id"] == TEST_TEAM_ID
     print("✓ /admin/interviews/{id} has team info")
+
+    # 6. Test /admin/interviews list includes access_token
+    response = client.get("/api/admin/interviews", headers=admin_headers)
+    assert response.status_code == 200
+    list_data = response.json()["data"]
+    assert len(list_data["items"]) > 0
+    assert "access_token" in list_data["items"][0]
+    assert list_data["items"][0]["access_token"] == "test-token-123"
+    print("✓ /admin/interviews list includes access_token")

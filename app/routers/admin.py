@@ -1074,6 +1074,7 @@ async def list_interviews(
 
         results.append(AdminInterviewsList(
             id=s.id,
+            access_token=s.access_token,
             candidate_user=candidate_dict,
             status=s.status.value,
             schedule_time=format_iso_datetime(s.schedule_time),

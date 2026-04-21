@@ -26,6 +26,7 @@ class ProgressInfo(BaseModel):
 
 class AdminInterviewsList(BaseModel):
     id: int
+    access_token: Optional[str] = None
     candidate_user: UserNested
     status: str
     schedule_time: str
