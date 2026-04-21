@@ -3,18 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gaze Detection Test</title>
+    <title>WebSocket Video Streaming Test</title>
     <style>
         * { box-sizing: border-box; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; flex-direction: column; align-items: center; background: #f4f7f6; margin: 0; padding: 20px; color: #333; }
         header { width: 100%; text-align: center; margin-bottom: 20px; }
         h1 { color: #2c3e50; margin: 0; }
         p { color: #7f8c8d; margin: 4px 0; }
-        .container { display: flex; gap: 30px; flex-wrap: wrap; justify-content: center; width: 100%; max-width: 1200px; }
-        .video-card { background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 500px; border: 1px solid #e0e0e0; }
+        .container { display: flex; gap: 30px; flex-wrap: wrap; justify-content: center; width: 100%; max-width: 800px; }
+        .video-card { background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 640px; border: 1px solid #e0e0e0; }
         .video-header { padding: 12px 15px; background: #ecf0f1; border-bottom: 1px solid #e0e0e0; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
-        .video-wrapper { width: 500px; height: 375px; background: #111; position: relative; display: flex; align-items: center; justify-content: center; }
-        video, img.feed { width: 100%; height: 100%; object-fit: contain; }
+        .video-wrapper { width: 640px; height: 480px; background: #111; position: relative; display: flex; align-items: center; justify-content: center; }
+        video { width: 100%; height: 100%; object-fit: contain; }
         .controls { margin-top: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: center; }
         button { padding: 12px 24px; font-size: 15px; cursor: pointer; border: none; border-radius: 8px; transition: all 0.2s; font-weight: 600; }
         #startButton { background: #27ae60; color: white; }
@@ -30,22 +30,6 @@
         /* Warning Banner */
         #warningBanner { display: none; position: fixed; top: 0; left: 0; width: 100%; padding: 16px; text-align: center; font-size: 18px; font-weight: 700; color: white; z-index: 999; animation: flashBg 0.6s infinite alternate; }
         @keyframes flashBg { from { background: #e74c3c; } to { background: #c0392b; } }
-        #warningText { font-size: 12px; margin-top: 2px; opacity: 0.85; font-weight: 400; }
-
-        /* Enrollment Dialog */
-        #enrollModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; align-items: center; justify-content: center; }
-        #enrollModal.open { display: flex; }
-        .modal-box { background: #fff; border-radius: 16px; padding: 30px; max-width: 480px; width: 90%; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
-        .modal-box h2 { margin: 0 0 8px; color: #2c3e50; }
-        .modal-box p { color: #7f8c8d; margin: 0 0 20px; }
-        #snapshotPreview { width: 100%; border-radius: 10px; border: 3px solid #27ae60; margin-bottom: 16px; display: none; }
-        #snapCanvas { display: none; }
-        .modal-actions { display: flex; gap: 10px; justify-content: center; }
-        #takeSnapBtn { background: #3498db; color: white; }
-        #takeSnapBtn:hover { background: #2980b9; }
-        #confirmEnrollBtn { background: #27ae60; color: white; display: none; }
-        #retakeBtn { background: #95a5a6; color: white; display: none; }
-        #enrollStatus { font-size: 13px; color: #888; margin-top: 10px; min-height: 20px; }
 
         /* Debug Log */
         #log { max-width: 800px; width: 100%; margin-top: 16px; padding: 10px 14px; background: #1e1e1e; color: #0f0; border-radius: 8px; font-family: monospace; font-size: 12px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
@@ -54,32 +38,17 @@
     </style>
 </head>
 <body>
-    <!-- Warning Banner -->
-    <div id="warningBanner">
-        ⚠️ <span id="warningMessage">WARNING</span>
-        <div id="warningText"></div>
-    </div>
-
-    <!-- Enrollment Modal -->
-    <div id="enrollModal">
-        <div class="modal-box">
-            <h2>📸 Face Enrollment</h2>
-            <p>Take a snapshot so the AI can recognize you as the authorized person.</p>
-            <canvas id="snapCanvas"></canvas>
-            <img id="snapshotPreview" alt="Your snapshot">
-            <div class="modal-actions">
-                <button id="takeSnapBtn">Take Snapshot</button>
-                <button id="retakeBtn">Retake</button>
-                <button id="confirmEnrollBtn">✓ Confirm & Start</button>
-            </div>
-            <div id="enrollStatus">Position your face clearly in the camera.</div>
-        </div>
-    </div>
+    <div id="warningBanner">⚠️ <span id="warningMessage">WARNING</span></div>
 
     <header>
-        <h1>Gaze Detection System Test</h1>
-        <p>Validate AI proctoring with face recognition</p>
+        <h1>WebSocket Video Streaming Test</h1>
+        <p>Send raw frames directly via WebSockets for real-time AI Proctoring</p>
     </header>
+
+    <div style="text-align: center; margin-bottom: 20px;">
+        <input type="text" id="wsToken" placeholder="Enter Auth Token (Optional if cookie is set)" style="padding: 10px; width: 300px; border: 1px solid #ccc; border-radius: 4px;">
+        <input type="number" id="interviewId" placeholder="Interview ID" value="0" style="padding: 10px; width: 120px; border: 1px solid #ccc; border-radius: 4px; margin-left: 10px;">
+    </div>
 
     <div id="status-indicator">
         <div id="statusDot" class="dot"></div>
@@ -91,26 +60,17 @@
         <div class="video-card">
             <div class="video-header">
                 <span>Local Input</span>
-                <small style="color: #27ae60;">Direct from Device</small>
+                <small style="color: #27ae60;">WebSocket Frames</small>
             </div>
             <div class="video-wrapper">
                 <video id="localVideo" autoplay playsinline muted></video>
-            </div>
-        </div>
-
-        <div class="video-card">
-            <div class="video-header">
-                <span>AI Processed Output</span>
-                <small id="mjpegStatus" style="color: #3498db;">Server Response (MJPEG)</small>
-            </div>
-            <div class="video-wrapper">
-                <img id="processedFeed" class="feed" alt="Processed output">
+                <canvas id="snapCanvas" style="display: none;"></canvas>
             </div>
         </div>
     </div>
 
     <div class="controls">
-        <button id="startButton">📷 Initialize Camera & Enroll</button>
+        <button id="startButton">📷 Connect WebSocket</button>
         <button id="stopButton" disabled>⏹ Stop Session</button>
     </div>
 
@@ -119,38 +79,29 @@
     <div class="instructions">
         <h3>How to test:</h3>
         <ol>
-            <li>Click <strong>Initialize Camera & Enroll</strong> — allow camera access.</li>
-            <li>Take a snapshot of your face in the enrollment dialog and confirm.</li>
-            <li>The AI will authenticate you. If another person appears → <strong>UNAUTHORIZED PERSON</strong>.</li>
-            <li>Try looking away for 3+ seconds → <strong>LOOKING_AWAY warning</strong>.</li>
-            <li>Cover the camera → <strong>NO FACE DETECTED</strong>.</li>
-            <li>Click <strong>Stop Session</strong> — your enrollment data is immediately deleted.</li>
+            <li>Get a valid Access Token (by logging in via Postman or Swagger UI: <a href="http://localhost:7427/docs" target="_blank">http://localhost:7427/docs</a>).</li>
+            <li>Paste your Token in the input box above.</li>
+            <li>Enter the target <strong>Interview ID</strong>.</li>
+            <li>Click <strong>Connect WebSocket</strong> — allow camera access.</li>
+            <li>Frames will be sent directly to <code>/api/video/stream/{id}</code> and responses stream back into the log.</li>
         </ol>
     </div>
 
     <script>
         const localVideo = document.getElementById('localVideo');
-        const processedFeed = document.getElementById('processedFeed');
+        const snapCanvas = document.getElementById('snapCanvas');
         const startButton = document.getElementById('startButton');
         const stopButton = document.getElementById('stopButton');
         const statusText = document.getElementById('statusText');
         const statusDot = document.getElementById('statusDot');
-        const mjpegStatus = document.getElementById('mjpegStatus');
         const detectorEl = document.getElementById('detectorStatus');
         const logEl = document.getElementById('log');
-        const enrollModal = document.getElementById('enrollModal');
-        const snapCanvas = document.getElementById('snapCanvas');
-        const snapshotPreview = document.getElementById('snapshotPreview');
-        const takeSnapBtn = document.getElementById('takeSnapBtn');
-        const confirmEnrollBtn = document.getElementById('confirmEnrollBtn');
-        const retakeBtn = document.getElementById('retakeBtn');
-        const enrollStatus = document.getElementById('enrollStatus');
+        const wsTokenInput = document.getElementById('wsToken');
+        const interviewIdInput = document.getElementById('interviewId');
 
-        let pc = null;
+        let ws = null;
         let localStream = null;
-        let statusPollInterval = null;
-        let lastWarning = '';
-        let snapshotB64 = null;
+        let frameInterval = null;
 
         function log(msg) {
             const ts = new Date().toLocaleTimeString();
@@ -163,212 +114,105 @@
             statusDot.classList.toggle('active', isActive);
         }
 
-        // ─── Enrollment ───────────────────────────────────────────────────
-        takeSnapBtn.onclick = () => {
-            const w = localVideo.videoWidth || 640;
-            const h = localVideo.videoHeight || 480;
-            snapCanvas.width = w;
-            snapCanvas.height = h;
-            snapCanvas.getContext('2d').drawImage(localVideo, 0, 0, w, h);
-            snapshotB64 = snapCanvas.toDataURL('image/jpeg', 0.85).split(',')[1];
-            snapshotPreview.src = snapCanvas.toDataURL('image/jpeg', 0.85);
-            snapshotPreview.style.display = 'block';
-            takeSnapBtn.style.display = 'none';
-            confirmEnrollBtn.style.display = 'inline-block';
-            retakeBtn.style.display = 'inline-block';
-            enrollStatus.textContent = 'Face captured! Click Confirm to proceed.';
-        };
-
-        retakeBtn.onclick = () => {
-            snapshotPreview.style.display = 'none';
-            snapshotB64 = null;
-            takeSnapBtn.style.display = 'inline-block';
-            confirmEnrollBtn.style.display = 'none';
-            retakeBtn.style.display = 'none';
-            enrollStatus.textContent = 'Position your face clearly in the camera.';
-        };
-
-        confirmEnrollBtn.onclick = async () => {
-            if (!snapshotB64) return;
-            confirmEnrollBtn.disabled = true;
-            retakeBtn.disabled = true;
-            enrollStatus.textContent = '⏳ Enrolling face embedding...';
-
-            try {
-                const res = await fetch('/api/video/enroll', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image_b64: snapshotB64, interview_id: 0 })
-                });
-                const data = await res.json();
-                if (res.ok && data.status_code === 200) {
-                    log(`✅ Enrolled! Embedding dim: ${data.data.embedding_dim}`);
-                    enrollStatus.textContent = '✅ Enrolled successfully!';
-                    enrollModal.classList.remove('open');
-                    // Proceed with WebRTC
-                    await startWebRTC();
-                } else {
-                    enrollStatus.textContent = `❌ ${data.detail || data.message}`;
-                    confirmEnrollBtn.disabled = false;
-                    retakeBtn.disabled = false;
-                }
-            } catch (e) {
-                enrollStatus.textContent = `❌ Error: ${e.message}`;
-                confirmEnrollBtn.disabled = false;
-                retakeBtn.disabled = false;
-            }
-        };
-
-        // ─── Main Start ───────────────────────────────────────────────────
         async function start() {
             try {
-                updateStatus("Requesting Camera Permissions...");
+                updateStatus("Requesting Camera...");
                 localStream = await navigator.mediaDevices.getUserMedia({
                     video: { width: 640, height: 480, frameRate: 15 },
                     audio: false
                 });
                 localVideo.srcObject = localStream;
-                log("Camera initialized ✓");
+                
+                snapCanvas.width = 640;
+                snapCanvas.height = 480;
 
-                // Show enrollment modal
-                snapshotPreview.style.display = 'none';
-                takeSnapBtn.style.display = 'inline-block';
-                confirmEnrollBtn.style.display = 'none';
-                retakeBtn.style.display = 'none';
-                confirmEnrollBtn.disabled = false;
-                retakeBtn.disabled = false;
-                enrollStatus.textContent = 'Position your face clearly in the camera.';
-                enrollModal.classList.add('open');
+                let token = wsTokenInput.value.trim();
+                // Strip Bearer prefix if user copied it locally
+                if (token.startsWith('Bearer ')) token = token.substring(7);
+                const iid = interviewIdInput.value || '0';
 
-                updateStatus("Enroll your face to continue...", true);
-                startButton.disabled = true;
+                const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                let host = window.location.host;
+                if (!host || host === '') host = 'localhost:7427';
+                
+                const query = token ? `?token=${encodeURIComponent(token)}` : '';
+                const wsUrl = `${proto}//${host}/api/video/stream/${iid}${query}`;
+                
+                log(`Connecting to ${wsUrl}`);
+                ws = new WebSocket(wsUrl);
 
-            } catch (err) {
-                log(`ERROR: ${err.message}`);
-                updateStatus("Error: " + err.message);
-            }
-        }
-
-        async function startWebRTC() {
-            try {
-                updateStatus("Establishing WebRTC Handshake...", true);
-                log("Creating RTCPeerConnection...");
-
-                pc = new RTCPeerConnection({
-                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                });
-                pc.onconnectionstatechange = () => log(`WebRTC state: ${pc.connectionState}`);
-
-                localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
-
-                const response = await fetch('/api/video/offer', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type, interview_id: 0 })
-                });
-
-                const data = await response.json();
-                log(`Handshake response: ${data.status_code} - ${data.message}`);
-                if (data.status_code !== 200) throw new Error(data.message || "Handshake failed");
-
-                await pc.setRemoteDescription(new RTCSessionDescription(data.data));
-                log("Handshake complete ✓");
-                updateStatus("Connected! Waiting for AI frames...", true);
-
-                // Start MJPEG after 3s
-                log("Waiting 3s for AI to buffer frames...");
-                setTimeout(() => {
-                    const mjpegUrl = '/api/video/video_feed?interview_id=0&t=' + Date.now();
-                    processedFeed.src = mjpegUrl;
-                    mjpegStatus.textContent = 'Loading...';
-                    let first = true;
-                    processedFeed.onload = () => {
-                        if (first) {
-                            first = false;
-                            log("MJPEG stream live ✓");
-                            mjpegStatus.textContent = 'Live ✓';
-                            mjpegStatus.style.color = '#27ae60';
-                            updateStatus("AI Processing Active!", true);
+                ws.onopen = () => {
+                    log("WebSocket Connected ✓");
+                    updateStatus("WS Active! Sending frames...", true);
+                    
+                    frameInterval = setInterval(() => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            snapCanvas.getContext('2d').drawImage(localVideo, 0, 0, 640, 480);
+                            snapCanvas.toBlob(blob => {
+                                ws.send(blob);
+                            }, 'image/jpeg', 0.85); // Compress to 85% quality JPEG
                         }
-                    };
-                    processedFeed.onerror = () => {
-                        mjpegStatus.textContent = 'Error ✗';
-                        mjpegStatus.style.color = '#e74c3c';
-                        log("MJPEG error ✗");
-                    };
-                }, 3000);
+                    }, 200); // 5 FPS
+                };
 
-                // Poll proctoring status
-                log("Starting proctoring status polling...");
-                startStatusPolling(0);
+                ws.onmessage = (evt) => {
+                    const data = JSON.parse(evt.data);
+                    if (data.type === 'proctoring_update') {
+                       const res = data.data;
+                       const warning = res.warning || '';
+                       const faces = res.faces !== undefined ? res.faces : 'N/A';
+                       const gaze = res.gaze || 'N/A';
+                       detectorEl.textContent = ` | Faces: ${faces} | Gaze: ${gaze} | Warn: ${warning || 'None'}`;
+                       
+                       if (warning && warning !== 'No Issues' && warning !== 'System Active') {
+                           document.getElementById('warningMessage').textContent = warning;
+                           document.getElementById('warningBanner').style.display = 'block';
+                           // Avoid spamming the log if warning is the exact same continually
+                           if (window._lastLoggedWarn !== warning) {
+                               log(`⚠️ ALERT: ${warning}`);
+                               window._lastLoggedWarn = warning;
+                           }
+                       } else {
+                           document.getElementById('warningBanner').style.display = 'none';
+                           if (window._lastLoggedWarn) {
+                               window._lastLoggedWarn = null;
+                               log("✅ Issue cleared.");
+                           }
+                       }
+                    } else {
+                        log(`Received: ${JSON.stringify(data)}`);
+                    }
+                };
 
+                ws.onclose = (e) => {
+                    log(`WebSocket Closed: Code=${e.code}, Reason=${e.reason}`);
+                    stop();
+                };
+
+                ws.onerror = (e) => {
+                    log("WebSocket Error encountered.");
+                };
+                
+                startButton.disabled = true;
                 stopButton.disabled = false;
 
             } catch (err) {
                 log(`ERROR: ${err.message}`);
                 updateStatus("Error: " + err.message);
-                startButton.disabled = false;
             }
         }
 
-        function startStatusPolling(interviewId) {
-            statusPollInterval = setInterval(async () => {
-                try {
-                    const res = await fetch(`/api/video/status?interview_id=${interviewId}`);
-                    const data = await res.json();
-                    const warning = data.data?.warning || '';
-                    const ready = data.data?.detectors_ready;
-                    const faces = data.data?.faces_detected;
-                    const gaze = data.data?.gaze;
-
-                    detectorEl.textContent = ready ? ' | 🟢 AI Ready' : ' | 🟡 AI Loading...';
-
-                    if (typeof startStatusPolling._tick === 'undefined') startStatusPolling._tick = 0;
-                    if (++startStatusPolling._tick % 5 === 0) {
-                        log(`Status: faces=${faces}, gaze=${gaze}, warning=${warning || 'none'}`);
-                    }
-
-                    if (warning && warning !== 'No Issues' && warning !== 'System Active') {
-                        if (warning !== lastWarning) {
-                            log(`⚠️ WARNING: ${warning}`);
-                            lastWarning = warning;
-                        }
-                        document.getElementById('warningMessage').textContent = warning;
-                        document.getElementById('warningBanner').style.display = 'block';
-                    } else {
-                        document.getElementById('warningBanner').style.display = 'none';
-                        if (lastWarning) { log(`✅ Cleared: ${lastWarning}`); lastWarning = ''; }
-                    }
-                } catch (e) { /* ignore */ }
-            }, 1000);
-        }
-
-        function stopStatusPolling() {
-            if (statusPollInterval) { clearInterval(statusPollInterval); statusPollInterval = null; }
-            document.getElementById('warningBanner').style.display = 'none';
-            detectorEl.textContent = '';
-        }
-
-        async function stop() {
-            if (pc) { pc.close(); pc = null; }
+        function stop() {
+            if (ws) { ws.close(); ws = null; }
+            if (frameInterval) { clearInterval(frameInterval); frameInterval = null; }
             if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
-            processedFeed.src = "";
             localVideo.srcObject = null;
-            stopStatusPolling();
-
-            // Clear enrolled identity
-            try {
-                await fetch('/api/video/enroll?interview_id=0', { method: 'DELETE' });
-                log("✅ Enrolled identity deleted.");
-            } catch(e) { log("Warning: could not clear enrollment."); }
-
+            
             startButton.disabled = false;
             stopButton.disabled = true;
-            mjpegStatus.textContent = 'Server Response (MJPEG)';
-            mjpegStatus.style.color = '#3498db';
+            document.getElementById('warningBanner').style.display = 'none';
+            detectorEl.textContent = '';
+            
             updateStatus("System Ready");
             log("Session stopped.");
         }
