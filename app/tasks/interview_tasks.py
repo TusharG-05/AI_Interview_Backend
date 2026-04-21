@@ -183,7 +183,7 @@ def process_session_results(interview_id: int, db: Session = None):
             
             email_service = EmailService()
             email_service.send_interview_result_email(candidate_email, report_data)
-            logger.info(f"Result email dispatched to {session.candidate_email}")
+            logger.info(f"Result email dispatched to {candidate_email}")
         except Exception as email_err:
             logger.error(f"Failed to send result email for session {interview_id}: {email_err}")
 
