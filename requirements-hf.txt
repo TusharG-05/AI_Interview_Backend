@@ -178,7 +178,7 @@ pefile==2024.8.26
 pexpect==4.9.0
 pickleshare==0.7.5
 pillow==11.3.0
-pipreqs==0.5.0
+pipreqs==0.4.13
 platformdirs==4.5.1
 pluggy==1.6.0
 pooch==1.9.0
