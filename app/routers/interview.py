@@ -247,6 +247,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     coding_answers_map = {}
     if session.result:
         for ans in session.result.answers:
+            if ans.timestamp is None:
+                continue
             answers_map[ans.question_id] = AnswerShort(
                 id=ans.id,
                 interview_result_id=ans.interview_result_id,
@@ -258,6 +260,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 timestamp=ans.timestamp
             )
         for cans in session.result.coding_answers:
+            if cans.timestamp is None:
+                continue
             coding_answers_map[cans.coding_question_id] = AnswerShort(
                 id=cans.id,
                 interview_result_id=cans.interview_result_id,
@@ -368,7 +372,10 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         interview_round=str(session.interview_round.value if hasattr(session.interview_round, 'value') else session.interview_round) if session.interview_round else None,
         response_count=response_count,
         last_activity=session.last_activity or now,
-        result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
+        result_status=(
+            (session.result.result_status.value if hasattr(session.result.result_status, 'value') else str(session.result.result_status))
+            if session.result and session.result.result_status else 'PENDING'
+        ),
         max_marks=max_marks,
         total_score=session.total_score or 0.0,
         current_status=str(session.current_status.value if hasattr(session.current_status, 'value') else session.current_status),
@@ -501,7 +508,7 @@ async def access_interview(
     Returns a cleaned, frontend-friendly response structure.
     """
     from sqlalchemy.orm import selectinload
-    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus
+    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus, InterviewResult
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
     from ..schemas.shared.user import LoginUserNested
 
@@ -515,7 +522,9 @@ async def access_interview(
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.admin),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions),
-            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin)
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers),
         )
     ).first()
     
