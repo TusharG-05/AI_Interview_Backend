@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Union
 import json as _json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
-from fastapi.responses import FileResponse, Response, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, RedirectResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
 from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole
@@ -20,7 +20,6 @@ from ..auth.dependencies import get_current_user
 from ..core.config import IS_ORCHESTRATOR
 from pydantic import BaseModel
 import os
-import io
 import uuid
 from datetime import datetime, timedelta, timezone
 import random
@@ -51,6 +50,8 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
+
+LINK_VALIDITY_MINUTES = 30
 
 @router.post("/otp-send", response_model=ApiResponse[dict])
 async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_session)):
@@ -181,6 +182,7 @@ async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session:
     )
 
 from ..utils import format_iso_datetime, calculate_total_score
+from ..tasks.interview_tasks import process_session_results_task
 from ..services.status_manager import record_status_change, update_last_activity, broadcast_interview_update, add_violation
 _audio_service = None
 _cloudinary_service = None
@@ -525,12 +527,22 @@ async def access_interview(
             detail=f"This interview has been suspended. Reason: {session.suspension_reason}" if session.suspension_reason else "This interview has been suspended."
         )
         
-    # Validation Logic
     now = datetime.now(timezone.utc)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+
+    # 1. Determine Expiration based on status
+    if session.status == InterviewStatus.LIVE and session.start_time:
+        # For LIVE sessions, check against the full duration from start_time
+        start_t = session.start_time
+        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        expiration_time = start_t + timedelta(minutes=session.duration_minutes)
+        expiry_message = "This interview session has expired."
+    else:
+        # For SCHEDULED or other statuses, link is only active for LINK_VALIDITY_MINUTES after schedule_time
+        expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
+        expiry_message = f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time."
 
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="Interview is cancelled")
@@ -541,11 +553,12 @@ async def access_interview(
     
     is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
     if is_expired:
-        if session.status != InterviewStatus.EXPIRED:
+        if session.status != InterviewStatus.EXPIRED and session.status != InterviewStatus.COMPLETED:
             session.status = InterviewStatus.EXPIRED
             session_db.add(session)
             session_db.commit()
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
+        raise HTTPException(status_code=403, detail=expiry_message)
+
          
     enforce_tab_timeout(session_db, session)
     
@@ -613,7 +626,13 @@ async def get_schedule_time(
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
     
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+    # Expiry logic matching access_interview
+    if session.status == InterviewStatus.LIVE and session.start_time:
+        start_t = session.start_time
+        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        expiration_time = start_t + timedelta(minutes=session.duration_minutes)
+    else:
+        expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
 
     # Determine display message
     display_message = "Interview schedule time retrieved successfully."
@@ -627,7 +646,8 @@ async def get_schedule_time(
             message="This interview has already been completed."
         )
     elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
+        raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {LINK_VALIDITY_MINUTES} mins).")
+
     elif session.status == InterviewStatus.LIVE:
         display_message = "This interview is currently in progress (attempted)."
     elif now < schedule_time:
@@ -729,7 +749,9 @@ async def start_session_logic(
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+    
+    # Start window check: Link active for LINK_VALIDITY_MINUTES for new starts
+    expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
 
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="This interview has been cancelled.")
@@ -738,7 +760,8 @@ async def start_session_logic(
         raise HTTPException(status_code=403, detail="This interview has already been completed.")
         
     if now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
+        raise HTTPException(status_code=403, detail=f"This interview link has expired. Interviews must be started within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.")
+
     
     # Check if suspended
     if session.is_suspended:
@@ -1081,261 +1104,259 @@ async def upload_selfie_session(
             detail=f"Face verification processing failed: {str(e)}"
         )
 
-# @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
-# async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
-#     from ..services.status_manager import record_status_change, update_last_activity
+@router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
+async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
+    from ..services.status_manager import record_status_change, update_last_activity
+    from sqlalchemy.orm import selectinload
     
-#     # Get session and check suspension
-#     session_obj = session_db.get(InterviewSession, interview_id)
-#     if not session_obj:
-#         raise HTTPException(status_code=404, detail="Session not found")
+    # Get session and check suspension
+    session_obj = session_db.get(InterviewSession, interview_id)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
     
-#     if session_obj.is_suspended:
-#         raise HTTPException(
-#             status_code=403,
-#             detail=f"Interview terminated: {session_obj.suspension_reason}"
-#         )
+    if session_obj.is_suspended:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Interview terminated: {session_obj.suspension_reason}"
+        )
     
-#     # Check for tab-switch timeout
-#     enforce_tab_timeout(session_db, session_obj)
+    # Check for tab-switch timeout and duration timeout
+    enforce_tab_timeout(session_db, session_obj)
+    enforce_interview_duration(session_db, session_obj)
     
-#     # Track interview active status (on first question fetch)
-#     if session_obj.current_status == CandidateStatus.ENROLLMENT_COMPLETED:
-#         record_status_change(
-#             session=session_db,
-#             interview_session=session_obj,
-#             new_status=CandidateStatus.INTERVIEW_ACTIVE
-#         )
+    # Track interview active status (on first question fetch)
+    if session_obj.current_status == CandidateStatus.ENROLLMENT_COMPLETED:
+        record_status_change(
+            session=session_db,
+            interview_session=session_obj,
+            new_status=CandidateStatus.INTERVIEW_ACTIVE
+        )
     
-#     # Update last activity
-#     update_last_activity(session_db, session_obj)
+    # Update last activity
+    update_last_activity(session_db, session_obj)
     
-#     # 1. Get answered questions
-#     # Need to find InterviewResult first or join
-#     # answered_ids = [r.question_id for r in session_db.exec(select(Answers).join(InterviewResult).where(InterviewResult.interview_id == interview_id)).all()]
-#     # simplified:
-#     answered_ids = []
-#     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
-#     if result and result.answers:
-#         answered_ids = [a.question_id for a in result.answers if a.question_id]
+    # 1. Get all answered questions (Standard and Coding)
+    answered_ids = []
+    answered_coding_ids = []
     
-#     # 2. Check if this session has assigned questions (Campaign mode)
-#     has_assignments = session_db.exec(
-#         select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)
-#     ).first() is not None
+    result = session_db.exec(
+        select(InterviewResult)
+        .where(InterviewResult.interview_id == interview_id)
+        .options(selectinload(InterviewResult.answers), selectinload(InterviewResult.coding_answers))
+    ).first()
     
-#     # Logic Update: If Bank is assigned, we should pull from Bank if no session_questions pre-assigned?
-#     # For now, sticking to logic:
+    if result:
+        if result.answers:
+            answered_ids = [a.question_id for a in result.answers if a.question_id]
+        if result.coding_answers:
+            answered_coding_ids = [ca.coding_question_id for ca in result.coding_answers if ca.coding_question_id]
+
     
-#     if has_assignments:
-#         # Campaign mode: Strictly follow assigned questions
-#         stmt = select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)
-#         if answered_ids:
-#             stmt = stmt.where(~SessionQuestion.question_id.in_(answered_ids))
-#         stmt = stmt.order_by(SessionQuestion.sort_order)
-#         session_q = session_db.exec(stmt).first()
-#         question = session_q.question if session_q else None
-#     else:
-#         # Fallback: Pull from the assigned Paper (if any) or General pool
-#         if session_obj and session_obj.paper_id:
-#              # Security Fix: Strictly scope to the assigned paper
-#              stmt = select(Questions).where(Questions.paper_id == session_obj.paper_id)
-#              if answered_ids:
-#                  stmt = stmt.where(~Questions.id.in_(answered_ids))
-#              question = session_db.exec(stmt).first()
-#         else:
-#              # Pull only from global/orphaned pool, never from other papers
-#              stmt = select(Questions).where(Questions.paper_id == None)
-#              if answered_ids:
-#                  stmt = stmt.where(~Questions.id.in_(answered_ids))
-#              question = session_db.exec(stmt).first()
+    # 2. Check if this session has assigned questions (Campaign mode)
+    has_assignments = session_db.exec(
+        select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)
+    ).first() is not None
     
-#     if not question:
-#         # ---------------------------------------------------------------
-#         # Option A: Fall through to CodingQuestions if the session has a
-#         # coding_paper_id linked. We create a thin proxy Questions row the
-#         # first time each coding question is served so the existing Answers
-#         # / scoring pipeline continues to work unchanged.
-#         # ---------------------------------------------------------------
-#         if session_obj and session_obj.coding_paper_id:
-#             import json as _json
+    # Logic Update: If Bank is assigned, we should pull from Bank if no session_questions pre-assigned?
+    # For now, sticking to logic:
+    
+    if has_assignments:
+        # Campaign mode: Strictly follow assigned questions
+        stmt = select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)
+        if answered_ids:
+            stmt = stmt.where(~SessionQuestion.question_id.in_(answered_ids))
+        stmt = stmt.order_by(SessionQuestion.sort_order)
+        session_q = session_db.exec(stmt).first()
+        question = session_q.question if session_q else None
+    else:
+        # Fallback: Pull from the assigned Paper (if any) or General pool
+        if session_obj and session_obj.paper_id:
+             # Security Fix: Strictly scope to the assigned paper
+             stmt = select(Questions).where(Questions.paper_id == session_obj.paper_id)
+             if answered_ids:
+                 stmt = stmt.where(~Questions.id.in_(answered_ids))
+             question = session_db.exec(stmt).first()
+        else:
+             # Pull only from global/orphaned pool, never from other papers
+             stmt = select(Questions).where(Questions.paper_id == None)
+             if answered_ids:
+                 stmt = stmt.where(~Questions.id.in_(answered_ids))
+             question = session_db.exec(stmt).first()
+    
+    if not question:
+        # ---------------------------------------------------------------
+        # Option A: Fall through to CodingQuestions if the session has a
+        # coding_paper_id linked. We create a thin proxy Questions row the
+        # first time each coding question is served so the existing Answers
+        # / scoring pipeline continues to work unchanged.
+        # ---------------------------------------------------------------
+        if session_obj and session_obj.coding_paper_id:
+            import json as _json
 
-#             # All CodingQuestions for this paper
-#             all_coding_qs = session_db.exec(
-#                 select(CodingQuestions).where(
-#                     CodingQuestions.paper_id == session_obj.coding_paper_id
-#                 )
-#             ).all()
+            # All CodingQuestions for this paper
+            all_coding_qs = session_db.exec(
+                select(CodingQuestions).where(
+                    CodingQuestions.paper_id == session_obj.coding_paper_id
+                )
+            ).all()
 
-#             # Answered coding questions: check BOTH proxy Answers rows AND the CodingAnswers table directly.
-#             # submit-answer-code stores to CodingAnswers (not Answers), so we must check both.
-#             answered_proxy_ids = set(answered_ids)  # already collected from Answers table above
-
-#             # 1. Proxy-based: proxy rows tagged with question_text = f"__coding__{cq.id}"
-#             answered_coding_cq_ids = set()
-#             for qid in answered_proxy_ids:
-#                 proxy = session_db.get(Questions, qid)
-#                 if proxy and proxy.question_text and proxy.question_text.startswith("__coding__"):
-#                     try:
-#                         answered_coding_cq_ids.add(int(proxy.question_text.split("__coding__")[1]))
-#                     except (ValueError, IndexError):
-#                         pass
-
-#             # 2. Direct: check CodingAnswers table for this interview result
-#             interview_result = session_db.exec(
-#                 select(InterviewResult).where(InterviewResult.interview_id == interview_id)
-#             ).first()
-#             if interview_result:
-#                 direct_coding_answers = session_db.exec(
-#                     select(CodingAnswers).where(CodingAnswers.interview_result_id == interview_result.id)
-#                 ).all()
-#                 for ca in direct_coding_answers:
-#                     answered_coding_cq_ids.add(ca.coding_question_id)
-
-#             # Pick the next un-answered coding question
-#             next_cq = next(
-#                 (cq for cq in all_coding_qs if cq.id not in answered_coding_cq_ids),
-#                 None
-#             )
-
-#             if next_cq is None:
-#                 return ApiResponse(
-#                     status_code=200,
-#                     data={"status": "finished"},
-#                     message="All questions completed"
-#                 )
-
-#             # Find or create the proxy Questions row for this coding question
-#             proxy_tag = f"__coding__{next_cq.id}"
-#             proxy_q = session_db.exec(
-#                 select(Questions).where(Questions.question_text == proxy_tag)
-#             ).first()
-
-#             if proxy_q is None:
-#                 # Store full problem body as JSON in `content` so admin results API can parse it later
-#                 problem_body = {
-#                     "title": next_cq.title,
-#                     "problem_statement": next_cq.problem_statement,
-#                     "examples": _json.loads(next_cq.examples) if isinstance(next_cq.examples, str) else next_cq.examples,
-#                     "constraints": _json.loads(next_cq.constraints) if isinstance(next_cq.constraints, str) else next_cq.constraints,
-#                     "starter_code": next_cq.starter_code or "",
-#                 }
-
-#                 proxy_q = Questions(
-#                     paper_id=None,          # orphaned — not tied to any standard paper
-#                     content=_json.dumps(problem_body, ensure_ascii=False),
-#                     question_text=proxy_tag,
-#                     topic=next_cq.topic,
-#                     difficulty=next_cq.difficulty,
-#                     marks=next_cq.marks,
-#                     response_type="code",
-#                 )
-#                 session_db.add(proxy_q)
-#                 try:
-#                     session_db.commit()
-#                     session_db.refresh(proxy_q)
-#                 except Exception as e:
-#                     logger.error(f"Failed to create coding question proxy: {e}", exc_info=True)
-#                     session_db.rollback()
-#                     raise HTTPException(status_code=500, detail="An error occurred while loading the coding question.")
-
-#             # Generate TTS for the coding question title (returns Cloudinary URL)
-#             audio_base64, audio_url = await get_audio_service().text_to_speech_turbo(next_cq.title, folder="interview_questions")
-
-
-#             question_index = len(answered_ids) + 1
-#             total_coding = len(all_coding_qs)
+            # Answered coding questions: check BOTH proxy Answers rows AND the CodingAnswers table directly.
+            answered_proxy_ids = set(answered_ids)
             
-#             # Calculate total_questions (similar to line 678)
-#             total_questions = 0
-#             if has_assignments:
-#                 total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)).all())
-#             elif session_obj and session_obj.paper_id:
-#                 total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
+            # 1. Extract coding IDs from proxy Answers
+            for qid in answered_proxy_ids:
+                proxy = session_db.get(Questions, qid)
+                if proxy and proxy.question_text and proxy.question_text.startswith("__coding__"):
+                    try:
+                        answered_coding_ids.append(int(proxy.question_text.split("__coding__")[1]))
+                    except (ValueError, IndexError):
+                        pass
 
-#             return ApiResponse(
-#                 status_code=200,
-#                 data={
-#                     "question_id": proxy_q.id,
-#                     "coding_question_id": next_cq.id,
-#                     "coding_question": next_cq,
-#                     "audio_url": ensure_web_url(audio_url),
-#                     "audio_base64": audio_base64,
-#                     "text": next_cq.title,
-#                     "response_type": "code",
-#                     "question_index": question_index,
-#                     "total_questions": total_questions + total_coding,
-#                     "coding_content": {
-#                         "title": next_cq.title,
-#                         "problem_statement": next_cq.problem_statement,
-#                         "examples": _json.loads(next_cq.examples) if isinstance(next_cq.examples, str) else next_cq.examples,
-#                         "constraints": _json.loads(next_cq.constraints) if isinstance(next_cq.constraints, str) else next_cq.constraints,
-#                         "starter_code": next_cq.starter_code or None,
-#                     },
-#                 },
-#                 message="Next question retrieved successfully"
-#             )
+            # 2. Pick the next un-answered coding question
+            # Using a set for efficient lookup
+            final_answered_coding_set = set(answered_coding_ids)
+            next_cq = next(
+                (cq for cq in all_coding_qs if cq.id not in final_answered_coding_set),
+                None
+            )
 
-#         return ApiResponse(
-#             status_code=200,
-#             data={"status": "finished"},
-#             message="All questions completed"
-#         )
+
+            if next_cq is None:
+                return ApiResponse(
+                    status_code=200,
+                    data={"status": "finished"},
+                    message="All questions completed"
+                )
+
+            # Find or create the proxy Questions row for this coding question
+            proxy_tag = f"__coding__{next_cq.id}"
+            proxy_q = session_db.exec(
+                select(Questions).where(Questions.question_text == proxy_tag)
+            ).first()
+
+            if proxy_q is None:
+                # Store full problem body as JSON in `content` so admin results API can parse it later
+                problem_body = {
+                    "title": next_cq.title,
+                    "problem_statement": next_cq.problem_statement,
+                    "examples": _json.loads(next_cq.examples) if isinstance(next_cq.examples, str) else next_cq.examples,
+                    "constraints": _json.loads(next_cq.constraints) if isinstance(next_cq.constraints, str) else next_cq.constraints,
+                    "starter_code": next_cq.starter_code or "",
+                }
+
+                proxy_q = Questions(
+                    paper_id=None,          # orphaned — not tied to any standard paper
+                    content=_json.dumps(problem_body, ensure_ascii=False),
+                    question_text=proxy_tag,
+                    topic=next_cq.topic,
+                    difficulty=next_cq.difficulty,
+                    marks=next_cq.marks,
+                    response_type="code",
+                )
+                session_db.add(proxy_q)
+                try:
+                    session_db.commit()
+                    session_db.refresh(proxy_q)
+                except Exception as e:
+                    logger.error(f"Failed to create coding question proxy: {e}", exc_info=True)
+                    session_db.rollback()
+                    raise HTTPException(status_code=500, detail="An error occurred while loading the coding question.")
+
+            # Generate TTS for the coding question title (returns Cloudinary URL)
+            audio_url = await get_audio_service().text_to_speech(next_cq.title, folder="interview_questions")
+
+
+            question_index = len(answered_ids) + 1
+            total_coding = len(all_coding_qs)
+            
+            # Calculate total_questions (similar to line 678)
+            total_questions = 0
+            if has_assignments:
+                total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)).all())
+            elif session_obj and session_obj.paper_id:
+                total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
+
+            return ApiResponse(
+                status_code=200,
+                data={
+                    "question_id": proxy_q.id,
+                    "coding_question_id": next_cq.id,  # The REAL CodingQuestions ID — use this for submit-answer-code
+                    "coding_question": next_cq,
+                    "text": next_cq.title,
+                    "audio_url": ensure_web_url(audio_url),
+                    "response_type": "code",
+                    "question_index": question_index,
+                    "total_questions": total_questions + total_coding,
+                    "coding_content": {
+                        "title": next_cq.title,
+                        "problem_statement": next_cq.problem_statement,
+                        "examples": _json.loads(next_cq.examples) if isinstance(next_cq.examples, str) else next_cq.examples,
+                        "constraints": _json.loads(next_cq.constraints) if isinstance(next_cq.constraints, str) else next_cq.constraints,
+                        "starter_code": next_cq.starter_code or None,
+                    },
+                },
+                message="Next question retrieved successfully"
+            )
+
+        return ApiResponse(
+            status_code=200,
+            data={"status": "finished"},
+            message="All questions completed"
+        )
     
-#     # Generate TTS for the question (returns Cloudinary URL)
-#     audio_base64, audio_url = await get_audio_service().text_to_speech_turbo(question.question_text or question.content, folder="interview_questions")
+    # Generate TTS for the question (returns Cloudinary URL)
+    audio_url = await get_audio_service().text_to_speech(question.question_text or question.content, folder="interview_questions")
     
-#     # Calculate progress
-#     total_questions = 0
-#     question_index = len(answered_ids) + 1
+    # Calculate progress
+    total_questions = 0
+    question_index = len(answered_ids) + 1
     
-#     if has_assignments:
-#         total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)).all())
-#     elif session_obj and session_obj.paper_id:
-#         total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
+    if has_assignments:
+        total_questions = len(session_db.exec(select(SessionQuestion).where(SessionQuestion.interview_id == interview_id)).all())
+    elif session_obj and session_obj.paper_id:
+        total_questions = len(session_db.exec(select(Questions).where(Questions.paper_id == session_obj.paper_id)).all())
     
-#     import json as _json
+    import json as _json
 
-#     # Build response data; for code-type questions expose structured content
-#     response_data: dict = {
-#         "question_id": question.id,
-#         "text": question.question_text or question.content,
-#         "audio_url": ensure_web_url(audio_url),
-#         "audio_base64": audio_base64,
-#         "response_type": question.response_type,
-#         "question_index": question_index,
-#         "total_questions": total_questions,
-#         "coding_content": None,
-#     }
+    # Build response data; for code-type questions expose structured content
+    response_data: dict = {
+        "question_id": question.id,
+        "text": question.question_text or question.content,
+        "audio_url": ensure_web_url(audio_url),
+        "response_type": question.response_type,
+        "question_index": question_index,
+        "total_questions": total_questions,
+        "coding_content": None,
+    }
 
-#     # If this question is a proxy for a coding question, expose the real coding question ID
-#     if question.response_type == "code" and question.question_text and question.question_text.startswith("__coding__"):
-#         try:
-#             real_coding_id = int(question.question_text.split("__coding__")[1])
-#             response_data["coding_question_id"] = real_coding_id
-#             response_data["coding_question"] = real_coding_id
-#         except (ValueError, IndexError):
-#             pass
+    # If this question is a proxy for a coding question, expose the real coding question ID
+    if question.response_type == "code" and question.question_text and question.question_text.startswith("__coding__"):
+        try:
+            real_coding_id = int(question.question_text.split("__coding__")[1])
+            response_data["coding_question_id"] = real_coding_id
+            response_data["coding_question"] = real_coding_id
+        except (ValueError, IndexError):
+            pass
 
-#     if question.response_type == "code" and question.content:
-#         try:
-#             parsed = _json.loads(question.content)
-#             response_data["text"] = parsed.get("title", question.question_text or "")
-#             response_data["coding_content"] = {
-#                 "title": parsed.get("title", ""),
-#                 "problem_statement": parsed.get("problem_statement", ""),
-#                 "examples": parsed.get("examples", []),
-#                 "constraints": parsed.get("constraints", []),
-#                 "starter_code": parsed.get("starter_code"),
-#             }
-#         except (_json.JSONDecodeError, TypeError):
-#             pass  # leave coding_content as None if parsing fails
+    if question.response_type == "code" and question.content:
+        try:
+            parsed = _json.loads(question.content)
+            response_data["text"] = parsed.get("title", question.question_text or "")
+            response_data["coding_content"] = {
+                "title": parsed.get("title", ""),
+                "problem_statement": parsed.get("problem_statement", ""),
+                "examples": parsed.get("examples", []),
+                "constraints": parsed.get("constraints", []),
+                "starter_code": parsed.get("starter_code"),
+            }
+        except (_json.JSONDecodeError, TypeError):
+            pass  # leave coding_content as None if parsing fails
 
-#     return ApiResponse(
-#         status_code=200,
-#         data=response_data,
-#         message="Next question retrieved successfully"
-#     )
+    return ApiResponse(
+        status_code=200,
+        data=response_data,
+        message="Next question retrieved successfully"
+    )
 
 @router.get("/audio/question/{q_id}")
 async def stream_question_audio(q_id: int, session_db: Session = Depends(get_session)):
@@ -1354,15 +1375,15 @@ async def stream_question_audio(q_id: int, session_db: Session = Depends(get_ses
     if not text:
         raise HTTPException(status_code=404, detail="Question not found")
 
-    # 2. Generate/Get TTS Bytes (Direct streaming for speed)
+    # 2. Generate/Get TTS URL
     audio_service = get_audio_service()
-    audio_bytes = await audio_service.text_to_speech_bytes(text)
+    audio_url = await audio_service.text_to_speech(text, folder="interview_questions")
     
-    if not audio_bytes:
+    if not audio_url:
         raise HTTPException(status_code=500, detail="Failed to generate question audio")
     
-    # 3. Stream bytes directly to frontend
-    return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
+    # 3. Redirect to Cloudinary (Frontend handles the redirect in <audio> or <img> tags)
+    return RedirectResponse(url=ensure_web_url(audio_url))
 
 @router.post("/submit-answer-audio", response_model=ApiResponse[dict])
 async def submit_answer_audio(
@@ -1387,8 +1408,9 @@ async def submit_answer_audio(
             detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
     
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session_obj)
+    enforce_interview_duration(session_db, session_obj)
     
     content = await audio.read()
     cloudinary_url = get_audio_service().upload_audio_blob(content, folder="interview_responses")
@@ -1529,8 +1551,9 @@ async def submit_answer_code(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)
+    enforce_interview_duration(session_db, session)
 
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
@@ -1622,8 +1645,9 @@ async def submit_answer_text(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)
+    enforce_interview_duration(session_db, session)
 
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
@@ -2089,6 +2113,49 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
             }
         )
 
+def enforce_interview_duration(db: Session, session_obj: InterviewSession) -> None:
+    """
+    Checks if the interview duration has exceeded based on start_time.
+    If expired, marks the interview as COMPLETED and blocks further actions.
+    """
+    if session_obj.status == InterviewStatus.LIVE and session_obj.start_time:
+        now = datetime.now(timezone.utc)
+        start_time = session_obj.start_time
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+            
+        expiration_time = start_time + timedelta(minutes=session_obj.duration_minutes)
+        
+        if now > expiration_time:
+            logger.warning(f"Session {session_obj.id}: Automatic completion due to duration timeout")
+            session_obj.status = InterviewStatus.COMPLETED
+            session_obj.is_completed = True
+            session_obj.end_time = now
+            session_obj.current_status = "Completed (Time Limit)"
+            
+            # Record status change
+            record_status_change(
+                session=db,
+                interview_session=session_obj,
+                new_status=CandidateStatus.INTERVIEW_COMPLETED,
+                metadata={"reason": "duration_timeout", "auto_completed": True}
+            )
+            
+            # Trigger result processing task if needed
+            from ..tasks.interview_tasks import process_session_results_task
+            process_session_results_task.delay(session_obj.id)
+            
+            db.add(session_obj)
+            db.commit()
+            db.refresh(session_obj)
+            
+    if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:
+        raise HTTPException(
+            status_code=403,
+            detail="The interview duration has expired. Your session has been automatically completed."
+        )
+
+
 
 # --- Standalone Tools ---
 
@@ -2174,14 +2241,16 @@ async def standalone_tts(text: str, background_tasks: BackgroundTasks):
 
 async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
     """Internal helper for TTS generation and cleanup."""
-    # Use text_to_speech_bytes for direct streaming response
+    # Use the refactored text_to_speech which returns a Cloudinary URL
     try:
-        audio_bytes = await get_audio_service().text_to_speech_bytes(text)
+        cloudinary_url = await get_audio_service().text_to_speech(text, folder="standalone_tts")
         
-        if not audio_bytes:
+        if not cloudinary_url:
             raise Exception("TTS generation failed")
 
-        return StreamingResponse(io.BytesIO(audio_bytes), media_type="audio/mpeg")
+        # Return RedirectResponse to the Cloudinary URL
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=cloudinary_url)
 
     except Exception as e:
         logger.error(f"TTS Generation Error: {e}")

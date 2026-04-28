@@ -1704,7 +1704,8 @@ async def get_result(
         suspension_reason=s.suspension_reason,
         suspended_at=s.suspended_at,
         allow_copy_paste=s.allow_copy_paste or False,
-        allow_question_navigate=s.allow_question_navigate or False
+        allow_question_navigate=s.allow_question_navigate or False,
+        allow_proctoring=s.allow_proctoring or False
     )
 
     result_detail = AdminResultData(
