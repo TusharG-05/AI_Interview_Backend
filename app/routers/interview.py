@@ -1108,6 +1108,7 @@ async def upload_selfie_session(
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
 async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     from ..services.status_manager import record_status_change, update_last_activity
+    from sqlalchemy.orm import selectinload
     
     # Get session and check suspension
     session_obj = session_db.get(InterviewSession, interview_id)

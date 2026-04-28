@@ -29,11 +29,11 @@ whisper_image = (
 
 @app.cls(
     image=whisper_image,
-    gpu="T4",  # NVIDIA T4 - good balance of speed/cost
+    gpu="A10G",  # Upgraded from T4 for faster inference
     timeout=120,
     retries=2,
-    memory=4096,  # 4GB RAM
-    scaledown_window=300, # Keep warm for 5 mins
+    memory=4096,
+    scaledown_window=300,
 )
 class WhisperSTT:
     @modal.enter()

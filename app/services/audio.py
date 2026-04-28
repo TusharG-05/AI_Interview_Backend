@@ -1,6 +1,7 @@
 import os
 import asyncio
-from typing import Optional, Any
+import base64
+from typing import Optional, Any, Tuple
 from pathlib import Path
 from ..core.config import IS_ORCHESTRATOR, USE_MODAL
 from ..core.logger import get_logger
@@ -238,18 +239,17 @@ class AudioService:
                 if modal_cls:
                     try:
                         logger.info(f"Using Modal for STT: {local_path}")
-                        loop = asyncio.get_running_loop()
+                        # Use the async .aio interface for better performance
+                        with open(local_path, "rb") as f:
+                            audio_bytes = f.read()
                         
-                        def _modal_call():
-                            with open(local_path, "rb") as f:
-                                audio_bytes = f.read()
-                            # Instantiate class and call remote method
-                            result = modal_cls().transcribe.remote(audio_bytes, self.stt_model_size)
-                            if "error" in result:
-                                raise Exception(result["error"])
-                            return result.get("text", "")
+                        logger.info(f"Modal STT Request (Async): {len(audio_bytes)} bytes")
+                        result = await modal_cls().transcribe.aio(audio_bytes, self.stt_model_size)
                         
-                        text = await loop.run_in_executor(None, _modal_call)
+                        if isinstance(result, dict) and "error" in result:
+                            raise Exception(result["error"])
+                        
+                        text = result.get("text", "") if isinstance(result, dict) else result
                         if text:
                             return text
                     except Exception as e:
@@ -339,6 +339,74 @@ class AudioService:
                 
         except Exception as e:
             logger.error(f"TTS Generation Error: {e}")
+            return None
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except: pass
+
+    async def text_to_speech_turbo(self, text: str, folder: str = "interview_questions") -> Tuple[Optional[str], Optional[str]]:
+        """
+        FAST PATH: Returns (base64_audio, cloudinary_url).
+        Generates audio and converts to base64 immediately for zero-latency playback.
+        The Cloudinary upload is still performed but the UI doesn't have to wait for it.
+        """
+        import tempfile
+        import edge_tts
+        
+        temp_path = None
+        try:
+            # Create a temporary file for the TTS output
+            fd, temp_path = tempfile.mkstemp(suffix=".mp3")
+            os.close(fd)
+            
+            communicate = edge_tts.Communicate(text, self.female_voice)
+            await communicate.save(temp_path)
+            
+            # Read bytes for immediate Base64 response
+            with open(temp_path, "rb") as f:
+                audio_bytes = f.read()
+                base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+            
+            logger.info(f"TTS generated Turbo (Base64 length: {len(base64_audio)})")
+
+            # Perform Cloudinary upload (We return the URL too, but the UI can ignore it if it uses the bytes)
+            try:
+                cloudinary_url = self.cloudinary.upload_audio(audio_bytes, folder=folder)
+                return base64_audio, cloudinary_url
+            except Exception as e:
+                logger.error(f"TTS Cloudinary Error (Turbo): {e}")
+                return base64_audio, None
+                
+        except Exception as e:
+            logger.error(f"TTS Turbo Generation Error: {e}")
+            return None, None
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except: pass
+
+    async def text_to_speech_bytes(self, text: str) -> Optional[bytes]:
+        """
+        ULTRA FAST PATH: Returns raw audio bytes.
+        No Cloudinary, no Base64. Best for direct Response streaming.
+        """
+        import tempfile
+        import edge_tts
+        
+        temp_path = None
+        try:
+            fd, temp_path = tempfile.mkstemp(suffix=".mp3")
+            os.close(fd)
+            
+            communicate = edge_tts.Communicate(text, self.female_voice)
+            await communicate.save(temp_path)
+            
+            with open(temp_path, "rb") as f:
+                return f.read()
+                
+        except Exception as e:
+            logger.error(f"TTS Bytes Generation Error: {e}")
             return None
         finally:
             if temp_path and os.path.exists(temp_path):
