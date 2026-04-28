@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Any
 import json as _json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
 from fastapi.responses import FileResponse, Response, RedirectResponse
@@ -50,6 +50,8 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
+
+LINK_VALIDITY_MINUTES = 30
 
 @router.post("/otp-send", response_model=ApiResponse[dict])
 async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_session)):
@@ -207,6 +209,14 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
     from ..schemas.shared.user import LoginUserNested
     import json as _json
+    
+    def _parse_json_safe(val: Any, default: Any) -> Any:
+        if not val: return default
+        if not isinstance(val, str): return val
+        try:
+            return _json.loads(val)
+        except Exception:
+            return default
 
     # Map Admin
     admin_data = None
@@ -242,7 +252,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=ans.interview_result_id,
                 candidate_answer=ans.candidate_answer or "",
                 feedback=ans.feedback or "",
-                total_score=ans.total_score or 0.0,
+                score=ans.total_score or 0.0,
                 audio_path=ans.audio_path or "",
                 transcribed_text=ans.transcribed_text or "",
                 timestamp=ans.timestamp
@@ -253,7 +263,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=cans.interview_result_id,
                 candidate_answer=cans.candidate_answer or "",
                 feedback=cans.feedback or "",
-                total_score=cans.total_score or 0.0,
+                score=cans.total_score or 0.0,
                 audio_path=cans.audio_path or "",
                 transcribed_text=cans.transcribed_text or "",
                 timestamp=cans.timestamp
@@ -289,45 +299,38 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     # Map Coding Question Paper
     coding_paper_data = None
     if session.coding_paper:
-        coding_questions_list = [
-            CodingQuestionWithAnswer(
-                id=cq.id,
-                paper_id=cq.paper_id,
-                title=cq.title or "",
-                problem_statement=cq.problem_statement or "",
-                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
-                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
-                starter_code=cq.starter_code or "",
-                answer=coding_answers_map.get(cq.id),
-                topic=cq.topic or "Algorithms",
-                difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
-                marks=cq.marks or 0
-            ) for cq in session.coding_paper.questions
-        ]
-        
-        # Map admin user for coding paper
-        coding_admin_user = None
-        if session.coding_paper.admin:
-            coding_admin_user = LoginUserNested(
-                id=session.coding_paper.admin.id,
-                email=session.coding_paper.admin.email,
-                full_name=session.coding_paper.admin.full_name,
-                role=session.coding_paper.admin.role.value if hasattr(session.coding_paper.admin.role, 'value') else str(session.coding_paper.admin.role),
-                access_token=session.coding_paper.admin.access_token or "",
-                team={"id": session.coding_paper.admin.team.id, "name": session.coding_paper.admin.team.name} if session.coding_paper.admin.team else None
+        try:
+            # 1. Map Questions
+            coding_questions_list = [
+                CodingQuestionWithAnswer(
+                    id=cq.id,
+                    paper_id=cq.paper_id,
+                    title=cq.title or "",
+                    problem_statement=cq.problem_statement or "",
+                    examples=_parse_json_safe(cq.examples, []),
+                    constraints=_parse_json_safe(cq.constraints, []),
+                    starter_code=cq.starter_code or "",
+                    answer=coding_answers_map.get(cq.id),
+                    topic=cq.topic or "Algorithms",
+                    difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
+                    marks=cq.marks or 0
+                ) for cq in session.coding_paper.questions
+            ]
+            
+            # 2. Map Paper Details
+            coding_paper_data = CodingPaperNestedWithoutAdmin(
+                id=session.coding_paper.id,
+                name=session.coding_paper.name,
+                description=session.coding_paper.description or "",
+                question_count=session.coding_paper.question_count or len(coding_questions_list),
+                total_marks=int(session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list)),
+                created_at=session.coding_paper.created_at,
+                team_id=session.coding_paper.admin.team.id if session.coding_paper.admin and session.coding_paper.admin.team else None,
+                questions=coding_questions_list
             )
-        
-        coding_paper_data = CodingPaperNestedWithoutAdmin(
-            id=session.coding_paper.id,
-            name=session.coding_paper.name,
-            description=session.coding_paper.description or "",
-            # admin_user=coding_admin_user,
-            question_count=session.coding_paper.question_count or len(coding_questions_list),
-            total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
-            created_at=session.coding_paper.created_at,
-            team_id=session.coding_paper.admin.team.id if session.coding_paper.admin and session.coding_paper.admin.team else None,
-            questions=coding_questions_list
-        )
+        except Exception as e:
+            logger.error(f"Error serializing coding paper for session {session.id}: {e}", exc_info=True)
+            coding_paper_data = None
 
     # Create proctoring event
     proctoring_event = ProctoringEvent(
@@ -525,12 +528,22 @@ async def access_interview(
             detail=f"This interview has been suspended. Reason: {session.suspension_reason}" if session.suspension_reason else "This interview has been suspended."
         )
         
-    # Validation Logic
     now = datetime.now(timezone.utc)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+
+    # 1. Determine Expiration based on status
+    if session.status == InterviewStatus.LIVE and session.start_time:
+        # For LIVE sessions, check against the full duration from start_time
+        start_t = session.start_time
+        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        expiration_time = start_t + timedelta(minutes=session.duration_minutes)
+        expiry_message = "This interview session has expired."
+    else:
+        # For SCHEDULED or other statuses, link is only active for LINK_VALIDITY_MINUTES after schedule_time
+        expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
+        expiry_message = f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time."
 
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="Interview is cancelled")
@@ -541,11 +554,12 @@ async def access_interview(
     
     is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
     if is_expired:
-        if session.status != InterviewStatus.EXPIRED:
+        if session.status != InterviewStatus.EXPIRED and session.status != InterviewStatus.COMPLETED:
             session.status = InterviewStatus.EXPIRED
             session_db.add(session)
             session_db.commit()
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
+        raise HTTPException(status_code=403, detail=expiry_message)
+
          
     enforce_tab_timeout(session_db, session)
     
@@ -613,7 +627,13 @@ async def get_schedule_time(
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
     
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+    # Expiry logic matching access_interview
+    if session.status == InterviewStatus.LIVE and session.start_time:
+        start_t = session.start_time
+        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        expiration_time = start_t + timedelta(minutes=session.duration_minutes)
+    else:
+        expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
 
     # Determine display message
     display_message = "Interview schedule time retrieved successfully."
@@ -627,7 +647,8 @@ async def get_schedule_time(
             message="This interview has already been completed."
         )
     elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
+        raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {LINK_VALIDITY_MINUTES} mins).")
+
     elif session.status == InterviewStatus.LIVE:
         display_message = "This interview is currently in progress (attempted)."
     elif now < schedule_time:
@@ -729,7 +750,9 @@ async def start_session_logic(
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+    
+    # Start window check: Link active for LINK_VALIDITY_MINUTES for new starts
+    expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
 
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="This interview has been cancelled.")
@@ -738,7 +761,8 @@ async def start_session_logic(
         raise HTTPException(status_code=403, detail="This interview has already been completed.")
         
     if now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        raise HTTPException(status_code=403, detail="This interview link has expired.")
+        raise HTTPException(status_code=403, detail=f"This interview link has expired. Interviews must be started within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.")
+
     
     # Check if suspended
     if session.is_suspended:
@@ -1096,8 +1120,9 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
     
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session_obj)
+    enforce_interview_duration(session_db, session_obj)
     
     # Track interview active status (on first question fetch)
     if session_obj.current_status == CandidateStatus.ENROLLMENT_COMPLETED:
@@ -1110,14 +1135,22 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     # Update last activity
     update_last_activity(session_db, session_obj)
     
-    # 1. Get answered questions
-    # Need to find InterviewResult first or join
-    # answered_ids = [r.question_id for r in session_db.exec(select(Answers).join(InterviewResult).where(InterviewResult.interview_id == interview_id)).all()]
-    # simplified:
+    # 1. Get all answered questions (Standard and Coding)
     answered_ids = []
-    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
-    if result and result.answers:
-        answered_ids = [a.question_id for a in result.answers if a.question_id]
+    answered_coding_ids = []
+    
+    result = session_db.exec(
+        select(InterviewResult)
+        .where(InterviewResult.interview_id == interview_id)
+        .options(selectinload(InterviewResult.answers), selectinload(InterviewResult.coding_answers))
+    ).first()
+    
+    if result:
+        if result.answers:
+            answered_ids = [a.question_id for a in result.answers if a.question_id]
+        if result.coding_answers:
+            answered_coding_ids = [ca.coding_question_id for ca in result.coding_answers if ca.coding_question_id]
+
     
     # 2. Check if this session has assigned questions (Campaign mode)
     has_assignments = session_db.exec(
@@ -1168,35 +1201,25 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             ).all()
 
             # Answered coding questions: check BOTH proxy Answers rows AND the CodingAnswers table directly.
-            # submit-answer-code stores to CodingAnswers (not Answers), so we must check both.
-            answered_proxy_ids = set(answered_ids)  # already collected from Answers table above
-
-            # 1. Proxy-based: proxy rows tagged with question_text = f"__coding__{cq.id}"
-            answered_coding_cq_ids = set()
+            answered_proxy_ids = set(answered_ids)
+            
+            # 1. Extract coding IDs from proxy Answers
             for qid in answered_proxy_ids:
                 proxy = session_db.get(Questions, qid)
                 if proxy and proxy.question_text and proxy.question_text.startswith("__coding__"):
                     try:
-                        answered_coding_cq_ids.add(int(proxy.question_text.split("__coding__")[1]))
+                        answered_coding_ids.append(int(proxy.question_text.split("__coding__")[1]))
                     except (ValueError, IndexError):
                         pass
 
-            # 2. Direct: check CodingAnswers table for this interview result
-            interview_result = session_db.exec(
-                select(InterviewResult).where(InterviewResult.interview_id == interview_id)
-            ).first()
-            if interview_result:
-                direct_coding_answers = session_db.exec(
-                    select(CodingAnswers).where(CodingAnswers.interview_result_id == interview_result.id)
-                ).all()
-                for ca in direct_coding_answers:
-                    answered_coding_cq_ids.add(ca.coding_question_id)
-
-            # Pick the next un-answered coding question
+            # 2. Pick the next un-answered coding question
+            # Using a set for efficient lookup
+            final_answered_coding_set = set(answered_coding_ids)
             next_cq = next(
-                (cq for cq in all_coding_qs if cq.id not in answered_coding_cq_ids),
+                (cq for cq in all_coding_qs if cq.id not in final_answered_coding_set),
                 None
             )
+
 
             if next_cq is None:
                 return ApiResponse(
@@ -1385,8 +1408,9 @@ async def submit_answer_audio(
             detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
     
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session_obj)
+    enforce_interview_duration(session_db, session_obj)
     
     content = await audio.read()
     cloudinary_url = get_audio_service().upload_audio_blob(content, folder="interview_responses")
@@ -1527,8 +1551,9 @@ async def submit_answer_code(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)
+    enforce_interview_duration(session_db, session)
 
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
@@ -1620,8 +1645,9 @@ async def submit_answer_text(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)
+    enforce_interview_duration(session_db, session)
 
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
@@ -2086,6 +2112,49 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
                 "is_suspended": True
             }
         )
+
+def enforce_interview_duration(db: Session, session_obj: InterviewSession) -> None:
+    """
+    Checks if the interview duration has exceeded based on start_time.
+    If expired, marks the interview as COMPLETED and blocks further actions.
+    """
+    if session_obj.status == InterviewStatus.LIVE and session_obj.start_time:
+        now = datetime.now(timezone.utc)
+        start_time = session_obj.start_time
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+            
+        expiration_time = start_time + timedelta(minutes=session_obj.duration_minutes)
+        
+        if now > expiration_time:
+            logger.warning(f"Session {session_obj.id}: Automatic completion due to duration timeout")
+            session_obj.status = InterviewStatus.COMPLETED
+            session_obj.is_completed = True
+            session_obj.end_time = now
+            session_obj.current_status = "Completed (Time Limit)"
+            
+            # Record status change
+            record_status_change(
+                session=db,
+                interview_session=session_obj,
+                new_status=CandidateStatus.INTERVIEW_COMPLETED,
+                metadata={"reason": "duration_timeout", "auto_completed": True}
+            )
+            
+            # Trigger result processing task if needed
+            from ..tasks.interview_tasks import process_session_results_task
+            process_session_results_task.delay(session_obj.id)
+            
+            db.add(session_obj)
+            db.commit()
+            db.refresh(session_obj)
+            
+    if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:
+        raise HTTPException(
+            status_code=403,
+            detail="The interview duration has expired. Your session has been automatically completed."
+        )
+
 
 
 # --- Standalone Tools ---
