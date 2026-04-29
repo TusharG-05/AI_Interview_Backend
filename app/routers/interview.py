@@ -254,7 +254,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=ans.interview_result_id,
                 candidate_answer=ans.candidate_answer or "",
                 feedback=ans.feedback or "",
-                score=ans.total_score or 0.0,
+                score=ans.score or 0.0,
                 audio_path=ans.audio_path or "",
                 transcribed_text=ans.transcribed_text or "",
                 timestamp=ans.timestamp
@@ -267,7 +267,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 interview_result_id=cans.interview_result_id,
                 candidate_answer=cans.candidate_answer or "",
                 feedback=cans.feedback or "",
-                score=cans.total_score or 0.0,
+                score=cans.score or 0.0,
                 audio_path=cans.audio_path or "",
                 transcribed_text=cans.transcribed_text or "",
                 timestamp=cans.timestamp
