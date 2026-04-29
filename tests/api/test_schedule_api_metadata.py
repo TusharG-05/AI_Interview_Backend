@@ -92,4 +92,4 @@ def test_get_schedule_time_metadata(client, session, test_users):
     session.commit()
     response = client.get(f"/api/interview/schedule-time/{token_val}")
     assert response.status_code == 403
-    assert response.json()["message"] == "This interview link has expired."
+    assert response.json()["message"] == "This interview link has expired (Entry window: 30 mins)."

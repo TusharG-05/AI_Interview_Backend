@@ -58,7 +58,7 @@ def test_access_interview_expired_by_time(client, session, test_users, auth_head
     
     response = client.get(f"/api/interview/access/{interview.access_token}", headers=auth_headers)
     assert response.status_code == 403
-    assert response.json()["message"] == "This interview link has expired."
+    assert response.json()["message"] == "This interview link has expired. Candidates must join within 30 minutes of the scheduled time."
 
 def test_access_interview_suspended(client, session, test_users, auth_headers):
     """Test 403 for suspended interview"""
