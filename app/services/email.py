@@ -1,8 +1,9 @@
+import ssl
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from ..core.logger import get_logger
-from ..core.config import MAIL_USERNAME, MAIL_PASSWORD, SMTP_HOST, SMTP_PORT, SMTP_STARTTLS
+from ..core.config import MAIL_USERNAME, MAIL_PASSWORD, SMTP_HOST, SMTP_PORT, SMTP_STARTTLS, SMTP_USE_SSL
 
 logger = get_logger(__name__)
 
@@ -13,6 +14,23 @@ class EmailService:
         self.smtp_server = SMTP_HOST
         self.smtp_port = SMTP_PORT
         self.smtp_starttls = SMTP_STARTTLS
+        self.smtp_use_ssl = SMTP_USE_SSL
+
+    def _create_smtp_client(self):
+        if self.smtp_use_ssl:
+            return smtplib.SMTP_SSL(
+                self.smtp_server,
+                self.smtp_port,
+                timeout=15,
+                context=ssl.create_default_context(),
+            )
+
+        server = smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15)
+        if self.smtp_starttls:
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+        return server
 
     def _send_smtp_email(self, to_email: str, subject: str, body_text: str) -> bool:
         """Helper to send email via SMTP with robust logging."""
@@ -28,9 +46,7 @@ class EmailService:
             msg['Subject'] = subject
             msg.attach(MIMEText(body_text, 'plain'))
 
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15)
-            if self.smtp_starttls:
-                server.starttls()
+            server = self._create_smtp_client()
             try:
                 server.login(self.username, self.password)
             except smtplib.SMTPAuthenticationError as auth_err:
@@ -47,7 +63,7 @@ class EmailService:
             return True
         except Exception as e:
             logger.warning(
-                f"SMTP connection/delivery failed ({self.smtp_server}:{self.smtp_port}, starttls={self.smtp_starttls}): {e}"
+                f"SMTP connection/delivery failed ({self.smtp_server}:{self.smtp_port}, starttls={self.smtp_starttls}, ssl={self.smtp_use_ssl}): {e}"
             )
             return False
 
