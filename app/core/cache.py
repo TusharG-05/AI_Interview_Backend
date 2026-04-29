@@ -121,18 +121,5 @@ class CacheClient:
                 self.redis = None
         return await self.in_memory.delete(key)
 
-    async def aclose(self) -> None:
-        """Gracefully close the underlying Redis client (if any)."""
-        if self.redis:
-            try:
-                await self.redis.close()
-            except Exception as e:
-                logger.debug(f"cache_client.aclose() error (close): {e}")
-            try:
-                await self.redis.connection_pool.disconnect()
-            except Exception:
-                pass
-            self.redis = None
-
 # Global instance
 cache_client = CacheClient(REDIS_URL)
