@@ -114,6 +114,12 @@ async def lifespan(app: FastAPI):
             
         redis_conn = redis.from_url(REDIS_URL, **conn_kwargs)
         await FastAPILimiter.init(redis_conn)
+        # retain the redis connection on app.state so we can close it cleanly on shutdown
+        try:
+            app.state.redis_conn = redis_conn
+        except Exception:
+            # defensive: if app.state isn't writable for some reason, skip storing
+            logger.debug("Could not store redis_conn on app.state")
         logger.info("Lifespan: API Rate Limiting initialized successfully.")
     except ImportError:
         logger.warning("Lifespan: fastapi-limiter not installed. Rate limiting disabled.")
@@ -146,6 +152,33 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Stopping Application Resources...")
+
+    # Close rate-limiter Redis client (if we created one)
+    try:
+        rc = getattr(app.state, "redis_conn", None)
+        if rc:
+            try:
+                await rc.close()
+            except Exception as e:
+                logger.debug(f"Failed to close rate-limiter redis_conn: {e}")
+            try:
+                await rc.connection_pool.disconnect()
+            except Exception:
+                pass
+    except Exception:
+        logger.exception("Error shutting down rate-limiter Redis client")
+
+    # Close global cache client (if it created a redis instance)
+    try:
+        from .core.cache import cache_client
+        if hasattr(cache_client, "aclose"):
+            try:
+                await cache_client.aclose()
+            except Exception:
+                logger.exception("Error shutting down global cache client")
+    except Exception:
+        logger.exception("Error importing cache_client for shutdown")
+
     from .core.database import engine
     if service is not None:
         service.stop()
