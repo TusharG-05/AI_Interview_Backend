@@ -546,7 +546,8 @@ async def access_interview(
     if session.status == InterviewStatus.LIVE and session.start_time:
         # For LIVE sessions, check against the full duration from start_time
         start_t = session.start_time
-        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
         expiration_time = start_t + timedelta(minutes=session.duration_minutes)
         expiry_message = "This interview session has expired."
     else:
@@ -639,7 +640,8 @@ async def get_schedule_time(
     # Expiry logic matching access_interview
     if session.status == InterviewStatus.LIVE and session.start_time:
         start_t = session.start_time
-        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
         expiration_time = start_t + timedelta(minutes=session.duration_minutes)
     else:
         expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
@@ -1678,7 +1680,8 @@ async def submit_answer_text(
         except: pass
     elif not question:
         coding_q = session_db.get(CodingQuestions, question_id)
-        if coding_q: real_coding_id = question_id
+        if coding_q:
+            real_coding_id = question_id
 
     if coding_q and real_coding_id:
         from ..models.db_models import CodingAnswers
