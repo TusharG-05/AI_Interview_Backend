@@ -86,6 +86,7 @@ class EmailService:
         }
 
         try:
+            logger.info(f"Attempting Brevo HTTP email delivery to {to_email}...")
             response = requests.post(
                 "https://api.brevo.com/v3/smtp/email",
                 headers={
@@ -95,16 +96,24 @@ class EmailService:
                 json=payload,
                 timeout=15,
             )
+            
+            logger.info(f"Brevo HTTP response: status={response.status_code}")
+            
             if response.status_code in (200, 201, 202):
-                logger.info(f"Brevo Email Sent Successfully to {to_email}")
+                logger.info(f"Brevo Email Sent Successfully to {to_email} (status: {response.status_code})")
+                if response.text:
+                    logger.debug(f"Brevo response body: {response.text[:200]}")
                 return True
 
             logger.warning(
-                f"Brevo delivery failed for {to_email}: {response.status_code} {response.text[:500]}"
+                f"Brevo delivery failed for {to_email}: HTTP {response.status_code}\nResponse: {response.text[:500]}"
             )
             return False
+        except requests.exceptions.Timeout as te:
+            logger.warning(f"Brevo delivery timeout for {to_email}: {te}")
+            return False
         except Exception as e:
-            logger.warning(f"Brevo delivery exception for {to_email}: {e}")
+            logger.warning(f"Brevo delivery exception for {to_email}: {type(e).__name__}: {e}")
             return False
 
     def _send_email_with_fallbacks(self, to_email: str, subject: str, body_text: str) -> tuple[bool, str]:

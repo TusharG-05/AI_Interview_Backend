@@ -103,6 +103,7 @@ async def lifespan(app: FastAPI):
     logger.info("Lifespan: Starting Application (API-Only Mode)...")
     
     # RATE LIMITING: Protect AI resources
+    redis_conn = None
     try:
         import redis.asyncio as redis
         from fastapi_limiter import FastAPILimiter
@@ -151,6 +152,15 @@ async def lifespan(app: FastAPI):
     if service is not None:
         service.stop()
     engine.dispose()
+    
+    # CLEANUP: Close Redis connection explicitly to avoid event loop error
+    if redis_conn is not None:
+        try:
+            await redis_conn.close()
+            logger.info("Lifespan: Redis connection closed successfully.")
+        except Exception as redis_close_err:
+            logger.warning(f"Lifespan: Error closing Redis connection: {redis_close_err}")
+    
     logger.info("Application Shutdown Complete.")
 
 app = FastAPI(
