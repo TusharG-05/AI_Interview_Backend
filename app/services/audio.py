@@ -216,6 +216,27 @@ class AudioService:
             return "", False
         return audio_path, False
 
+    async def _call_modal_stt(self, modal_cls: Any, audio_bytes: bytes):
+        """Call Modal STT in a SDK-compatible way (.aio for async, .remote for sync)."""
+        client = modal_cls()
+        transcribe_fn = getattr(client, "transcribe", None)
+        if transcribe_fn is None:
+            raise AttributeError("Modal Whisper client has no transcribe method")
+
+        aio_fn = getattr(transcribe_fn, "aio", None)
+        if callable(aio_fn):
+            return await aio_fn(audio_bytes, self.stt_model_size)
+
+        remote_fn = getattr(transcribe_fn, "remote", None)
+        if callable(remote_fn):
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: remote_fn(audio_bytes, self.stt_model_size),
+            )
+
+        raise AttributeError("Modal transcribe supports neither .aio nor .remote")
+
     async def speech_to_text(self, audio_path: str) -> str:
         """
         Transcribes audio using a multi-layered fallback approach:
@@ -239,12 +260,11 @@ class AudioService:
                 if modal_cls:
                     try:
                         logger.info(f"Using Modal for STT: {local_path}")
-                        # Use the async .aio interface for better performance
                         with open(local_path, "rb") as f:
                             audio_bytes = f.read()
                         
                         logger.info(f"Modal STT Request (Async): {len(audio_bytes)} bytes")
-                        result = await modal_cls().transcribe.aio(audio_bytes, self.stt_model_size)
+                        result = await self._call_modal_stt(modal_cls, audio_bytes)
                         
                         if isinstance(result, dict) and "error" in result:
                             raise Exception(result["error"])
