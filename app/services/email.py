@@ -4,7 +4,17 @@ import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from ..core.logger import get_logger
-from ..core.config import MAIL_USERNAME, MAIL_PASSWORD, BREVO_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_STARTTLS, SMTP_USE_SSL
+from ..core.config import (
+    MAIL_USERNAME,
+    MAIL_PASSWORD,
+    BREVO_SENDER_EMAIL,
+    MAIL_FROM_NAME,
+    BREVO_API_KEY,
+    SMTP_HOST,
+    SMTP_PORT,
+    SMTP_STARTTLS,
+    SMTP_USE_SSL,
+)
 
 logger = get_logger(__name__)
 
@@ -12,10 +22,26 @@ class EmailService:
     def __init__(self):
         self.username = MAIL_USERNAME
         self.password = MAIL_PASSWORD
+        self.sender_email = BREVO_SENDER_EMAIL
+        self.sender_name = MAIL_FROM_NAME
         self.smtp_server = SMTP_HOST
         self.smtp_port = SMTP_PORT
         self.smtp_starttls = SMTP_STARTTLS
         self.smtp_use_ssl = SMTP_USE_SSL
+
+    def _get_sender_email(self) -> str:
+        sender_email = self.sender_email or self.username
+        if not sender_email:
+            return ""
+
+        if sender_email.endswith("@smtp-brevo.com"):
+            logger.error(
+                "Invalid email sender configured: %s. Set BREVO_SENDER_EMAIL or MAIL_FROM_EMAIL to a validated sender address.",
+                sender_email,
+            )
+            return ""
+
+        return sender_email
 
     def _create_smtp_client(self):
         if self.smtp_use_ssl:
@@ -39,10 +65,14 @@ class EmailService:
             logger.warning("SMTP credentials missing (MAIL_USERNAME or MAIL_PASSWORD).")
             return False
 
+        sender_email = self._get_sender_email()
+        if not sender_email:
+            return False
+
         try:
             logger.info(f"Attempting SMTP connection to {self.smtp_server}:{self.smtp_port}...")
             msg = MIMEMultipart()
-            msg['From'] = f"AI Interview Platform <{self.username}>"
+            msg['From'] = f"{self.sender_name} <{sender_email}>"
             msg['To'] = to_email
             msg['Subject'] = subject
             msg.attach(MIMEText(body_text, 'plain'))
@@ -74,12 +104,13 @@ class EmailService:
             logger.warning("Brevo API key missing (BREVO_API_KEY).")
             return False
 
-        if not self.username:
-            logger.warning("Brevo fallback skipped because MAIL_USERNAME is missing.")
+        sender_email = self._get_sender_email()
+        if not sender_email:
+            logger.warning("Brevo fallback skipped because no valid sender email is configured.")
             return False
 
         payload = {
-            "sender": {"name": "AI Interview Platform", "email": self.username},
+            "sender": {"name": self.sender_name, "email": sender_email},
             "to": [{"email": to_email}],
             "subject": subject,
             "textContent": body_text,
