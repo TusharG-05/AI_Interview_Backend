@@ -146,6 +146,7 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Stopping Application Resources...")
+
     from .core.database import engine
     if service is not None:
         service.stop()

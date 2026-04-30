@@ -31,7 +31,9 @@ SECRET_KEY=your-secret-key-here
 ```
 MAIL_USERNAME=your-email@gmail.com
 MAIL_PASSWORD=your-app-password
-SENDGRID_API_KEY=your-sendgrid-key
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USE_SSL=true
 ```
 
 ### AI Services
@@ -53,6 +55,7 @@ OPENCLAW_API_KEY=your-openclaw-key
 2. **Local .env is only for development** - Render secrets override it
 3. **Test with Render's environment** - Don't assume local values work
 4. **Database URL must include SSL** - Required for external connections
+5. **For Gmail SMTP on Render**, prefer port `465` with `SMTP_USE_SSL=true`
 
 ## 🚀 Deployment Commands
 

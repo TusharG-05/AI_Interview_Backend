@@ -38,7 +38,7 @@ A full-stack platform for automated technical interviews, integrating computer v
 ### 📋 Interview Management
 - **Session Isolation** — Data separation for concurrent interview sessions with per-session question subsets.
 - **Time-Aware Scheduling** — Tokenized invite links with scheduled activation windows, duration limits, and expiry.
-- **Email Notifications** — Dual-email service (SMTP + SendGrid fallback) for candidate invitations with invite links.
+- **Email Notifications** — SMTP-based notifications for candidate invitations with invite links.
 - **Candidate Lifecycle** — Full status tracking from `invited` → `link_accessed` → `authenticated` → `selfie_uploaded` → `enrollment` → `interview_active` → `completed`.
 - **Background Processing** — Celery + Redis for asynchronous result evaluation, scoring, and email delivery.
 
@@ -65,7 +65,7 @@ A full-stack platform for automated technical interviews, integrating computer v
 │   ├── services/        # Core Business Logic
 │   │   ├── audio.py         # STT (Whisper), TTS (Edge-TTS), Speaker Verification
 │   │   ├── camera.py        # Frame capture & proctoring detectors
-│   │   ├── email.py         # SMTP + SendGrid email delivery
+│   │   ├── email.py         # SMTP email delivery
 │   │   ├── face.py          # DeepFace recognition & enrollment
 │   │   ├── gaze.py          # MediaPipe gaze direction analysis
 │   │   ├── interview.py     # Interview session orchestration
@@ -136,7 +136,7 @@ Key environment variables:
 | `DATABASE_URL` | PostgreSQL connection string |
 | `SECRET_KEY` | JWT signing key (auto-generated in dev) |
 | `MAIL_USERNAME` / `MAIL_PASSWORD` | SMTP credentials for invitations |
-| `SENDGRID_API_KEY` | SendGrid fallback for email delivery |
+| `SMTP_USE_SSL` | Use implicit SSL for SMTP (recommended for port 465) |
 | `SENTRY_DSN` | Sentry error tracking DSN (optional) |
 | `USE_MODAL` | Enable Modal cloud GPU offloading (`true`/`false`) |
 | `FRONTEND_URL` | Frontend URL for email invitation links |
@@ -326,7 +326,7 @@ See [docs/API_TESTING_GUIDE.md](docs/API_TESTING_GUIDE.md) for detailed API test
 | **Deployment** | Docker, Docker Compose, Hugging Face Spaces, Ngrok |
 | **Cloud GPU** | Modal (Whisper, LLM, DeepFace) |
 | **Monitoring** | Sentry, structured logging |
-| **Email** | SMTP, SendGrid |
+| **Email** | SMTP |
 
 ---
 

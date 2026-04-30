@@ -1,4 +1,4 @@
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Any
 import json as _json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
 from fastapi.responses import FileResponse, Response, RedirectResponse
@@ -209,6 +209,14 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
     from ..schemas.shared.user import LoginUserNested
     import json as _json
+    
+    def _parse_json_safe(val: Any, default: Any) -> Any:
+        if not val: return default
+        if not isinstance(val, str): return val
+        try:
+            return _json.loads(val)
+        except Exception:
+            return default
 
     # Map Admin
     admin_data = None
@@ -239,23 +247,27 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     coding_answers_map = {}
     if session.result:
         for ans in session.result.answers:
+            if ans.timestamp is None:
+                continue
             answers_map[ans.question_id] = AnswerShort(
                 id=ans.id,
                 interview_result_id=ans.interview_result_id,
                 candidate_answer=ans.candidate_answer or "",
                 feedback=ans.feedback or "",
-                total_score=ans.total_score or 0.0,
+                score=ans.score or 0.0,
                 audio_path=ans.audio_path or "",
                 transcribed_text=ans.transcribed_text or "",
                 timestamp=ans.timestamp
             )
         for cans in session.result.coding_answers:
+            if cans.timestamp is None:
+                continue
             coding_answers_map[cans.coding_question_id] = AnswerShort(
                 id=cans.id,
                 interview_result_id=cans.interview_result_id,
                 candidate_answer=cans.candidate_answer or "",
                 feedback=cans.feedback or "",
-                total_score=cans.total_score or 0.0,
+                score=cans.score or 0.0,
                 audio_path=cans.audio_path or "",
                 transcribed_text=cans.transcribed_text or "",
                 timestamp=cans.timestamp
@@ -291,45 +303,38 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     # Map Coding Question Paper
     coding_paper_data = None
     if session.coding_paper:
-        coding_questions_list = [
-            CodingQuestionWithAnswer(
-                id=cq.id,
-                paper_id=cq.paper_id,
-                title=cq.title or "",
-                problem_statement=cq.problem_statement or "",
-                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
-                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
-                starter_code=cq.starter_code or "",
-                answer=coding_answers_map.get(cq.id),
-                topic=cq.topic or "Algorithms",
-                difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
-                marks=cq.marks or 0
-            ) for cq in session.coding_paper.questions
-        ]
-        
-        # Map admin user for coding paper
-        coding_admin_user = None
-        if session.coding_paper.admin:
-            coding_admin_user = LoginUserNested(
-                id=session.coding_paper.admin.id,
-                email=session.coding_paper.admin.email,
-                full_name=session.coding_paper.admin.full_name,
-                role=session.coding_paper.admin.role.value if hasattr(session.coding_paper.admin.role, 'value') else str(session.coding_paper.admin.role),
-                access_token=session.coding_paper.admin.access_token or "",
-                team={"id": session.coding_paper.admin.team.id, "name": session.coding_paper.admin.team.name} if session.coding_paper.admin.team else None
+        try:
+            # 1. Map Questions
+            coding_questions_list = [
+                CodingQuestionWithAnswer(
+                    id=cq.id,
+                    paper_id=cq.paper_id,
+                    title=cq.title or "",
+                    problem_statement=cq.problem_statement or "",
+                    examples=_parse_json_safe(cq.examples, []),
+                    constraints=_parse_json_safe(cq.constraints, []),
+                    starter_code=cq.starter_code or "",
+                    answer=coding_answers_map.get(cq.id),
+                    topic=cq.topic or "Algorithms",
+                    difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
+                    marks=cq.marks or 0
+                ) for cq in session.coding_paper.questions
+            ]
+            
+            # 2. Map Paper Details
+            coding_paper_data = CodingPaperNestedWithoutAdmin(
+                id=session.coding_paper.id,
+                name=session.coding_paper.name,
+                description=session.coding_paper.description or "",
+                question_count=session.coding_paper.question_count or len(coding_questions_list),
+                total_marks=int(session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list)),
+                created_at=session.coding_paper.created_at,
+                team_id=session.coding_paper.admin.team.id if session.coding_paper.admin and session.coding_paper.admin.team else None,
+                questions=coding_questions_list
             )
-        
-        coding_paper_data = CodingPaperNestedWithoutAdmin(
-            id=session.coding_paper.id,
-            name=session.coding_paper.name,
-            description=session.coding_paper.description or "",
-            # admin_user=coding_admin_user,
-            question_count=session.coding_paper.question_count or len(coding_questions_list),
-            total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
-            created_at=session.coding_paper.created_at,
-            team_id=session.coding_paper.admin.team.id if session.coding_paper.admin and session.coding_paper.admin.team else None,
-            questions=coding_questions_list
-        )
+        except Exception as e:
+            logger.error(f"Error serializing coding paper for session {session.id}: {e}", exc_info=True)
+            coding_paper_data = None
 
     # Create proctoring event
     proctoring_event = ProctoringEvent(
@@ -367,7 +372,10 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         interview_round=str(session.interview_round.value if hasattr(session.interview_round, 'value') else session.interview_round) if session.interview_round else None,
         response_count=response_count,
         last_activity=session.last_activity or now,
-        result_status=getattr(session.result, 'result_status', 'PENDING') if session.result else 'PENDING',
+        result_status=(
+            (session.result.result_status.value if hasattr(session.result.result_status, 'value') else str(session.result.result_status))
+            if session.result and session.result.result_status else 'PENDING'
+        ),
         max_marks=max_marks,
         total_score=session.total_score or 0.0,
         current_status=str(session.current_status.value if hasattr(session.current_status, 'value') else session.current_status),
@@ -500,7 +508,7 @@ async def access_interview(
     Returns a cleaned, frontend-friendly response structure.
     """
     from sqlalchemy.orm import selectinload
-    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus
+    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus, InterviewResult
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
     from ..schemas.shared.user import LoginUserNested
 
@@ -514,7 +522,9 @@ async def access_interview(
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.admin),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions),
-            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin)
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers),
         )
     ).first()
     
@@ -536,7 +546,8 @@ async def access_interview(
     if session.status == InterviewStatus.LIVE and session.start_time:
         # For LIVE sessions, check against the full duration from start_time
         start_t = session.start_time
-        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
         expiration_time = start_t + timedelta(minutes=session.duration_minutes)
         expiry_message = "This interview session has expired."
     else:
@@ -629,7 +640,8 @@ async def get_schedule_time(
     # Expiry logic matching access_interview
     if session.status == InterviewStatus.LIVE and session.start_time:
         start_t = session.start_time
-        if start_t.tzinfo is None: start_t = start_t.replace(tzinfo=timezone.utc)
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
         expiration_time = start_t + timedelta(minutes=session.duration_minutes)
     else:
         expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
@@ -1668,7 +1680,8 @@ async def submit_answer_text(
         except: pass
     elif not question:
         coding_q = session_db.get(CodingQuestions, question_id)
-        if coding_q: real_coding_id = question_id
+        if coding_q:
+            real_coding_id = question_id
 
     if coding_q and real_coding_id:
         from ..models.db_models import CodingAnswers

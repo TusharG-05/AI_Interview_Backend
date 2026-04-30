@@ -97,6 +97,7 @@ MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "true").lower() == "true"
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true" or SMTP_PORT == 465
 
 # Assets and Paths
 ASSETS_DIR = "app/assets"
