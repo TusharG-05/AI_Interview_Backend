@@ -1,9 +1,10 @@
 import ssl
 import smtplib
+import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from ..core.logger import get_logger
-from ..core.config import MAIL_USERNAME, MAIL_PASSWORD, SMTP_HOST, SMTP_PORT, SMTP_STARTTLS, SMTP_USE_SSL
+from ..core.config import MAIL_USERNAME, MAIL_PASSWORD, BREVO_API_KEY, SMTP_HOST, SMTP_PORT, SMTP_STARTTLS, SMTP_USE_SSL
 
 logger = get_logger(__name__)
 
@@ -67,6 +68,54 @@ class EmailService:
             )
             return False
 
+    def _send_brevo_email(self, to_email: str, subject: str, body_text: str) -> bool:
+        """Fallback email delivery using Brevo's HTTP API."""
+        if not BREVO_API_KEY:
+            logger.warning("Brevo API key missing (BREVO_API_KEY).")
+            return False
+
+        if not self.username:
+            logger.warning("Brevo fallback skipped because MAIL_USERNAME is missing.")
+            return False
+
+        payload = {
+            "sender": {"name": "AI Interview Platform", "email": self.username},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "textContent": body_text,
+        }
+
+        try:
+            response = requests.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=15,
+            )
+            if response.status_code in (200, 201, 202):
+                logger.info(f"Brevo Email Sent Successfully to {to_email}")
+                return True
+
+            logger.warning(
+                f"Brevo delivery failed for {to_email}: {response.status_code} {response.text[:500]}"
+            )
+            return False
+        except Exception as e:
+            logger.warning(f"Brevo delivery exception for {to_email}: {e}")
+            return False
+
+    def _send_email_with_fallbacks(self, to_email: str, subject: str, body_text: str) -> tuple[bool, str]:
+        if self._send_smtp_email(to_email, subject, body_text):
+            return True, "Success (SMTP)"
+
+        if self._send_brevo_email(to_email, subject, body_text):
+            return True, "Success (Brevo)"
+
+        return False, "Delivery Failed (SMTP + Brevo)"
+
     def send_interview_invitation(self, to_email: str, candidate_name: str, link: str, time_str: str, duration_minutes: int):
         """
         Sends an email with the interview link via SMTP.
@@ -75,11 +124,12 @@ class EmailService:
         
         body_text = f"Hi {candidate_name},\n\nYou have been invited to an AI-Proctored Interview.\n\nDetails:\n- Scheduled Time: {time_str}\n- Duration: {duration_minutes} minutes\n- Link: {link}\n\nPlease click the link at the scheduled time to begin.\nNote: The link will not work before the scheduled time.\n\nGood Luck!"
 
-        if self._send_smtp_email(to_email, "Your AI Interview Invitation", body_text):
-            return True, "Success (SMTP)"
+        success, message = self._send_email_with_fallbacks(to_email, "Your AI Interview Invitation", body_text)
+        if success:
+            return True, message
 
         logger.error(f"FINAL DELIVERY FAILURE for {to_email}")
-        return False, "Delivery Failed (SMTP)"
+        return False, message
 
     def send_otp_email(self, to_email: str, otp: str):
         """
@@ -89,7 +139,8 @@ class EmailService:
         
         body_text = f"Your Verification Code for AI Interview Login is:\n\n{otp}\n\nThis code is valid for 10 minutes.\n\nIf you did not request this, please ignore this email."
 
-        if self._send_smtp_email(to_email, f"{otp} is your verification code", body_text):
+        success, _message = self._send_email_with_fallbacks(to_email, f"{otp} is your verification code", body_text)
+        if success:
             return True
 
         logger.error(f"FINAL OTP DELIVERY FAILURE for {to_email}")
