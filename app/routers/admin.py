@@ -1667,6 +1667,24 @@ async def get_result(
             if isinstance(examples, str):
                 try: examples = _json.loads(examples)
                 except: examples = []
+
+            normalized_examples = []
+            if isinstance(examples, list):
+                for ex in examples:
+                    if isinstance(ex, dict):
+                        normalized_examples.append({
+                            "input": str(ex.get("input", "")),
+                            "output": str(ex.get("output", "")),
+                            "explanation": str(ex["explanation"]) if ex.get("explanation") is not None else None,
+                        })
+                    else:
+                        normalized_examples.append({
+                            "input": "",
+                            "output": str(ex),
+                            "explanation": None,
+                        })
+            else:
+                normalized_examples = []
             
             constraints = q.constraints
             if isinstance(constraints, str):
@@ -1676,7 +1694,7 @@ async def get_result(
             coding_questions_with_answers.append(CodingQuestionWithAnswer(
                 id=q.id, paper_id=q.paper_id, title=q.title or "Coding Task",
                 problem_statement=q.problem_statement or "",
-                examples=examples or [], constraints=constraints or [],
+                examples=normalized_examples, constraints=constraints or [],
                 starter_code=q.starter_code or "", answer=ans_short,
                 topic=q.topic or "Algorithms", difficulty=q.difficulty or "Medium",
                 marks=q.marks or 0
