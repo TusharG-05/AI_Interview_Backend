@@ -32,8 +32,10 @@ class EmailService:
                 msg.attach(MIMEText(html_body, 'html'))
 
             server = smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15)
+            server.ehlo()
             if self.smtp_starttls:
                 server.starttls()
+                server.ehlo()
             try:
                 server.login(self.username, self.password)
             except smtplib.SMTPAuthenticationError as auth_err:
