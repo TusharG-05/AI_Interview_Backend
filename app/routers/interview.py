@@ -487,6 +487,26 @@ def _evaluate_and_update_score(
             logger.warning(
                 f"Answer {answer.id}: no text to evaluate, skipping LLM call."
             )
+            answer.score = 0.0
+            answer.feedback = "No answer provided or audio was silent."
+            db.add(answer)
+            db.flush()
+            
+            # Still update total score so the dashboard stays in sync
+            from ..utils import calculate_total_score
+            all_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+            from ..models.db_models import CodingAnswers
+            all_coding_answers = db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)).all()
+            
+            all_scores = [a.score for a in all_answers if a.score is not None]
+            all_scores.extend([ca.score for ca in all_coding_answers if ca.score is not None])
+            
+            new_total = calculate_total_score(all_scores)
+            result_obj.total_score = new_total
+            session_obj.total_score = new_total
+            db.add(result_obj)
+            db.add(session_obj)
+            db.commit()
             return
 
         text_to_evaluate = answer.candidate_answer or answer.transcribed_text
