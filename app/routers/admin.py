@@ -2506,6 +2506,7 @@ async def expire_interviews_manually(
     
     from ..models.db_models import InterviewStatus
     from datetime import timedelta
+    from ..services.status_manager import complete_interview_session
     
     now = datetime.now(timezone.utc)
     expired_count = 0
@@ -2531,18 +2532,26 @@ async def expire_interviews_manually(
             expiration_time = start_time + timedelta(minutes=interview_session.duration_minutes)
 
         if now > expiration_time:
-            interview_session.status = InterviewStatus.EXPIRED
-            interview_session.current_status = "Link Expired"
-            session.add(interview_session)
+            if interview_session.status == InterviewStatus.LIVE:
+                complete_interview_session(
+                    session=session,
+                    interview_session=interview_session,
+                    reason="duration_timeout",
+                    current_status_label="Completed (Time Limit)",
+                )
+                from ..tasks.interview_tasks import process_session_results_task
+                process_session_results_task.delay(interview_session.id)
+            else:
+                interview_session.status = InterviewStatus.EXPIRED
+                interview_session.current_status = "Link Expired"
+                session.add(interview_session)
+                session.commit()
             expired_count += 1
-    
-    if expired_count > 0:
-        session.commit()
     
     return ApiResponse(
         status_code=200,
         data={"expired_count": expired_count},
-        message=f"Expiration check completed. {expired_count} interviews marked as expired."
+        message=f"Expiration check completed. {expired_count} interviews updated."
     )
 
 # --- Candidate Status Tracking ---

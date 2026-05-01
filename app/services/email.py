@@ -81,6 +81,49 @@ class EmailService:
         logger.error(f"FINAL DELIVERY FAILURE for {to_email}")
         return False, "Delivery Failed (SMTP)"
 
+    def send_interview_result_email(self, to_email: str, report_data: dict) -> bool:
+        """
+        Send interview result summary to candidate via SMTP.
+        Expects `report_data` to contain keys like: candidate_name, date_str, id,
+        score, max_score, status, theory_count, coding_count, admin_name,
+        round_name, scheduled_time, start_time, duration_mins, proctoring_warnings
+        """
+        logger.info(f"--- EMAIL TASK STARTING: Sending result email to {to_email} ---")
+
+        candidate = report_data.get("candidate_name", "Candidate")
+        subject = f"Your Interview Results - {report_data.get('round_name','') or ''}".strip()
+
+        body_lines = [
+            f"Hi {candidate},",
+            "",
+            "Here are your interview results:",
+            f"Date: {report_data.get('date_str','')}",
+            f"Session ID: {report_data.get('id','')}",
+            f"Score: {report_data.get('score',0)} / {report_data.get('max_score',0)}",
+            f"Result: {report_data.get('status','')}",
+            f"Theory Questions: {report_data.get('theory_count',0)}",
+            f"Coding Questions: {report_data.get('coding_count',0)}",
+            f"Round: {report_data.get('round_name','')}",
+            f"Scheduled Time: {report_data.get('scheduled_time','')}",
+            f"Start Time: {report_data.get('start_time','N/A')}",
+            f"Duration (mins): {report_data.get('duration_mins','')}",
+            f"Proctoring Warnings: {report_data.get('proctoring_warnings','0')}",
+            "",
+            f"Admin: {report_data.get('admin_name','Platform Admin')}",
+            "",
+            "Thank you for participating. If you have any questions, contact the admin.",
+        ]
+
+        body_text = "\n".join(body_lines)
+
+        sent = self._send_smtp_email(to_email, subject, body_text)
+        if not sent:
+            logger.error(f"Result email delivery failed for {to_email}")
+            return False
+
+        logger.info(f"Result email sent to {to_email}")
+        return True
+
     def send_otp_email(self, to_email: str, otp: str):
         """
         Sends an OTP code for candidate login via SMTP.

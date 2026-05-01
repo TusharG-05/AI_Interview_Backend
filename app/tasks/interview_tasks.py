@@ -6,6 +6,7 @@ from ..services.email import EmailService
 from ..core.database import engine
 from ..core.logger import get_logger
 from ..core.config import LINK_VALIDITY_MINUTES
+from ..services.status_manager import complete_interview_session
 from ..utils import format_iso_datetime, calculate_total_score, calculate_total_marks
 from sqlmodel import Session, select
 from datetime import datetime, timezone, timedelta
@@ -105,7 +106,8 @@ def _calculate_and_save_final_results(db: Session, session: InterviewSession, re
     total_marks = calculate_total_marks(session)
     percentage = (computed_score / total_marks * 100) if total_marks > 0 else 0.0
     
-    result_obj.result_status = "PASS" if percentage >= 70.0 else "FAIL"
+    if result_obj.result_status == "PENDING":
+        result_obj.result_status = "PASS" if percentage >= 70.0 else "FAIL"
     session.total_score = computed_score
     
     db.add(result_obj)
@@ -242,7 +244,16 @@ def expire_interviews_task():
                 expiration_limit = start_time + timedelta(minutes=s.duration_minutes)
             
             if now > expiration_limit:
-                _expire_session(db, s)
+                if s.status == InterviewStatus.LIVE:
+                    complete_interview_session(
+                        session=db,
+                        interview_session=s,
+                        reason="duration_timeout",
+                        current_status_label="Completed (Time Limit)",
+                    )
+                    process_session_results_task.delay(s.id)
+                else:
+                    _expire_session(db, s)
                 expired_count += 1
         
         if expired_count > 0:

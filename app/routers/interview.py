@@ -760,17 +760,16 @@ async def start_session_logic(
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
     
-    # Start window check: Link active for LINK_VALIDITY_MINUTES for new starts
-    expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
-
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="This interview has been cancelled.")
     
     if session.is_completed or session.status == InterviewStatus.COMPLETED:
         raise HTTPException(status_code=403, detail="This interview has already been completed.")
         
-    if now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        raise HTTPException(status_code=403, detail=f"This interview link has expired. Interviews must be started within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.")
+    # NOTE: Removed enforcement of the schedule-entry window here so that
+    # candidates may start the interview even if the scheduled access window
+    # (LINK_VALIDITY_MINUTES) has passed. We still block cancelled/completed
+    # or suspended sessions above.
 
     
     # Check if suspended
@@ -1813,26 +1812,16 @@ async def submit_answer_text(
 
 @router.post("/finish/{interview_id}", response_model=ApiResponse[dict])
 async def finish_interview(interview_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
-    from ..services.status_manager import record_status_change
-    from ..models.db_models import CandidateStatus
-    
     interview_session = session_db.get(InterviewSession, interview_id)
     if not interview_session: raise HTTPException(status_code=404)
-    
-    interview_session.end_time = datetime.now(timezone.utc)
-    interview_session.is_completed = True
-    interview_session.status = InterviewStatus.COMPLETED
-    
-    # Track completion status
-    record_status_change(
+    from ..services.status_manager import complete_interview_session
+
+    complete_interview_session(
         session=session_db,
         interview_session=interview_session,
-        new_status=CandidateStatus.INTERVIEW_COMPLETED,
-        metadata={"completed_at": format_iso_datetime(datetime.now(timezone.utc))}
+        reason="manual_finish",
+        current_status_label="Completed",
     )
-    
-    session_db.add(interview_session)
-    session_db.commit()
     
     # Process results in background using plain function (no Celery dependency)
     from ..tasks.interview_tasks import process_session_results
@@ -2139,27 +2128,19 @@ def enforce_interview_duration(db: Session, session_obj: InterviewSession) -> No
         
         if now > expiration_time:
             logger.warning(f"Session {session_obj.id}: Automatic completion due to duration timeout")
-            session_obj.status = InterviewStatus.COMPLETED
-            session_obj.is_completed = True
-            session_obj.end_time = now
-            session_obj.current_status = "Completed (Time Limit)"
-            
-            # Record status change
-            record_status_change(
+            from ..services.status_manager import complete_interview_session
+
+            complete_interview_session(
                 session=db,
                 interview_session=session_obj,
-                new_status=CandidateStatus.INTERVIEW_COMPLETED,
-                metadata={"reason": "duration_timeout", "auto_completed": True}
+                reason="duration_timeout",
+                current_status_label="Completed (Time Limit)",
             )
-            
+
             # Trigger result processing task if needed
             from ..tasks.interview_tasks import process_session_results_task
             process_session_results_task.delay(session_obj.id)
-            
-            db.add(session_obj)
-            db.commit()
-            db.refresh(session_obj)
-            
+
     if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:
         raise HTTPException(
             status_code=403,
