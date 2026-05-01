@@ -17,7 +17,7 @@ from ..schemas.interview.questions import NextQuestionResponse, CodingQuestionBa
 from ..schemas.interview.status import TabSwitchRequest, PingResponse, KeepAliveRequest
 
 from ..auth.dependencies import get_current_user
-from ..core.config import IS_ORCHESTRATOR
+from ..core.config import IS_ORCHESTRATOR, LINK_VALIDITY_MINUTES
 from pydantic import BaseModel
 import os
 import uuid
@@ -50,8 +50,6 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
-
-LINK_VALIDITY_MINUTES = 30
 
 @router.post("/otp-send", response_model=ApiResponse[dict])
 async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_session)):

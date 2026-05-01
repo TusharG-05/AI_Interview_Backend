@@ -12,7 +12,7 @@ from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answe
 from ..auth.dependencies import get_current_user_optional, get_admin_user
 from ..auth.security import get_password_hash
 from ..services.status_manager import record_status_change
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR, LINK_VALIDITY_MINUTES
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 logger = get_logger(__name__)
@@ -2521,10 +2521,18 @@ async def expire_interviews_manually(
         schedule_time = interview_session.schedule_time
         if schedule_time.tzinfo is None:
             schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-        
-        expiration_time = schedule_time + timedelta(minutes=interview_session.duration_minutes)
+
+        if interview_session.status == InterviewStatus.SCHEDULED:
+            expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
+        else:
+            start_time = interview_session.start_time or schedule_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            expiration_time = start_time + timedelta(minutes=interview_session.duration_minutes)
+
         if now > expiration_time:
             interview_session.status = InterviewStatus.EXPIRED
+            interview_session.current_status = "Link Expired"
             session.add(interview_session)
             expired_count += 1
     

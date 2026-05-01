@@ -5,6 +5,7 @@ from ..models.db_models import InterviewSession, InterviewResult, Answers, Quest
 from ..services.email import EmailService
 from ..core.database import engine
 from ..core.logger import get_logger
+from ..core.config import LINK_VALIDITY_MINUTES
 from ..utils import format_iso_datetime, calculate_total_score, calculate_total_marks
 from sqlmodel import Session, select
 from datetime import datetime, timezone, timedelta
@@ -214,13 +215,16 @@ def _expire_session(db: Session, session_obj: InterviewSession):
 @celery_app.task(name="app.tasks.interview_tasks.expire_interviews_task")
 def expire_interviews_task():
     """
-    Periodic task to mark SCHEDULED interviews as EXPIRED if now > schedule_time + duration.
+    Periodic task to mark active interviews as EXPIRED when they pass their
+    respective validity window.
     """
     db = Session(engine)
     try:
         now = datetime.now(timezone.utc)
-        # Find all SCHEDULED interviews
-        stmt = select(InterviewSession).where(InterviewSession.status == InterviewStatus.SCHEDULED)
+        # Find all active interviews that still need expiry checks
+        stmt = select(InterviewSession).where(
+            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+        )
         scheduled_sessions = db.exec(stmt).all()
         
         expired_count = 0
@@ -229,7 +233,13 @@ def expire_interviews_task():
             if sched_time.tzinfo is None:
                 sched_time = sched_time.replace(tzinfo=timezone.utc)
             
-            expiration_limit = sched_time + timedelta(minutes=s.duration_minutes)
+            if s.status == InterviewStatus.SCHEDULED:
+                expiration_limit = sched_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
+            else:
+                start_time = s.start_time or sched_time
+                if start_time.tzinfo is None:
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                expiration_limit = start_time + timedelta(minutes=s.duration_minutes)
             
             if now > expiration_limit:
                 _expire_session(db, s)
