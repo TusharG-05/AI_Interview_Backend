@@ -204,6 +204,14 @@ def get_cloudinary_service():
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
 
+def _format_timer(seconds: float) -> str:
+    """Formats seconds into mm:ss string."""
+    if seconds < 0:
+        return "00:00"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes:02d}:{secs:02d}"
+
 def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
     """Helper to serialize InterviewSession into InterviewAccessResponse."""
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
@@ -356,6 +364,75 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     response_count = (len(session.result.answers) if session.result else 0) + (len(session.result.coding_answers) if session.result else 0)
     max_marks = (paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0)
 
+    # --- Timer Logic Implementation ---
+    curr_interview_timer = None
+    curr_question_timer = None
+    
+    # 1. Total Interview Timer (Remaining)
+    duration_secs = (session.duration_minutes or 60) * 60
+    if session.status == InterviewStatus.LIVE and session.start_time:
+        start_t = session.start_time
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
+        elapsed_secs = (now - start_t).total_seconds()
+        curr_interview_timer = _format_timer(duration_secs - elapsed_secs)
+    else:
+        curr_interview_timer = _format_timer(duration_secs)
+
+    # 2. Per-Question Timer (if navigation disabled)
+    if not session.allow_question_navigate:
+        # Count total questions for each paper
+        n_theory = len(session.paper.questions) if session.paper else 0
+        n_coding = len(session.coding_paper.questions) if session.coding_paper else 0
+        
+        if n_theory + n_coding > 0:
+            # Proportional Split: Coding = 4x Theory
+            # D = T_theory * (n_theory + 4 * n_coding)
+            t_theory_secs = duration_secs / (n_theory + (4 * n_coding))
+            t_coding_secs = 4 * t_theory_secs
+            
+            # Find last submission time and current question type
+            n_theory_done = len(session.result.answers) if session.result else 0
+            n_coding_done = len(session.result.coding_answers) if session.result else 0
+            
+            last_sub_time = None
+            current_q_type = "theory" # default
+            
+            # Collect all timestamps to find the latest
+            all_timestamps = []
+            if session.result:
+                all_timestamps.extend([a.timestamp for a in session.result.answers if a.timestamp])
+                all_timestamps.extend([ca.timestamp for ca in session.result.coding_answers if ca.timestamp])
+            
+            if all_timestamps:
+                # Latest submission
+                last_sub_time = max(all_timestamps)
+                if last_sub_time.tzinfo is None:
+                    last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                
+                # Determine next question type (Theory first, then Coding)
+                if n_theory_done < n_theory:
+                    current_q_type = "theory"
+                else:
+                    current_q_type = "coding"
+            else:
+                # No answers yet, use start_time
+                if session.start_time:
+                    last_sub_time = session.start_time
+                    if last_sub_time.tzinfo is None:
+                        last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                else:
+                    # Not started yet, use now as dummy for calculation (will result in full time)
+                    last_sub_time = now
+                
+                # First question type
+                current_q_type = "theory" if n_theory > 0 else "coding"
+
+            # Calculate remaining time for this question
+            q_duration_secs = t_theory_secs if current_q_type == "theory" else t_coding_secs
+            elapsed_on_q = (now - last_sub_time).total_seconds()
+            curr_question_timer = _format_timer(q_duration_secs - elapsed_on_q)
+
     return InterviewAccessResponse(
         id=session.id,
         access_token=session.access_token,
@@ -384,6 +461,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         tab_switch_count=session.tab_switch_count or 0,
         tab_warning_active=session.tab_warning_active or False,
         allow_proctoring=getattr(session, "allow_proctoring", True),
+        curr_interview_timer=curr_interview_timer,
+        curr_question_timer=curr_question_timer,
         proctoring_event=proctoring_event
     )
 
