@@ -2525,7 +2525,7 @@ async def expire_interviews_manually(
     
     from ..models.db_models import InterviewStatus
     from ..services.status_manager import complete_interview_session
-    from .interview import process_session_results_task
+    from ..tasks.interview_tasks import process_session_results_task
     now = datetime.now(timezone.utc)
     expired_count = 0
     
