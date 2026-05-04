@@ -88,7 +88,7 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
                     session.commit()
                 raise HTTPException(
                     status_code=403,
-                    detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+                    detail=f"This interview link has expired. Candidates must join within {interview.duration_minutes} minutes of the scheduled time.",
                 )
             if access_decision.duration_expired:
                 raise HTTPException(status_code=403, detail="This interview session has expired.")

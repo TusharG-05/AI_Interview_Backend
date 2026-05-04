@@ -97,6 +97,8 @@ def serialize_interview_admin_detail(session_obj: InterviewSession) -> Dict[str,
     proctoring_event = {
         "id": session_obj.id,
         "warning_count": session_obj.warning_count or 0,
+        "tab_switch_count": session_obj.tab_switch_count or 0,
+        "gaze_away_count": sum(1 for e in session_obj.proctoring_events if e.event_type.lower() == "gaze_away") if session_obj.proctoring_events else 0,
         "max_warnings": max_warn,
         "is_suspended": bool(session_obj.is_suspended),
         "suspension_reason": session_obj.suspension_reason,

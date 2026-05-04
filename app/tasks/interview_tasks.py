@@ -98,6 +98,8 @@ def _calculate_and_save_final_results(db: Session, session: InterviewSession, re
     fresh_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
     fresh_coding_answers = db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)).all()
     
+    logger.info(f"Session {session.id}: Found {len(fresh_answers)} theory answers and {len(fresh_coding_answers)} coding answers.")
+
     all_scores = [r.score for r in fresh_answers if r.score is not None]
     all_scores += [r.score for r in fresh_coding_answers if r.score is not None]
 
@@ -107,8 +109,10 @@ def _calculate_and_save_final_results(db: Session, session: InterviewSession, re
     total_marks = calculate_total_marks(session)
     percentage = (computed_score / total_marks * 100) if total_marks > 0 else 0.0
     
-    if result_obj.result_status == "PENDING":
+    # Update status from intermediate states to terminal states
+    if result_obj.result_status in ["PENDING", "PROCESSING", "COMPLETED"]:
         result_obj.result_status = "PASS" if percentage >= 70.0 else "FAIL"
+    
     session.total_score = computed_score
     
     db.add(result_obj)
@@ -119,7 +123,7 @@ def _calculate_and_save_final_results(db: Session, session: InterviewSession, re
     return computed_score, total_marks, fresh_answers, fresh_coding_answers
 
 
-def _send_result_email(db: Session, session: InterviewSession, result_obj: InterviewResult, computed_score, total_marks, theory_count, coding_count):
+def send_result_email_util(db: Session, session: InterviewSession, result_obj: InterviewResult, computed_score, total_marks, theory_count, coding_count):
     """Send summary email to the candidate."""
     try:
         admin_user = db.get(User, session.admin_id)
@@ -186,7 +190,7 @@ def process_session_results(interview_id: int, db: Session = None):
             db.commit()
 
         score, total, theory, coding = _calculate_and_save_final_results(db, session, result_obj)
-        _send_result_email(db, session, result_obj, score, total, len(theory), len(coding))
+        # _send_result_email(db, session, result_obj, score, total, len(theory), len(coding))  # Auto-send disabled by USER
 
     except Exception as e:
         logger.error(f"Session {interview_id} processing failed: {e}", exc_info=True)

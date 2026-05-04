@@ -100,7 +100,7 @@ async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_sessi
                 session.commit()
             raise HTTPException(
                 status_code=403,
-                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+                detail=f"This interview link has expired. Candidates must join within {interview.duration_minutes} minutes of the scheduled time.",
             )
         raise HTTPException(status_code=403, detail="Interview link is not active.")
 
@@ -195,7 +195,7 @@ async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session:
                 session.commit()
             raise HTTPException(
                 status_code=403,
-                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+                detail=f"This interview link has expired. Candidates must join within {interview.duration_minutes} minutes of the scheduled time.",
             )
         if otp_verify_decision.duration_expired:
             raise HTTPException(status_code=403, detail="This interview session has expired.")
@@ -714,7 +714,7 @@ async def access_interview(
                 session_db.commit()
             raise HTTPException(
                 status_code=403,
-                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+                detail=f"This interview link has expired. Candidates must join within {session.duration_minutes} minutes of the scheduled time.",
             )
 
         if access_decision.duration_expired:
@@ -729,7 +729,7 @@ async def access_interview(
         elif access_decision.reason == "explicitly_expired":
             raise HTTPException(
                 status_code=403,
-                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+                detail=f"This interview link has expired. Candidates must join within {session.duration_minutes} minutes of the scheduled time.",
             )
         elif access_decision.reason == "cancelled":
             raise HTTPException(status_code=403, detail="Interview is cancelled")
@@ -826,7 +826,7 @@ async def get_schedule_time(
         or access_decision.reason == "explicitly_expired"
         or access_decision.duration_expired
     ):
-        raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {LINK_VALIDITY_MINUTES} mins).")
+        raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {session_obj.duration_minutes} mins).")
 
     elif session.status == InterviewStatus.LIVE:
         display_message = "This interview is currently in progress (attempted)."
@@ -945,7 +945,7 @@ async def start_session_logic(
                 session_db.commit()
             raise HTTPException(
                 status_code=403,
-                detail=f"This interview link has expired. Interviews must be started within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+                detail=f"This interview link has expired. Interviews must be started within {session_obj.duration_minutes} minutes of the scheduled time.",
             )
 
         if access_decision.duration_expired:

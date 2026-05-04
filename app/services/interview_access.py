@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from ..models.db_models import CandidateStatus, InterviewSession, InterviewStatus
 
 
-LINK_VALIDITY_MINUTES = 30
+from ..core.config import LINK_VALIDITY_MINUTES
 
 
 @dataclass
@@ -49,9 +49,9 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
     Evaluate whether a candidate can access/start/continue an interview.
 
     Business rule:
-    - Entry link is valid for 30 minutes after scheduled time.
+    - Entry link is valid for the duration of the interview after scheduled time.
     - A session expires due to entry window only if it has not been accessed and has not started.
-    - Ongoing/started sessions are governed by interview duration, not link-entry window.
+    - Ongoing/started sessions are governed by interview duration from start_time.
     """
     now_utc = to_utc(now or datetime.now(timezone.utc))
 
@@ -79,7 +79,7 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
                 )
         return InterviewAccessDecision(allowed=True, reason="started")
 
-    entry_deadline = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
+    entry_deadline = schedule_time + timedelta(minutes=session_obj.duration_minutes)
     should_expire_entry = now_utc > entry_deadline and (not accessed) and (not started)
     if should_expire_entry:
         return InterviewAccessDecision(

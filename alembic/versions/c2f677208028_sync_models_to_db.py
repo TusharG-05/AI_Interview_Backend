@@ -91,10 +91,10 @@ def upgrade() -> None:
                existing_type=sa.INTEGER(),
                server_default=None,
                existing_nullable=False)
-    op.add_column('interviewsession', sa.Column('allow_question_navigate', sa.Boolean(), nullable=False))
-    op.add_column('interviewsession', sa.Column('tab_switch_count', sa.Integer(), nullable=False))
+    op.add_column('interviewsession', sa.Column('allow_question_navigate', sa.Boolean(), nullable=False, server_default="false"))
+    op.add_column('interviewsession', sa.Column('tab_switch_count', sa.Integer(), nullable=False, server_default="0"))
     op.add_column('interviewsession', sa.Column('tab_switch_timestamp', sa.DateTime(), nullable=True))
-    op.add_column('interviewsession', sa.Column('tab_warning_active', sa.Boolean(), nullable=False))
+    op.add_column('interviewsession', sa.Column('tab_warning_active', sa.Boolean(), nullable=False, server_default="false"))
     op.drop_constraint(op.f('interviewsession_paper_id_fkey'), 'interviewsession', type_='foreignkey')
     op.create_foreign_key(None, 'interviewsession', 'questionpaper', ['paper_id'], ['id'], ondelete='SET NULL')
     op.add_column('questionpaper', sa.Column('admin_user', sa.Integer(), nullable=True))

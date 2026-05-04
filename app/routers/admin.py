@@ -15,7 +15,8 @@ from ..services.status_manager import record_status_change
 from ..services.interview_access import evaluate_interview_access
 from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR, LINK_VALIDITY_MINUTES
 from ..core.logger import get_logger
-from ..utils import calculate_average_score, format_iso_datetime
+from ..utils import calculate_average_score, format_iso_datetime, calculate_total_score, calculate_total_marks
+from ..tasks.interview_tasks import send_result_email_util
 logger = get_logger(__name__)
 from ..services.admin_serialization import serialize_interview_admin_detail
 _serialize_interview_admin_detail = serialize_interview_admin_detail
@@ -1718,6 +1719,8 @@ async def get_result(
     
     proctoring = ProctoringEventRead(
         warning_count=s.warning_count or 0,
+        tab_switch_count=s.tab_switch_count or 0,
+        gaze_away_count=s.gaze_away_count or 0,
         max_warnings=s.max_warnings or 3,
         is_suspended=s.is_suspended or False,
         suspension_reason=s.suspension_reason,
@@ -1853,6 +1856,62 @@ async def update_result(
     updated_result = await get_result(interview_id, current_user, session)
     updated_result.message = "Result updated successfully"
     return updated_result
+
+@router.post("/results/{interview_id}/send-email", response_model=ApiResponse[dict])
+async def send_manual_result_email(
+    interview_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Manually send the result email to the candidate.
+    Only works if the results have been processed (PASS/FAIL).
+    """
+    interview_session = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.id == interview_id)
+        .options(
+            selectinload(InterviewSession.result),
+            selectinload(InterviewSession.paper),
+            selectinload(InterviewSession.coding_paper)
+        )
+    ).first()
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    if not interview_session.result:
+        raise HTTPException(status_code=400, detail="Results not yet generated for this session.")
+        
+    if interview_session.result.result_status not in ["PASS", "FAIL"]:
+         raise HTTPException(
+             status_code=400, 
+             detail=f"Results are still in '{interview_session.result.result_status}' state. Please wait for evaluation to finish."
+         )
+
+    # Prepare data for the utility
+    result_obj = interview_session.result
+    theory_answers = session.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+    coding_answers = session.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)).all()
+    
+    all_scores = [r.score for r in theory_answers if r.score is not None]
+    all_scores += [r.score for r in coding_answers if r.score is not None]
+    
+    computed_score = calculate_total_score(all_scores)
+    total_marks = calculate_total_marks(interview_session)
+    
+    # Trigger email
+    send_result_email_util(
+        db=session,
+        session=interview_session,
+        result_obj=result_obj,
+        computed_score=computed_score,
+        total_marks=total_marks,
+        theory_count=len(theory_answers),
+        coding_count=len(coding_answers)
+    )
+    
+    return ApiResponse(status_code=200, data={}, message="Result email sent successfully to the candidate.")
 
 @router.delete("/results/{interview_id}", response_model=ApiResponse[dict])
 async def delete_result(

@@ -73,6 +73,8 @@ class AdminPaperNested(BaseModel):
 class AdminProctoringEvent(BaseModel):
     id: Optional[int] = None
     warning_count: int = 0
+    tab_switch_count: int = 0
+    gaze_away_count: int = 0
     max_warnings: int = 3
     is_suspended: bool = False
     suspension_reason: Optional[str] = None
@@ -103,6 +105,8 @@ class InterviewSessionNested(BaseModel):
     current_status: Optional[str] = None
     last_activity: Optional[datetime] = None
     warning_count: int = 0
+    tab_switch_count: int = 0
+    gaze_away_count: int = 0
     max_warnings: int = 3
     is_suspended: bool = False
     suspension_reason: Optional[str] = None
