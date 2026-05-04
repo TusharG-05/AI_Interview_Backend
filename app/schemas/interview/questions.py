@@ -27,3 +27,7 @@ class CodingQuestionBasic(BaseModel):
 class AnswerRequest(BaseModel):
     question: str
     answer: str
+
+class QuestionStartRequest(BaseModel):
+    sessionId: int
+    questionId: int

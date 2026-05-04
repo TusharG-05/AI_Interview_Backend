@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, B
 from fastapi.responses import FileResponse, Response, RedirectResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole
+from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole, QuestionAttempt
 from ..schemas.interview.questions import AnswerRequest
 
 from ..services import interview as interview_service
@@ -13,7 +13,7 @@ from ..services.cloudinary_service import CloudinaryService
 from ..schemas.shared.api_response import ApiResponse
 from ..schemas.shared.user import UserNested, LoginUserNested
 from ..schemas.interview.access import AccessInterviewResponse as InterviewAccessResponse, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, QuestionWithAnswer, CodingQuestionWithAnswer, AnswerShort
-from ..schemas.interview.questions import NextQuestionResponse, CodingQuestionBasic
+from ..schemas.interview.questions import NextQuestionResponse, CodingQuestionBasic, QuestionStartRequest
 from ..schemas.interview.status import TabSwitchRequest, PingResponse, KeepAliveRequest
 
 from ..auth.dependencies import get_current_user
@@ -426,57 +426,49 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
 
     # 2. Per-Question Timer (if navigation disabled)
     if not session.allow_question_navigate:
-        # Count total questions for each paper
-        n_theory = len(session.paper.questions) if session.paper else 0
-        n_coding = len(session.coding_paper.questions) if session.coding_paper else 0
+        # Check if we have an active attempt for the current session state
+        recent_attempt = next(
+            (a for a in sorted(session.question_attempts, key=lambda x: x.start_time, reverse=True) if not a.is_completed),
+            None
+        )
         
-        if n_theory + n_coding > 0:
-            # Proportional Split: Coding = 4x Theory
-            # D = T_theory * (n_theory + 4 * n_coding)
-            t_theory_secs = duration_secs / (n_theory + (4 * n_coding))
-            t_coding_secs = 4 * t_theory_secs
+        if recent_attempt:
+            # Use explicit attempt data
+            q_start_t = recent_attempt.start_time
+            if q_start_t.tzinfo is None:
+                q_start_t = q_start_t.replace(tzinfo=timezone.utc)
             
-            # Find last submission time and current question type
-            n_theory_done = len(session.result.answers) if session.result else 0
-            n_coding_done = len(session.result.coding_answers) if session.result else 0
+            elapsed_on_q = (now - q_start_t).total_seconds()
+            curr_question_timer = max(0, int(recent_attempt.duration_seconds - elapsed_on_q))
+        else:
+            # Fallback to the original proportional logic
+            n_theory = len(session.paper.questions) if session.paper else 0
+            n_coding = len(session.coding_paper.questions) if session.coding_paper else 0
             
-            last_sub_time = None
-            current_q_type = "theory" # default
-            
-            # Collect all timestamps to find the latest
-            all_timestamps = []
-            if session.result:
-                all_timestamps.extend([a.timestamp for a in session.result.answers if a.timestamp])
-                all_timestamps.extend([ca.timestamp for ca in session.result.coding_answers if ca.timestamp])
-            
-            if all_timestamps:
-                # Latest submission
-                last_sub_time = max(all_timestamps)
-                if last_sub_time.tzinfo is None:
-                    last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+            if n_theory + n_coding > 0:
+                t_theory_secs = duration_secs / (n_theory + (4 * n_coding))
+                t_coding_secs = 4 * t_theory_secs
+                n_theory_done = len(session.result.answers) if session.result else 0
                 
-                # Determine next question type (Theory first, then Coding)
-                if n_theory_done < n_theory:
-                    current_q_type = "theory"
-                else:
-                    current_q_type = "coding"
-            else:
-                # No answers yet, use start_time
-                if session.start_time:
-                    last_sub_time = session.start_time
+                all_timestamps = []
+                if session.result:
+                    all_timestamps.extend([a.timestamp for a in session.result.answers if a.timestamp])
+                    all_timestamps.extend([ca.timestamp for ca in session.result.coding_answers if ca.timestamp])
+                
+                if all_timestamps:
+                    last_sub_time = max(all_timestamps)
                     if last_sub_time.tzinfo is None:
                         last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                    current_q_type = "theory" if n_theory_done < n_theory else "coding"
                 else:
-                    # Not started yet, use now as dummy for calculation (will result in full time)
-                    last_sub_time = now
-                
-                # First question type
-                current_q_type = "theory" if n_theory > 0 else "coding"
+                    last_sub_time = session.start_time or now
+                    if last_sub_time.tzinfo is None:
+                        last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                    current_q_type = "theory" if n_theory > 0 else "coding"
 
-            # Calculate remaining time for this question
-            q_duration_secs = t_theory_secs if current_q_type == "theory" else t_coding_secs
-            elapsed_on_q = (now - last_sub_time).total_seconds()
-            curr_question_timer = max(0, int(q_duration_secs - elapsed_on_q))
+                q_duration_secs = t_theory_secs if current_q_type == "theory" else t_coding_secs
+                elapsed_on_q = (now - last_sub_time).total_seconds()
+                curr_question_timer = max(0, int(q_duration_secs - elapsed_on_q))
 
     return InterviewAccessResponse(
         id=session.id,
@@ -508,6 +500,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         allow_proctoring=getattr(session, "allow_proctoring", True),
         curr_interview_timer=curr_interview_timer,
         curr_question_timer=curr_question_timer,
+        current_question_index=session.current_question_index or 0,
         proctoring_event=proctoring_event
     )
 
@@ -684,6 +677,7 @@ async def access_interview(
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
             selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers),
+            selectinload(InterviewSession.question_attempts),
         )
     ).first()
     
@@ -826,7 +820,7 @@ async def get_schedule_time(
         or access_decision.reason == "explicitly_expired"
         or access_decision.duration_expired
     ):
-        raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {session_obj.duration_minutes} mins).")
+        raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {session.duration_minutes} mins).")
 
     elif session.status == InterviewStatus.LIVE:
         display_message = "This interview is currently in progress (attempted)."
@@ -945,7 +939,7 @@ async def start_session_logic(
                 session_db.commit()
             raise HTTPException(
                 status_code=403,
-                detail=f"This interview link has expired. Interviews must be started within {session_obj.duration_minutes} minutes of the scheduled time.",
+                detail=f"This interview link has expired. Interviews must be started within {session.duration_minutes} minutes of the scheduled time.",
             )
 
         if access_decision.duration_expired:
@@ -1294,6 +1288,100 @@ async def upload_selfie_session(
             status_code=500,
             detail=f"Face verification processing failed: {str(e)}"
         )
+@router.post("/question/start", response_model=ApiResponse[dict])
+async def start_question_timer(
+    req: QuestionStartRequest,
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Sync or start a per-question timer.
+    Implements Case 2: Per-Question Timer.
+    """
+    session_obj = session_db.get(InterviewSession, req.sessionId)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    # Check if an attempt already exists
+    stmt = select(QuestionAttempt).where(
+        QuestionAttempt.session_id == req.sessionId,
+        QuestionAttempt.question_id == req.questionId
+    )
+    attempt = session_db.exec(stmt).first()
+    
+    # Identify question type and default duration
+    q_obj = session_db.get(Questions, req.questionId)
+    if not q_obj:
+        raise HTTPException(status_code=404, detail="Question not found")
+        
+    q_type = "theory"
+    duration = 300 # Default 5 mins
+    if q_obj.response_type == "code" or (q_obj.question_text and q_obj.question_text.startswith("__coding__")):
+        q_type = "coding"
+        duration = 1200 # Default 20 mins
+    
+    if not attempt:
+        attempt = QuestionAttempt(
+            session_id=req.sessionId,
+            question_id=req.questionId,
+            question_type=q_type,
+            start_time=datetime.now(timezone.utc),
+            duration_seconds=duration
+        )
+        session_db.add(attempt)
+        session_db.commit()
+        session_db.refresh(attempt)
+        
+    # Calculate remaining time
+    now = datetime.now(timezone.utc)
+    start_t = attempt.start_time
+    if start_t.tzinfo is None:
+        start_t = start_t.replace(tzinfo=timezone.utc)
+        
+    elapsed = (now - start_t).total_seconds()
+    time_remaining = max(0, int(attempt.duration_seconds - elapsed))
+    
+    return ApiResponse(
+        status_code=200,
+        data={
+            "questionId": req.questionId,
+            "questionType": q_type,
+            "timeRemaining": time_remaining,
+            "expired": time_remaining <= 0
+        },
+        message="Timer synchronized"
+    )
+
+@router.post("/question/next", response_model=ApiResponse[dict])
+async def move_to_next_question(
+    req: QuestionStartRequest,
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Mark current question as completed and increment index.
+    """
+    session_obj = session_db.get(InterviewSession, req.sessionId)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
+        
+    # Mark current attempt as completed if it exists
+    stmt = select(QuestionAttempt).where(
+        QuestionAttempt.session_id == req.sessionId,
+        QuestionAttempt.question_id == req.questionId
+    )
+    attempt = session_db.exec(stmt).first()
+    if attempt:
+        attempt.is_completed = True
+        session_db.add(attempt)
+        
+    # Increment the session index
+    session_obj.current_question_index += 1
+    session_db.add(session_obj)
+    session_db.commit()
+    
+    return ApiResponse(status_code=200, data={}, message="Moved to next question")
+
 
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
 async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):

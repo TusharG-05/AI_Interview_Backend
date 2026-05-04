@@ -199,6 +199,7 @@ class InterviewSession(SQLModel, table=True):
 
     # Candidate Status Tracking
     current_status: str = Field(default="")
+    current_question_index: int = Field(default=0)
     last_activity: datetime = Field(default_factory=datetime.utcnow)
 
     # Warning System
@@ -240,6 +241,7 @@ class InterviewSession(SQLModel, table=True):
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     selected_questions: List["SessionQuestion"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     status_timeline: List["StatusTimeline"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    question_attempts: List["QuestionAttempt"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
 class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
@@ -279,6 +281,21 @@ class StatusTimeline(SQLModel, table=True):
     context_data: str = Field(default="{}")  # Not null; default empty JSON
 
     session: InterviewSession = Relationship(back_populates="status_timeline")
+
+class QuestionAttempt(SQLModel, table=True):
+    """Tracks individual question timing for non-navigable interviews"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
+    )
+    question_id: Optional[int] = Field(default=None, foreign_key="questions.id")
+    coding_question_id: Optional[int] = Field(default=None, foreign_key="codingquestions.id")
+    question_type: str = Field(default="theory") # "theory" or "coding"
+    start_time: datetime = Field(default_factory=datetime.utcnow)
+    duration_seconds: int = Field(default=300)
+    is_completed: bool = Field(default=False)
+    
+    session: InterviewSession = Relationship(back_populates="question_attempts")
 
 class InterviewResult(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

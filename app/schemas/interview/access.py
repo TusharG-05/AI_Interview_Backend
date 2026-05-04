@@ -90,6 +90,7 @@ class AccessInterviewResponse(BaseModel):
     allow_proctoring: bool = True
     curr_interview_timer: Optional[int] = None
     curr_question_timer: Optional[int] = None
+    current_question_index: int = 0
     proctoring_event: Optional["ProctoringEvent"] = None
 
     class Config:
