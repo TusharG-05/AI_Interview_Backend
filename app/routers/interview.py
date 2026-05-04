@@ -27,6 +27,11 @@ from ..core.cache import cache_client
 from ..services.email import EmailService
 from ..schemas.auth.login import OtpRequest, OtpVerifyRequest
 from ..auth.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from ..services.interview_access import (
+    LINK_VALIDITY_MINUTES,
+    evaluate_interview_access,
+    has_started,
+)
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
@@ -50,8 +55,6 @@ from ..core.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
-
-LINK_VALIDITY_MINUTES = 30
 
 @router.post("/otp-send", response_model=ApiResponse[dict])
 async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_session)):
@@ -83,6 +86,23 @@ async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_sessi
             status_code=401, 
             detail="Invalid interview link. Please ensure you are using the correct link from your invitation."
         )
+
+    otp_access_decision = evaluate_interview_access(interview)
+    if not otp_access_decision.allowed:
+        if otp_access_decision.reason == "cancelled":
+            raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+        if otp_access_decision.reason == "completed":
+            raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        if otp_access_decision.entry_window_expired:
+            if interview.status != InterviewStatus.EXPIRED:
+                interview.status = InterviewStatus.EXPIRED
+                session.add(interview)
+                session.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+            )
+        raise HTTPException(status_code=403, detail="Interview link is not active.")
 
     # 3. Generate a secure 6-digit OTP
     otp = f"{random.randint(100000, 999999)}"
@@ -149,6 +169,37 @@ async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session:
     user = session.exec(select(User).where(User.email == verify_data.email.lower())).first()
     if not user:
          raise HTTPException(status_code=404, detail="User accounts out of sync. Please contact support.")
+
+    interview = session.exec(
+        select(InterviewSession).where(
+            InterviewSession.access_token == verify_data.access_token,
+            InterviewSession.candidate_id == user.id,
+        )
+    ).first()
+    if not interview:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid interview link. Please ensure you are using the correct link from your invitation.",
+        )
+
+    otp_verify_decision = evaluate_interview_access(interview)
+    if not otp_verify_decision.allowed:
+        if otp_verify_decision.reason == "cancelled":
+            raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+        if otp_verify_decision.reason == "completed":
+            raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        if otp_verify_decision.entry_window_expired or otp_verify_decision.reason == "explicitly_expired":
+            if interview.status != InterviewStatus.EXPIRED:
+                interview.status = InterviewStatus.EXPIRED
+                session.add(interview)
+                session.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+            )
+        if otp_verify_decision.duration_expired:
+            raise HTTPException(status_code=403, detail="This interview session has expired.")
+        raise HTTPException(status_code=403, detail="Interview link is not active.")
 
     # 3. Clean up OTP from cache
     await cache_client.delete(redis_key)
@@ -491,6 +542,21 @@ def _evaluate_and_update_score(
         # Do NOT re-raise — a failed evaluation must never block answer saving.
 
 
+def ensure_session_started(db: Session, session_obj: InterviewSession) -> None:
+    """
+    Promote a scheduled session to LIVE when candidate actively interacts with interview APIs.
+    This protects against frontend/network misses of the explicit start-session call.
+    """
+    if session_obj.status == InterviewStatus.SCHEDULED:
+        now = datetime.now(timezone.utc)
+        session_obj.status = InterviewStatus.LIVE
+        if session_obj.start_time is None:
+            session_obj.start_time = now
+        db.add(session_obj)
+        db.commit()
+        db.refresh(session_obj)
+
+
 from ..services.status_manager import add_violation
 
 class TTSRange(BaseModel):
@@ -538,22 +604,6 @@ async def access_interview(
         )
         
     now = datetime.now(timezone.utc)
-    schedule_time = session.schedule_time
-    if schedule_time.tzinfo is None:
-        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-
-    # 1. Determine Expiration based on status
-    if session.status == InterviewStatus.LIVE and session.start_time:
-        # For LIVE sessions, check against the full duration from start_time
-        start_t = session.start_time
-        if start_t.tzinfo is None:
-            start_t = start_t.replace(tzinfo=timezone.utc)
-        expiration_time = start_t + timedelta(minutes=session.duration_minutes)
-        expiry_message = "This interview session has expired."
-    else:
-        # For SCHEDULED or other statuses, link is only active for LINK_VALIDITY_MINUTES after schedule_time
-        expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
-        expiry_message = f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time."
 
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="Interview is cancelled")
@@ -561,14 +611,39 @@ async def access_interview(
     is_finished = session.is_completed or session.status == InterviewStatus.COMPLETED
     if is_finished:
         raise HTTPException(status_code=403, detail="This interview has already been completed.")
-    
-    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
-    if is_expired:
-        if session.status != InterviewStatus.EXPIRED and session.status != InterviewStatus.COMPLETED:
-            session.status = InterviewStatus.EXPIRED
+
+    access_decision = evaluate_interview_access(session, now=now)
+    if not access_decision.allowed:
+        if access_decision.entry_window_expired:
+            if session.status != InterviewStatus.EXPIRED:
+                session.status = InterviewStatus.EXPIRED
+                session_db.add(session)
+                session_db.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+            )
+
+        if access_decision.duration_expired:
+            raise HTTPException(status_code=403, detail="This interview session has expired.")
+
+        if access_decision.reason == "explicitly_expired" and has_started(session):
+            # Recover from stale EXPIRED state for an already-started session.
+            session.status = InterviewStatus.LIVE
             session_db.add(session)
             session_db.commit()
-        raise HTTPException(status_code=403, detail=expiry_message)
+            session_db.refresh(session)
+        elif access_decision.reason == "explicitly_expired":
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+            )
+        elif access_decision.reason == "cancelled":
+            raise HTTPException(status_code=403, detail="Interview is cancelled")
+        elif access_decision.reason == "completed":
+            raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        else:
+            raise HTTPException(status_code=403, detail="Interview link is not active.")
 
          
     enforce_tab_timeout(session_db, session)
@@ -587,6 +662,10 @@ async def access_interview(
         )
     
     return_msg = "Access Granted"
+    schedule_time = session.schedule_time
+    if schedule_time.tzinfo is None:
+        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+
     if now < schedule_time:
         return_msg = "Interview not yet started. Please wait."
     # Return detailed session state to satisfy frontend requirements
@@ -631,20 +710,12 @@ async def get_schedule_time(
             media_type="application/json"
         )
 
-    # 1. Setup Time and Message Logic
     now = datetime.now(timezone.utc)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    
-    # Expiry logic matching access_interview
-    if session.status == InterviewStatus.LIVE and session.start_time:
-        start_t = session.start_time
-        if start_t.tzinfo is None:
-            start_t = start_t.replace(tzinfo=timezone.utc)
-        expiration_time = start_t + timedelta(minutes=session.duration_minutes)
-    else:
-        expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
+
+    access_decision = evaluate_interview_access(session, now=now)
 
     # Determine display message
     display_message = "Interview schedule time retrieved successfully."
@@ -657,7 +728,11 @@ async def get_schedule_time(
             data=None,
             message="This interview has already been completed."
         )
-    elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
+    elif not access_decision.allowed and (
+        access_decision.entry_window_expired
+        or access_decision.reason == "explicitly_expired"
+        or access_decision.duration_expired
+    ):
         raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {LINK_VALIDITY_MINUTES} mins).")
 
     elif session.status == InterviewStatus.LIVE:
@@ -711,7 +786,11 @@ async def get_schedule_time(
             },
             message="This interview has already been completed."
         )
-    elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
+    elif not access_decision.allowed and (
+        access_decision.entry_window_expired
+        or access_decision.reason == "explicitly_expired"
+        or access_decision.duration_expired
+    ):
         return ApiResponse(
             status_code=200,
             data={
@@ -756,23 +835,30 @@ async def start_session_logic(
     
     from ..models.db_models import InterviewStatus
     
-    # 1. Consolidated Validation Check
     now = datetime.now(timezone.utc)
-    schedule_time = session.schedule_time
-    if schedule_time.tzinfo is None:
-        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    
-    # Start window check: Link active for LINK_VALIDITY_MINUTES for new starts
-    expiration_time = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
+    access_decision = evaluate_interview_access(session, now=now)
 
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="This interview has been cancelled.")
     
     if session.is_completed or session.status == InterviewStatus.COMPLETED:
         raise HTTPException(status_code=403, detail="This interview has already been completed.")
-        
-    if now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        raise HTTPException(status_code=403, detail=f"This interview link has expired. Interviews must be started within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.")
+
+    if not access_decision.allowed:
+        if access_decision.entry_window_expired or access_decision.reason == "explicitly_expired":
+            if session.status != InterviewStatus.EXPIRED:
+                session.status = InterviewStatus.EXPIRED
+                session_db.add(session)
+                session_db.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Interviews must be started within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+            )
+
+        if access_decision.duration_expired:
+            raise HTTPException(status_code=403, detail="This interview session has expired.")
+
+        raise HTTPException(status_code=403, detail="Interview link is not active.")
 
     
     # Check if suspended
@@ -1131,6 +1217,8 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             status_code=403,
             detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
+
+    ensure_session_started(session_db, session_obj)
     
     # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session_obj)
@@ -1419,6 +1507,8 @@ async def submit_answer_audio(
             status_code=403,
             detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
+
+    ensure_session_started(session_db, session_obj)
     
     # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session_obj)
@@ -1563,6 +1653,8 @@ async def submit_answer_code(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
+    ensure_session_started(session_db, session)
+
     # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)
     enforce_interview_duration(session_db, session)
@@ -1656,6 +1748,8 @@ async def submit_answer_text(
     """Submits a text answer, handles both standard and proxy-coding questions."""
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
+
+    ensure_session_started(session_db, session)
 
     # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)

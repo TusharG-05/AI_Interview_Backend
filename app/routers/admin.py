@@ -12,6 +12,7 @@ from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answe
 from ..auth.dependencies import get_current_user_optional, get_admin_user
 from ..auth.security import get_password_hash
 from ..services.status_manager import record_status_change
+from ..services.interview_access import evaluate_interview_access
 from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
@@ -2523,25 +2524,19 @@ async def expire_interviews_manually(
         raise HTTPException(status_code=403, detail="Unauthorized: invalid cron secret or admin token")
     
     from ..models.db_models import InterviewStatus
-    from datetime import timedelta
-    
     now = datetime.now(timezone.utc)
     expired_count = 0
     
-    # Find interviews that are scheduled/live and have expired
+    # Only SCHEDULED interviews can be expired by entry-window policy.
     candidate_sessions = session.exec(
         select(InterviewSession).where(
-            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+            InterviewSession.status == InterviewStatus.SCHEDULED
         )
     ).all()
     
     for interview_session in candidate_sessions:
-        schedule_time = interview_session.schedule_time
-        if schedule_time.tzinfo is None:
-            schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-        
-        expiration_time = schedule_time + timedelta(minutes=interview_session.duration_minutes)
-        if now > expiration_time:
+        access_decision = evaluate_interview_access(interview_session, now=now)
+        if access_decision.entry_window_expired:
             interview_session.status = InterviewStatus.EXPIRED
             session.add(interview_session)
             expired_count += 1

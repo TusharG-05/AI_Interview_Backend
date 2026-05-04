@@ -3,6 +3,7 @@ from ..services.audio import AudioService
 from ..services import interview as interview_service
 from ..models.db_models import InterviewSession, InterviewResult, Answers, Questions, CandidateStatus, User, CodingAnswers, CodingQuestions, InterviewStatus
 from ..services.email import EmailService
+from ..services.interview_access import evaluate_interview_access
 from ..core.database import engine
 from ..core.logger import get_logger
 from ..utils import format_iso_datetime, calculate_total_score, calculate_total_marks
@@ -214,7 +215,8 @@ def _expire_session(db: Session, session_obj: InterviewSession):
 @celery_app.task(name="app.tasks.interview_tasks.expire_interviews_task")
 def expire_interviews_task():
     """
-    Periodic task to mark SCHEDULED interviews as EXPIRED if now > schedule_time + duration.
+    Periodic task to mark SCHEDULED interviews as EXPIRED when the invite entry window elapsed
+    without access and without interview start.
     """
     db = Session(engine)
     try:
@@ -225,13 +227,8 @@ def expire_interviews_task():
         
         expired_count = 0
         for s in scheduled_sessions:
-            sched_time = s.schedule_time
-            if sched_time.tzinfo is None:
-                sched_time = sched_time.replace(tzinfo=timezone.utc)
-            
-            expiration_limit = sched_time + timedelta(minutes=s.duration_minutes)
-            
-            if now > expiration_limit:
+            access_decision = evaluate_interview_access(s, now=now)
+            if access_decision.entry_window_expired:
                 _expire_session(db, s)
                 expired_count += 1
         

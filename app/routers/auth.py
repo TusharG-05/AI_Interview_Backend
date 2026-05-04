@@ -18,8 +18,9 @@ from ..schemas.shared.user import serialize_user
 
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
-from ..models.db_models import User, UserRole, InterviewSession, Team
+from ..models.db_models import User, UserRole, InterviewSession, InterviewStatus, Team
 from ..services.email import EmailService
+from ..services.interview_access import LINK_VALIDITY_MINUTES, evaluate_interview_access
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
@@ -73,6 +74,25 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid interview link or candidate mismatch.",
             )
+
+        access_decision = evaluate_interview_access(interview)
+        if not access_decision.allowed:
+            if access_decision.reason == "cancelled":
+                raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+            if access_decision.reason == "completed":
+                raise HTTPException(status_code=403, detail="This interview has already been completed.")
+            if access_decision.entry_window_expired or access_decision.reason == "explicitly_expired":
+                if interview.status != InterviewStatus.EXPIRED:
+                    interview.status = InterviewStatus.EXPIRED
+                    session.add(interview)
+                    session.commit()
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"This interview link has expired. Candidates must join within {LINK_VALIDITY_MINUTES} minutes of the scheduled time.",
+                )
+            if access_decision.duration_expired:
+                raise HTTPException(status_code=403, detail="This interview session has expired.")
+            raise HTTPException(status_code=403, detail="Interview link is not active.")
 
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
