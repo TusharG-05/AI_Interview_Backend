@@ -255,13 +255,7 @@ def get_cloudinary_service():
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
 
-def _format_timer(seconds: float) -> str:
-    """Formats seconds into mm:ss string."""
-    if seconds < 0:
-        return "00:00"
-    minutes = int(seconds // 60)
-    secs = int(seconds % 60)
-    return f"{minutes:02d}:{secs:02d}"
+
 
 def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
     """Helper to serialize InterviewSession into InterviewAccessResponse."""
@@ -426,9 +420,9 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         if start_t.tzinfo is None:
             start_t = start_t.replace(tzinfo=timezone.utc)
         elapsed_secs = (now - start_t).total_seconds()
-        curr_interview_timer = _format_timer(duration_secs - elapsed_secs)
+        curr_interview_timer = max(0, int(duration_secs - elapsed_secs))
     else:
-        curr_interview_timer = _format_timer(duration_secs)
+        curr_interview_timer = int(duration_secs)
 
     # 2. Per-Question Timer (if navigation disabled)
     if not session.allow_question_navigate:
@@ -482,7 +476,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
             # Calculate remaining time for this question
             q_duration_secs = t_theory_secs if current_q_type == "theory" else t_coding_secs
             elapsed_on_q = (now - last_sub_time).total_seconds()
-            curr_question_timer = _format_timer(q_duration_secs - elapsed_on_q)
+            curr_question_timer = max(0, int(q_duration_secs - elapsed_on_q))
 
     return InterviewAccessResponse(
         id=session.id,
