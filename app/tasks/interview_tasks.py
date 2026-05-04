@@ -215,6 +215,8 @@ def _expire_session(db: Session, session_obj: InterviewSession):
         db.rollback()
 
 
+@celery_app.task(name="app.tasks.interview_tasks.expire_interviews_task")
+def expire_interviews_task():
     """
     Periodic task to mark interviews as EXPIRED (if entry window missed) or
     COMPLETED (if duration limit reached).
