@@ -255,6 +255,14 @@ def get_cloudinary_service():
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
 
+def _format_timer(seconds: float) -> str:
+    """Formats seconds into mm:ss string."""
+    if seconds < 0:
+        return "00:00"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes:02d}:{secs:02d}"
+
 def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
     """Helper to serialize InterviewSession into InterviewAccessResponse."""
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
@@ -407,6 +415,75 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     response_count = (len(session.result.answers) if session.result else 0) + (len(session.result.coding_answers) if session.result else 0)
     max_marks = (paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0)
 
+    # --- Timer Logic Implementation ---
+    curr_interview_timer = None
+    curr_question_timer = None
+    
+    # 1. Total Interview Timer (Remaining)
+    duration_secs = (session.duration_minutes or 60) * 60
+    if session.status == InterviewStatus.LIVE and session.start_time:
+        start_t = session.start_time
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
+        elapsed_secs = (now - start_t).total_seconds()
+        curr_interview_timer = _format_timer(duration_secs - elapsed_secs)
+    else:
+        curr_interview_timer = _format_timer(duration_secs)
+
+    # 2. Per-Question Timer (if navigation disabled)
+    if not session.allow_question_navigate:
+        # Count total questions for each paper
+        n_theory = len(session.paper.questions) if session.paper else 0
+        n_coding = len(session.coding_paper.questions) if session.coding_paper else 0
+        
+        if n_theory + n_coding > 0:
+            # Proportional Split: Coding = 4x Theory
+            # D = T_theory * (n_theory + 4 * n_coding)
+            t_theory_secs = duration_secs / (n_theory + (4 * n_coding))
+            t_coding_secs = 4 * t_theory_secs
+            
+            # Find last submission time and current question type
+            n_theory_done = len(session.result.answers) if session.result else 0
+            n_coding_done = len(session.result.coding_answers) if session.result else 0
+            
+            last_sub_time = None
+            current_q_type = "theory" # default
+            
+            # Collect all timestamps to find the latest
+            all_timestamps = []
+            if session.result:
+                all_timestamps.extend([a.timestamp for a in session.result.answers if a.timestamp])
+                all_timestamps.extend([ca.timestamp for ca in session.result.coding_answers if ca.timestamp])
+            
+            if all_timestamps:
+                # Latest submission
+                last_sub_time = max(all_timestamps)
+                if last_sub_time.tzinfo is None:
+                    last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                
+                # Determine next question type (Theory first, then Coding)
+                if n_theory_done < n_theory:
+                    current_q_type = "theory"
+                else:
+                    current_q_type = "coding"
+            else:
+                # No answers yet, use start_time
+                if session.start_time:
+                    last_sub_time = session.start_time
+                    if last_sub_time.tzinfo is None:
+                        last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                else:
+                    # Not started yet, use now as dummy for calculation (will result in full time)
+                    last_sub_time = now
+                
+                # First question type
+                current_q_type = "theory" if n_theory > 0 else "coding"
+
+            # Calculate remaining time for this question
+            q_duration_secs = t_theory_secs if current_q_type == "theory" else t_coding_secs
+            elapsed_on_q = (now - last_sub_time).total_seconds()
+            curr_question_timer = _format_timer(q_duration_secs - elapsed_on_q)
+
     return InterviewAccessResponse(
         id=session.id,
         access_token=session.access_token,
@@ -435,6 +512,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         tab_switch_count=session.tab_switch_count or 0,
         tab_warning_active=session.tab_warning_active or False,
         allow_proctoring=getattr(session, "allow_proctoring", True),
+        curr_interview_timer=curr_interview_timer,
+        curr_question_timer=curr_question_timer,
         proctoring_event=proctoring_event
     )
 
@@ -459,6 +538,26 @@ def _evaluate_and_update_score(
             logger.warning(
                 f"Answer {answer.id}: no text to evaluate, skipping LLM call."
             )
+            answer.score = 0.0
+            answer.feedback = "No answer provided or audio was silent."
+            db.add(answer)
+            db.flush()
+            
+            # Still update total score so the dashboard stays in sync
+            from ..utils import calculate_total_score
+            all_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+            from ..models.db_models import CodingAnswers
+            all_coding_answers = db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)).all()
+            
+            all_scores = [a.score for a in all_answers if a.score is not None]
+            all_scores.extend([ca.score for ca in all_coding_answers if ca.score is not None])
+            
+            new_total = calculate_total_score(all_scores)
+            result_obj.total_score = new_total
+            session_obj.total_score = new_total
+            db.add(result_obj)
+            db.add(session_obj)
+            db.commit()
             return
 
         text_to_evaluate = answer.candidate_answer or answer.transcribed_text
@@ -1611,13 +1710,37 @@ async def submit_answer_audio(
     if question:
         q_text = question.question_text or question.content or ""
 
-    _evaluate_and_update_score(
-        db=session_db,
-        answer=answer,
-        question_text=q_text,
-        session_obj=session_obj,
-        result_obj=result,
-    )
+    # Only evaluate if the frontend didn't already provide a score/feedback (from the separate Evaluate API)
+    if (answer.score == 0.0 or not answer.feedback) and not (score is not None and feedback is not None):
+        _evaluate_and_update_score(
+            db=session_db,
+            answer=answer,
+            question_text=q_text,
+            session_obj=session_obj,
+            result_obj=result,
+        )
+    else:
+        # If we skipped evaluation because data was provided, we still need to update the total result score
+        if session_obj and result:
+            from ..utils import calculate_total_score
+            from ..models.db_models import CodingAnswers
+            
+            all_answers = session_db.exec(select(Answers).where(Answers.interview_result_id == result.id)).all()
+            all_coding_answers = session_db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result.id)).all()
+            
+            all_scores = [a.score for a in all_answers if a.score is not None]
+            all_scores.extend([ca.score for ca in all_coding_answers if ca.score is not None])
+            
+            new_total = calculate_total_score(all_scores)
+            result.total_score = new_total
+            session_obj.total_score = new_total
+            
+            session_db.add(result)
+            session_db.add(session_obj)
+            session_db.commit()
+            
+            from ..services.status_manager import broadcast_interview_update
+            broadcast_interview_update(session_db, session_obj, update_type="score_update")
 
     # Refresh to get latest score/feedback written by the helper
     try:
@@ -1695,10 +1818,28 @@ async def submit_answer_code(
     question = session_db.get(CodingQuestions, coding_question_id)
     if not question: raise HTTPException(status_code=404, detail="Coding question not found")
 
-    try:
-        _evaluate_and_update_score(session_db, answer, question.problem_statement or question.title or "", session, result)
-    except Exception as e:
-        logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
+    if (answer.score == 0.0 or not answer.feedback) and not (score is not None and feedback is not None):
+        try:
+            _evaluate_and_update_score(session_db, answer, question.problem_statement or question.title or "", session, result)
+        except Exception as e:
+            logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
+    else:
+        # Recompute total score if evaluation was skipped
+        from ..utils import calculate_total_score
+        from ..models.db_models import Answers as TheoryAnswers
+        all_theory = session_db.exec(select(TheoryAnswers).where(TheoryAnswers.interview_result_id == result.id)).all()
+        all_coding = session_db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result.id)).all()
+        all_scores = [a.score for a in all_theory if a.score is not None]
+        all_scores.extend([ca.score for ca in all_coding if ca.score is not None])
+        new_total = calculate_total_score(all_scores)
+        result.total_score = new_total
+        session.total_score = new_total
+        session_db.add(result)
+        session_db.add(session)
+        session_db.commit()
+        from ..services.status_manager import broadcast_interview_update
+        broadcast_interview_update(session_db, session, update_type="score_update")
+    
     session_db.refresh(answer)
 
     from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
@@ -1803,7 +1944,24 @@ async def submit_answer_text(
         session_db.commit()
         session_db.refresh(answer)
 
-        _evaluate_and_update_score(session_db, answer, coding_q.problem_statement or coding_q.title or "", session, result)
+        if (answer.score == 0.0 or not answer.feedback) and not (score is not None and feedback is not None):
+            _evaluate_and_update_score(session_db, answer, coding_q.problem_statement or coding_q.title or "", session, result)
+        else:
+            # Recompute running total_score (sum) — same logic as in _evaluate_and_update_score
+            from ..utils import calculate_total_score
+            from ..models.db_models import Answers as TheoryAnswers
+            all_theory = session_db.exec(select(TheoryAnswers).where(TheoryAnswers.interview_result_id == result.id)).all()
+            all_coding = session_db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result.id)).all()
+            all_scores = [a.score for a in all_theory if a.score is not None]
+            all_scores.extend([ca.score for ca in all_coding if ca.score is not None])
+            new_total = calculate_total_score(all_scores)
+            result.total_score = new_total
+            session.total_score = new_total
+            session_db.add(result)
+            session_db.add(session)
+            session_db.commit()
+            from ..services.status_manager import broadcast_interview_update
+            broadcast_interview_update(session_db, session, update_type="score_update")
         session_db.refresh(answer)
 
         from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer

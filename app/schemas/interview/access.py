@@ -88,6 +88,8 @@ class AccessInterviewResponse(BaseModel):
     tab_switch_count: int = 0
     tab_warning_active: bool = False
     allow_proctoring: bool = True
+    curr_interview_timer: Optional[str] = None
+    curr_question_timer: Optional[str] = None
     proctoring_event: Optional["ProctoringEvent"] = None
 
     class Config:
