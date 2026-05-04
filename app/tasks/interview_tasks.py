@@ -6,6 +6,8 @@ from ..services.email import EmailService
 from ..services.interview_access import evaluate_interview_access
 from ..core.database import engine
 from ..core.logger import get_logger
+from ..core.config import LINK_VALIDITY_MINUTES
+from ..services.status_manager import complete_interview_session
 from ..utils import format_iso_datetime, calculate_total_score, calculate_total_marks
 from sqlmodel import Session, select
 from datetime import datetime, timezone, timedelta
@@ -105,7 +107,8 @@ def _calculate_and_save_final_results(db: Session, session: InterviewSession, re
     total_marks = calculate_total_marks(session)
     percentage = (computed_score / total_marks * 100) if total_marks > 0 else 0.0
     
-    result_obj.result_status = "PASS" if percentage >= 70.0 else "FAIL"
+    if result_obj.result_status == "PENDING":
+        result_obj.result_status = "PASS" if percentage >= 70.0 else "FAIL"
     session.total_score = computed_score
     
     db.add(result_obj)
@@ -212,25 +215,39 @@ def _expire_session(db: Session, session_obj: InterviewSession):
         db.rollback()
 
 
-@celery_app.task(name="app.tasks.interview_tasks.expire_interviews_task")
-def expire_interviews_task():
     """
-    Periodic task to mark SCHEDULED interviews as EXPIRED when the invite entry window elapsed
-    without access and without interview start.
+    Periodic task to mark interviews as EXPIRED (if entry window missed) or
+    COMPLETED (if duration limit reached).
     """
     db = Session(engine)
     try:
         now = datetime.now(timezone.utc)
-        # Find all SCHEDULED interviews
-        stmt = select(InterviewSession).where(InterviewSession.status == InterviewStatus.SCHEDULED)
+        # Find all active interviews that still need expiry checks
+        stmt = select(InterviewSession).where(
+            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+        )
         scheduled_sessions = db.exec(stmt).all()
         
         expired_count = 0
         for s in scheduled_sessions:
             access_decision = evaluate_interview_access(s, now=now)
+            
             if access_decision.entry_window_expired:
+                # Entry window (30 mins) passed without starting
                 _expire_session(db, s)
                 expired_count += 1
+            
+            elif access_decision.duration_expired:
+                # Interview duration passed for a LIVE session
+                if s.status == InterviewStatus.LIVE:
+                    complete_interview_session(
+                        session=db,
+                        interview_session=s,
+                        reason="duration_timeout",
+                        current_status_label="Completed (Time Limit)",
+                    )
+                    process_session_results_task.delay(s.id)
+                    expired_count += 1
         
         if expired_count > 0:
             logger.info(f"Cron: Expired {expired_count} interview sessions.")

@@ -46,6 +46,10 @@
     </header>
 
     <div style="text-align: center; margin-bottom: 20px;">
+        <div>
+            <input type="text" id="backendUrl" placeholder="Backend URL (e.g., http://localhost:7427)" value="http://localhost:7427" style="padding: 10px; width: 350px; border: 1px solid #ccc; border-radius: 4px; margin-bottom: 8px;">
+            <small style="color: #888; display: block; margin-bottom: 10px;">Auto-detected from current page if empty</small>
+        </div>
         <input type="text" id="wsToken" placeholder="Enter Auth Token (Optional if cookie is set)" style="padding: 10px; width: 300px; border: 1px solid #ccc; border-radius: 4px;">
         <input type="number" id="interviewId" placeholder="Interview ID" value="0" style="padding: 10px; width: 120px; border: 1px solid #ccc; border-radius: 4px; margin-left: 10px;">
     </div>
@@ -79,11 +83,19 @@
     <div class="instructions">
         <h3>How to test:</h3>
         <ol>
-            <li>Get a valid Access Token (by logging in via Postman or Swagger UI: <a href="http://localhost:7427/docs" target="_blank">http://localhost:7427/docs</a>).</li>
-            <li>Paste your Token in the input box above.</li>
-            <li>Enter the target <strong>Interview ID</strong>.</li>
-            <li>Click <strong>Connect WebSocket</strong> — allow camera access.</li>
-            <li>Frames will be sent directly to <code>/api/video/stream/{id}</code> and responses stream back into the log.</li>
+            <li><strong>Option A (Test Mode - Easiest):</strong> Start backend with test mode enabled:
+                <pre style="background: #f5f5f5; padding: 8px; border-radius: 4px; font-size: 12px; overflow-x: auto;">ALLOW_UNAUTHENTICATED_WEBSOCKET=true uvicorn main:app --reload</pre>
+                Then just enter any Interview ID and click <strong>Connect WebSocket</strong> — no token required.
+            </li>
+            <li><strong>Option B (With Authentication):</strong>
+                <ol style="list-style-type: lower-alpha;">
+                    <li>Get a valid Access Token by logging in via Postman or Swagger UI: <a href="http://localhost:7427/docs" target="_blank">http://localhost:7427/docs</a></li>
+                    <li>Paste your Token in the input box above.</li>
+                    <li>Enter the target <strong>Interview ID</strong> (your own interview or admin access required).</li>
+                    <li>Click <strong>Connect WebSocket</strong> — allow camera access.</li>
+                    <li>Frames will be sent directly to <code>/api/video/stream/{id}</code> and responses stream back into the log.</li>
+                </ol>
+            </li>
         </ol>
     </div>
 
@@ -96,6 +108,7 @@
         const statusDot = document.getElementById('statusDot');
         const detectorEl = document.getElementById('detectorStatus');
         const logEl = document.getElementById('log');
+        const backendUrlInput = document.getElementById('backendUrl');
         const wsTokenInput = document.getElementById('wsToken');
         const interviewIdInput = document.getElementById('interviewId');
 
@@ -131,12 +144,19 @@
                 if (token.startsWith('Bearer ')) token = token.substring(7);
                 const iid = interviewIdInput.value || '0';
 
-                const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                let host = window.location.host;
-                if (!host || host === '') host = 'localhost:7427';
+                // Build WebSocket URL from backend URL input
+                let backendUrl = backendUrlInput.value.trim();
+                if (!backendUrl) {
+                    // Auto-detect from current page
+                    const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+                    backendUrl = `${proto}//${window.location.host}`;
+                }
+                // Convert http/https to ws/wss
+                const wsProto = backendUrl.startsWith('https') ? 'wss:' : 'ws:';
+                const baseUrl = backendUrl.replace(/^https?:\/\//, ''); // Remove protocol
                 
                 const query = token ? `?token=${encodeURIComponent(token)}` : '';
-                const wsUrl = `${proto}//${host}/api/video/stream/${iid}${query}`;
+                const wsUrl = `${wsProto}//${baseUrl}/api/video/stream/${iid}${query}`;
                 
                 log(`Connecting to ${wsUrl}`);
                 ws = new WebSocket(wsUrl);
@@ -149,7 +169,12 @@
                         if (ws && ws.readyState === WebSocket.OPEN) {
                             snapCanvas.getContext('2d').drawImage(localVideo, 0, 0, 640, 480);
                             snapCanvas.toBlob(blob => {
-                                ws.send(blob);
+                                // Guard: only send if blob is valid and has data
+                                if (blob && blob.size > 0) {
+                                    ws.send(blob);
+                                } else {
+                                    log("⚠️ Warning: Invalid blob or empty frame, skipping");
+                                }
                             }, 'image/jpeg', 0.85); // Compress to 85% quality JPEG
                         }
                     }, 200); // 5 FPS
@@ -185,12 +210,26 @@
                 };
 
                 ws.onclose = (e) => {
-                    log(`WebSocket Closed: Code=${e.code}, Reason=${e.reason}`);
+                    let closeMsg = `WebSocket Closed: Code=${e.code}`;
+                    // Interpret close codes for better debugging
+                    if (e.code === 1000) {
+                        closeMsg += " (Normal closure)";
+                    } else if (e.code === 1001) {
+                        closeMsg += " (Going away)";
+                    } else if (e.code === 1002) {
+                        closeMsg += " (Protocol error)";
+                    } else if (e.code === 1008) {
+                        closeMsg += " (Policy violation - likely auth issue)";
+                    } else if (e.code === 1011) {
+                        closeMsg += " (Server error)";
+                    }
+                    if (e.reason) closeMsg += `, Reason: ${e.reason}`;
+                    log(closeMsg);
                     stop();
                 };
 
                 ws.onerror = (e) => {
-                    log("WebSocket Error encountered.");
+                    log("❌ WebSocket Error encountered. Check backend URL, token validity, and interview ID.");
                 };
                 
                 startButton.disabled = true;

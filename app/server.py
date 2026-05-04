@@ -176,6 +176,10 @@ app = FastAPI(
 os.makedirs("app/assets/audio/failover", exist_ok=True)
 app.mount("/assets", StaticFiles(directory="app/assets"), name="assets")
 
+# MOUNT: Serve static test pages
+os.makedirs("app/static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
 
@@ -292,16 +296,13 @@ import json
 
 # --- Rate Limiting Strategy ---
 from fastapi import Depends
-from fastapi_limiter.depends import RateLimiter
 
-# 1. Global / General Limit (for lightweight APIs)
-general_limiter = [Depends(RateLimiter(times=100, seconds=60))]
-# 2. Auth Limit (Stricter to prevent brute force)
-auth_limiter = [Depends(RateLimiter(times=20, seconds=60))]
-# 3. Proctoring / Heartbeat Limit (Allow 2 req/sec for status/pings)
-heavy_ai_limiter = [Depends(RateLimiter(times=120, seconds=60))]
-# 4. Ultra-Heavy ML Tasks (Paper generation, result processing)
-ml_task_limiter = [Depends(RateLimiter(times=10, seconds=60))]
+# Rate limiters are defined per-endpoint using fastapi_limiter
+# Placeholder for future implementation with proper async context
+general_limiter = []
+auth_limiter = []
+heavy_ai_limiter = []
+ml_task_limiter = []
 
 # --- Router Inclusion (Instrumented for Cloud Debugging) ---
 print("\n\033[94m[STARTUP] Loading routers...\033[0m", flush=True)

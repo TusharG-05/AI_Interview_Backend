@@ -13,7 +13,7 @@ from ..auth.dependencies import get_current_user_optional, get_admin_user
 from ..auth.security import get_password_hash
 from ..services.status_manager import record_status_change
 from ..services.interview_access import evaluate_interview_access
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR, LINK_VALIDITY_MINUTES
 from ..core.logger import get_logger
 from ..utils import calculate_average_score, format_iso_datetime
 logger = get_logger(__name__)
@@ -2524,30 +2524,44 @@ async def expire_interviews_manually(
         raise HTTPException(status_code=403, detail="Unauthorized: invalid cron secret or admin token")
     
     from ..models.db_models import InterviewStatus
+    from ..services.status_manager import complete_interview_session
+    from .interview import process_session_results_task
     now = datetime.now(timezone.utc)
     expired_count = 0
     
-    # Only SCHEDULED interviews can be expired by entry-window policy.
+    # Find all active interviews that still need expiry checks
     candidate_sessions = session.exec(
         select(InterviewSession).where(
-            InterviewSession.status == InterviewStatus.SCHEDULED
+            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
         )
     ).all()
     
     for interview_session in candidate_sessions:
         access_decision = evaluate_interview_access(interview_session, now=now)
+        
         if access_decision.entry_window_expired:
             interview_session.status = InterviewStatus.EXPIRED
+            interview_session.current_status = "Link Expired"
             session.add(interview_session)
             expired_count += 1
+        
+        elif access_decision.duration_expired:
+            if interview_session.status == InterviewStatus.LIVE:
+                complete_interview_session(
+                    session=session,
+                    interview_session=interview_session,
+                    reason="duration_timeout",
+                    current_status_label="Completed (Time Limit)",
+                )
+                process_session_results_task.delay(interview_session.id)
+                expired_count += 1
     
-    if expired_count > 0:
-        session.commit()
+    session.commit()
     
     return ApiResponse(
         status_code=200,
         data={"expired_count": expired_count},
-        message=f"Expiration check completed. {expired_count} interviews marked as expired."
+        message=f"Expiration check completed. {expired_count} interviews updated."
     )
 
 # --- Candidate Status Tracking ---

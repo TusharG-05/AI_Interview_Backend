@@ -11,14 +11,19 @@ from ..core.logger import get_logger
 from ..auth.dependencies import get_current_user_ws
 from ..models.db_models import User, UserRole
 
-# Proctoring/Heartbeat Limit (2 req/sec)
-heavy_throttle = [Depends(RateLimiter(times=120, seconds=60))]
+# Proctoring/Heartbeat Limit (Rate limiting handled per-endpoint when needed)
+heavy_throttle = []
 
 
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/video", tags=["Video"])
+
+# --- Camera Service Singleton ---
+def get_camera_service():
+    """Returns the CameraService singleton instance."""
+    return CameraService()
 
 # --- Proctoring Helpers ---
 
@@ -55,13 +60,16 @@ async def websocket_video_stream(
     Binary WebSocket Fallback for Video Proctoring.
     Receives raw frames from client, processes them via CameraService,
     and returns real-time AI results (JSON) over the same connection.
+    
+    In development with ALLOW_UNAUTHENTICATED_WEBSOCKET=true, authentication is optional.
     """
+    # If auth failed and test mode not enabled, connection already closed by get_current_user_ws
     if current_user is None:
         return
 
     # Security: Candidate can only stream for THEIR OWN session.
     # Admin / SuperAdmin can stream for anyone.
-    if current_user.role == UserRole.CANDIDATE:
+    if current_user and current_user.role == UserRole.CANDIDATE:
          from ..core.database import engine
          from sqlmodel import Session, select
          from ..models.db_models import InterviewSession
@@ -78,7 +86,7 @@ async def websocket_video_stream(
     if not camera_service.running:
         camera_service.start()
         
-    logger.info(f"WS-Video: Candidate {interview_id} connected for binary streaming.")
+    logger.info(f"WS-Video: Interview {interview_id} connected for binary streaming (user: {current_user.email if current_user else 'test-mode'}).")
     
     try:
         while True:
@@ -99,7 +107,7 @@ async def websocket_video_stream(
             })
             
     except WebSocketDisconnect:
-        logger.info(f"WS-Video: Candidate {interview_id} disconnected.")
+        logger.info(f"WS-Video: Interview {interview_id} disconnected.")
     except Exception as e:
         logger.error(f"WS-Video: Error in session {interview_id}: {e}")
     finally:

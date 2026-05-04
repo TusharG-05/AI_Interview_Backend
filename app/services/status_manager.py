@@ -17,6 +17,7 @@ from ..models.db_models import (
     StatusTimeline, 
     ProctoringEvent,
     CandidateStatus,
+    InterviewStatus,
     Answers,
     InterviewResult
 )
@@ -227,6 +228,50 @@ def add_violation(
         logger.error(f"WS Broadcast Fail: {e}")
     
     return event
+
+
+def complete_interview_session(
+    session: Session,
+    interview_session: InterviewSession,
+    *,
+    reason: str = "duration_timeout",
+    current_status_label: str = "Completed",
+) -> InterviewResult:
+    """Mark an interview session as completed and preserve a terminal result state."""
+    interview_session.end_time = datetime.now(timezone.utc)
+    interview_session.is_completed = True
+    interview_session.status = InterviewStatus.COMPLETED
+    interview_session.current_status = current_status_label
+
+    record_status_change(
+        session=session,
+        interview_session=interview_session,
+        new_status=CandidateStatus.INTERVIEW_COMPLETED,
+        metadata={"reason": reason, "auto_completed": True},
+    )
+
+    result_obj = interview_session.result
+    if result_obj is None:
+        result_obj = InterviewResult(interview_id=interview_session.id, result_status="COMPLETED")
+        interview_session.result = result_obj
+        session.add(result_obj)
+    elif result_obj.result_status == "PENDING":
+        result_obj.result_status = "COMPLETED"
+
+    session.add(interview_session)
+    session.add(result_obj)
+    session.commit()
+    session.refresh(interview_session)
+    session.refresh(result_obj)
+
+    try:
+        from ..services.camera import CameraService
+
+        CameraService().clear_session(interview_session.id)
+    except Exception as e:
+        logger.warning(f"Failed to clear proctoring cache for session {interview_session.id}: {e}")
+
+    return result_obj
 
 
 def check_and_suspend(

@@ -93,9 +93,20 @@ async def get_current_user_ws(
     token: Optional[str] = Query(None),
     session: Session = Depends(get_session)
 ) -> User:
-    """Validate current user for WebSocket connections."""
+    """
+    Validate current user for WebSocket connections.
+    
+    In test mode (ALLOW_UNAUTHENTICATED_WEBSOCKET=true), allows anonymous access.
+    Otherwise, requires valid JWT token.
+    """
+    from ..core.config import ALLOW_UNAUTHENTICATED_WEBSOCKET
+    
     if not token:
         token = websocket.cookies.get("access_token")
+        
+    # Test mode: Allow unauthenticated access
+    if ALLOW_UNAUTHENTICATED_WEBSOCKET and not token:
+        return None
         
     if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Token missing")

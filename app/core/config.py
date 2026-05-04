@@ -90,6 +90,10 @@ if not SECRET_KEY:
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+LINK_VALIDITY_MINUTES = 30
+
+# Test Mode: Allow unauthenticated WebSocket access in development (for testing test_gaze.html)
+ALLOW_UNAUTHENTICATED_WEBSOCKET = ENV == "development" and os.getenv("ALLOW_UNAUTHENTICATED_WEBSOCKET", "false").lower() == "true"
 
 # Email Configuration
 MAIL_USERNAME = os.getenv("MAIL_USERNAME", "tushar@chicmicstudios.in")
@@ -98,7 +102,7 @@ BREVO_SENDER_EMAIL = os.getenv("BREVO_SENDER_EMAIL", os.getenv("MAIL_FROM_EMAIL"
 MAIL_FROM_NAME = os.getenv("MAIL_FROM_NAME", "AI Interview Platform")
 BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_PORT = int(os.getenv("SMTP_PORT") or "587")
 SMTP_STARTTLS = os.getenv("SMTP_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true" or SMTP_PORT == 465
 
