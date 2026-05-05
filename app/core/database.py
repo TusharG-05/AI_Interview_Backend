@@ -1,6 +1,7 @@
 from sqlmodel import SQLModel, create_engine, Session
 from typing import Generator
 from .config import DATABASE_URL
+from sqlalchemy.orm import sessionmaker
 
 # Configure connection args based on database type
 engine_args = {}
@@ -12,6 +13,9 @@ elif "postgresql" in DATABASE_URL:
     engine_args = {"pool_pre_ping": True}
 
 engine = create_engine(DATABASE_URL, connect_args=connect_args, **engine_args)
+
+# Provide a SessionLocal factory for tests and convenience
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, class_=Session)
 
 def init_db():
     from ..models.db_models import (

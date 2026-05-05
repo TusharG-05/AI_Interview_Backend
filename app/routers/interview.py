@@ -770,9 +770,9 @@ class RemainingTimeResponse(BaseModel):
     is_expired: bool
 
 
-@router.get("/session/{session_id}", response_model=ApiResponse[RemainingTimeResponse])
+@router.get("/session/{interview_id}", response_model=ApiResponse[RemainingTimeResponse])
 async def get_remaining_time(
-    session_id: str,
+    interview_id: int,
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -787,14 +787,7 @@ async def get_remaining_time(
     - User has access to this session (candidate or admin)
     - Interview is active (not expired/completed/cancelled)
     """
-    try:
-        session_uuid = uuid.UUID(session_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid session ID format")
-
-    session = session_db.exec(
-        select(InterviewSession).where(InterviewSession.id == session_uuid)
-    ).first()
+    session = session_db.get(InterviewSession, interview_id)
     
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

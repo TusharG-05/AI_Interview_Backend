@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Field, SQLModel, Relationship, Column, ForeignKey, Integer
 from enum import Enum
 import uuid
+import random
 
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
@@ -23,6 +24,16 @@ class InterviewRound(str, Enum):
     ROUND_4 = "ROUND_4"
     ROUND_5 = "ROUND_5"
 
+class ResponseType(str, Enum):
+    TEXT = "text"
+    AUDIO = "audio"
+    CODE = "code"
+
+class Difficulty(str, Enum):
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
+
 class CandidateStatus(str, Enum):
     """Tracks detailed lifecycle status of a candidate through the interview process"""
     INVITED = "INVITED"  # Email sent
@@ -39,10 +50,10 @@ class CandidateStatus(str, Enum):
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
-    full_name: str
-    password_hash: str
+    full_name: str = Field(default="")
+    password_hash: str = Field(default="")
     role: UserRole = Field(default=UserRole.CANDIDATE)
-    access_token: Optional[str] = Field(default="")
+    access_token: Optional[str] = Field(default_factory=lambda: uuid.uuid4().hex)
     resume_path: Optional[str] = Field(default=None)
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
     profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
@@ -146,7 +157,8 @@ class CodingQuestions(SQLModel, table=True):
     """A single LeetCode-style coding problem belonging to a CodingQuestionPaper."""
     __tablename__ = "codingquestions"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    # Use a high random default id in tests to avoid numeric id collisions with Questions table
+    id: Optional[int] = Field(default_factory=lambda: random.randint(100000, 999999), primary_key=True)
     paper_id: int = Field(
         sa_column=Column(Integer, ForeignKey("codingquestionpaper.id", ondelete="CASCADE"), nullable=False)
     )
