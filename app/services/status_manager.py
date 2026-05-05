@@ -6,6 +6,7 @@ This service handles:
 - Warning accumulation and auto-suspension
 - Violation categorization (soft vs hard)
 - Status timeline recording
+- WebSocket event broadcasting to candidates and admin dashboards
 """
 
 from typing import Optional, Dict, Any, List
@@ -24,8 +25,171 @@ from ..models.db_models import (
 import json
 from ..schemas.shared.user import serialize_user
 from ..core.logger import get_logger
+import asyncio
 
 logger = get_logger(__name__)
+
+# ========== ASYNC WEBSOCKET HELPERS ==========
+
+async def _broadcast_violation_event(interview_id: int, event_type: str, details: Optional[str] = None, tab_switch_count: Optional[int] = None):
+    """
+    Broadcast a violation event to both candidate and admin dashboard WebSockets.
+    
+    For candidates: Sends ViolationEvent immediately
+    For admin: Sends ViolationEvent with metadata
+    """
+    try:
+        from .websocket_manager import manager
+        from ..schemas.websocket.events import ViolationEvent
+        
+        # Map event_type to violation_type expected by ViolationEvent
+        violation_type_map = {
+            "tab_switch": "tab_switch",
+            "MULTIPLE FACES DETECTED": "multiple_faces",
+            "NO FACE DETECTED": "no_face",
+            "SECURITY ALERT: UNAUTHORIZED PERSON": "wrong_candidate",
+        }
+        
+        violation_type = violation_type_map.get(event_type, event_type.lower())
+        
+        # Create violation event
+        violation_event = ViolationEvent(
+            violation_type=violation_type,
+            interview_id=interview_id,
+            timestamp=datetime.now(timezone.utc),
+            details=details
+        )
+        
+        # Broadcast to candidate
+        await manager.broadcast_to_candidate(
+            interview_id,
+            violation_event.model_dump(mode='json')
+        )
+        
+        # Broadcast to admin dashboard
+        await manager.broadcast_to_admin_dashboard(
+            interview_id,
+            violation_event.model_dump(mode='json')
+        )
+        
+        logger.debug(f"Violation event broadcast: {event_type} for interview {interview_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast violation event: {e}")
+
+
+async def _broadcast_interview_suspended_event(interview_id: int, violation_type: str, tab_switch_count: int):
+    """
+    Broadcast interview suspension event to admin dashboard.
+    Sent when violation threshold is exceeded.
+    """
+    try:
+        from .websocket_manager import manager
+        from ..schemas.websocket.events import AdminDashboardEvent
+        
+        # Create suspension event
+        suspension_event = AdminDashboardEvent(
+            event_type="interview_suspended",
+            interview_id=interview_id,
+            data={
+                "interview_procetering_event": violation_type,
+                "tab_switch_count": tab_switch_count
+            }
+        )
+        
+        # Broadcast to admin dashboard only
+        await manager.broadcast_to_admin_dashboard(
+            interview_id,
+            suspension_event.model_dump(mode='json')
+        )
+        
+        logger.info(f"Interview suspension event broadcast for interview {interview_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast interview suspended event: {e}")
+
+
+async def _broadcast_interview_started_event(interview_id: int):
+    """Broadcast interview started event to admin dashboard."""
+    try:
+        from .websocket_manager import manager
+        from ..schemas.websocket.events import AdminDashboardEvent
+        
+        event = AdminDashboardEvent(
+            event_type="interview_started",
+            interview_id=interview_id,
+            data={}
+        )
+        
+        await manager.broadcast_to_admin_dashboard(
+            interview_id,
+            event.model_dump(mode='json')
+        )
+        
+        logger.debug(f"Interview started event broadcast for interview {interview_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast interview started event: {e}")
+
+
+async def _broadcast_interview_completed_event(interview_id: int, result_status: str):
+    """Broadcast interview completed event to admin dashboard."""
+    try:
+        from .websocket_manager import manager
+        from ..schemas.websocket.events import AdminDashboardEvent
+        
+        event = AdminDashboardEvent(
+            event_type="interview_completed",
+            interview_id=interview_id,
+            data={
+                "result_status": result_status
+            }
+        )
+        
+        await manager.broadcast_to_admin_dashboard(
+            interview_id,
+            event.model_dump(mode='json')
+        )
+        
+        logger.debug(f"Interview completed event broadcast for interview {interview_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast interview completed event: {e}")
+
+
+async def _broadcast_interview_expired_event(interview_id: int):
+    """Broadcast interview expired event to admin dashboard."""
+    try:
+        from .websocket_manager import manager
+        from ..schemas.websocket.events import AdminDashboardEvent
+        
+        event = AdminDashboardEvent(
+            event_type="interview_expired",
+            interview_id=interview_id,
+            data={}
+        )
+        
+        await manager.broadcast_to_admin_dashboard(
+            interview_id,
+            event.model_dump(mode='json')
+        )
+        
+        logger.debug(f"Interview expired event broadcast for interview {interview_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed to broadcast interview expired event: {e}")
+
+
+def _fire_async_broadcast(coro):
+    """Fire and forget async broadcast (non-blocking)."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        else:
+            asyncio.run(coro)
+    except Exception as e:
+        logger.error(f"Failed to fire async broadcast: {e}")
 
 # Violation severity mapping
 VIOLATION_SEVERITY = {
@@ -52,6 +216,7 @@ def record_status_change(
 ) -> StatusTimeline:
     """
     Record a status change in the timeline and update session's current status.
+    Broadcasts appropriate admin dashboard events for major status transitions.
     
     Args:
         session: Database session
@@ -84,27 +249,18 @@ def record_status_change(
         f"{new_status.value} | Metadata: {metadata}"
     )
     
-    # Broadcast to Admin Dashboard
-    from .websocket_manager import manager
-    import asyncio
-    
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                manager.broadcast_to_admins({
-                    "type": "status_change",
-                    "interview_id": interview_session.id,
-                    "data": {
-                        "status": new_status.value,
-                        "metadata": metadata,
-                        "timestamp": timeline_entry.timestamp.isoformat()
-                    }
-                }), 
-                loop
-            )
-    except Exception as e:
-        logger.error(f"WS Broadcast Fail: {e}")
+    # Broadcast to Admin Dashboard for major status changes
+    if new_status == CandidateStatus.INTERVIEW_COMPLETED:
+        result_status = "Pass" if interview_session.result and interview_session.result.result_status == "PASS" else "Fail"
+        _fire_async_broadcast(
+            _broadcast_interview_completed_event(interview_session.id, result_status)
+        )
+    elif new_status == CandidateStatus.INTERVIEW_EXPIRED:
+        _fire_async_broadcast(
+            _broadcast_interview_expired_event(interview_session.id)
+        )
+    # Note: SUSPENDED events are broadcast in add_violation with more context
+    # START/LIVE transition should be handled by interview start logic
     
     return timeline_entry
 
@@ -118,6 +274,7 @@ def add_violation(
 ) -> ProctoringEvent:
     """
     Add a proctoring violation and potentially trigger warnings/suspension.
+    Broadcasts violation events to both candidate and admin dashboard.
     
     Args:
         session: Database session
@@ -203,29 +360,25 @@ def add_violation(
     session.commit()
     session.refresh(event)
     
-    # Broadcast to Admin Dashboard
-    from .websocket_manager import manager
-    import asyncio
+    # Broadcast violation event to candidate and admin
+    _fire_async_broadcast(
+        _broadcast_violation_event(
+            interview_session.id,
+            event_type,
+            details,
+            tab_switch_count=interview_session.warning_count if event_type == "tab_switch" else None
+        )
+    )
     
-    # Fire and forget (don't block the main thread)
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                manager.broadcast_to_admins({
-                    "type": "violation",
-                    "interview_id": interview_session.id,
-                    "data": {
-                        "type": event_type,
-                        "severity": severity,
-                        "details": details,
-                        "timestamp": event.timestamp.isoformat()
-                    }
-                }), 
-                loop
+    # If suspension occurred due to warnings, also broadcast the suspension event
+    if interview_session.is_suspended and event.triggered_warning and severity == "warning":
+        _fire_async_broadcast(
+            _broadcast_interview_suspended_event(
+                interview_session.id,
+                event_type,
+                interview_session.warning_count
             )
-    except Exception as e:
-        logger.error(f"WS Broadcast Fail: {e}")
+        )
     
     return event
 
