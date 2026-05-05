@@ -889,6 +889,28 @@ async def schedule_interview(
     except (AttributeError, TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid schedule_time format. ISO 8601 expected.")
 
+    # Compute duration based on question counts when frontend doesn't provide it.
+    # Defaults per-question: theory=5 minutes, coding=20 minutes.
+    def _compute_duration_minutes(paper_obj, coding_paper_obj, max_qs: int | None):
+        n_theory = len(paper_obj.questions) if paper_obj and getattr(paper_obj, 'questions', None) else 0
+        n_coding = len(coding_paper_obj.questions) if coding_paper_obj and getattr(coding_paper_obj, 'questions', None) else 0
+        total_qs = n_theory + n_coding
+        if total_qs == 0:
+            return schedule_data.duration_minutes or 60
+
+        # Base duration in minutes
+        base_minutes = n_theory * 5 + n_coding * 20
+
+        # If admin requested a smaller max_questions, scale proportionally
+        if max_qs and max_qs > 0 and max_qs < total_qs:
+            scale = max_qs / total_qs
+            computed = max(1, int(round(base_minutes * scale)))
+            return computed
+
+        return base_minutes if base_minutes > 0 else (schedule_data.duration_minutes or 60)
+
+    computed_duration = _compute_duration_minutes(paper, coding_paper, schedule_data.max_questions)
+
     new_session = InterviewSession(
         admin_id=current_user.id,
         candidate_id=schedule_data.candidate_id,
@@ -896,7 +918,7 @@ async def schedule_interview(
         coding_paper_id=schedule_data.coding_paper_id,
         interview_round=schedule_data.interview_round,
         schedule_time=schedule_dt,
-        duration_minutes=schedule_data.duration_minutes or 1440,
+        duration_minutes=computed_duration,
         max_questions=schedule_data.max_questions or 0,
         status=InterviewStatus.SCHEDULED,
         current_status=CandidateStatus.INVITED,
@@ -971,13 +993,34 @@ async def schedule_interview(
     link = f"{FRONTEND_URL}/interview-access?token={new_session.access_token}"
     # Send Email Invitation Asynchronously (prevent UI hang without Redis)
     try:
+        # Convert schedule_time to India Standard Time for email clarity
+        from datetime import timezone
+        try:
+            from zoneinfo import ZoneInfo
+            ist = ZoneInfo("Asia/Kolkata")
+        except Exception:
+            ist = None
+
+        sched = new_session.schedule_time
+        if sched is not None:
+            if sched.tzinfo is None:
+                sched = sched.replace(tzinfo=timezone.utc)
+            if ist:
+                sched_ist = sched.astimezone(ist)
+                time_str = sched_ist.strftime("%Y-%m-%d %H:%M:%S %Z")
+            else:
+                # Fallback: show ISO but note UTC
+                time_str = sched.isoformat()
+        else:
+            time_str = ""
+
         background_tasks.add_task(
             get_email_service().send_interview_invitation,
-            to_email=candidate_email, 
+            to_email=candidate_email,
             candidate_name=candidate_full_name,
             link=link,
-            time_str=format_iso_datetime(new_session.schedule_time),
-            duration_minutes=new_session.duration_minutes
+            time_str=time_str,
+            duration_minutes=new_session.duration_minutes,
         )
     except Exception as cel_e:
         logger.error(f"Failed to queue email task: {cel_e}")
@@ -1341,6 +1384,35 @@ async def update_interview(
                 sort_order=idx
             )
             session.add(session_question)
+
+    # Recompute duration_minutes when paper/coding_paper/max_questions change
+    # Use updated values if provided in the request, else fall back to existing session values
+    recompute_needed = any(k in update_dict for k in ("paper_id", "coding_paper_id", "max_questions"))
+    if recompute_needed:
+        new_paper_id = update_dict.get("paper_id", interview_session.paper_id)
+        new_coding_paper_id = update_dict.get("coding_paper_id", interview_session.coding_paper_id)
+        new_max = update_dict.get("max_questions", interview_session.max_questions)
+
+        paper_obj = session.get(QuestionPaper, new_paper_id) if new_paper_id else None
+        coding_paper_obj = session.get(CodingQuestionPaper, new_coding_paper_id) if new_coding_paper_id else None
+
+        n_theory = len(paper_obj.questions) if paper_obj and getattr(paper_obj, 'questions', None) else 0
+        n_coding = len(coding_paper_obj.questions) if coding_paper_obj and getattr(coding_paper_obj, 'questions', None) else 0
+        total_qs = n_theory + n_coding
+
+        if total_qs == 0:
+            # If no questions are present, preserve explicit duration if provided, else keep existing or default to 60
+            computed_duration = update_dict.get("duration_minutes", interview_session.duration_minutes or 60)
+        else:
+            base_minutes = n_theory * 5 + n_coding * 20
+            if new_max and new_max > 0 and new_max < total_qs:
+                scale = new_max / total_qs
+                computed_duration = max(1, int(round(base_minutes * scale)))
+            else:
+                computed_duration = base_minutes if base_minutes > 0 else (update_dict.get("duration_minutes") or interview_session.duration_minutes or 60)
+
+        # Ensure updated value is applied
+        update_dict["duration_minutes"] = computed_duration
     
     # Update the session
     for key, value in update_dict.items():
@@ -1723,7 +1795,6 @@ async def get_result(
     proctoring = ProctoringEventRead(
         warning_count=s.warning_count or 0,
         tab_switch_count=s.tab_switch_count or 0,
-        gaze_away_count=s.gaze_away_count or 0,
         max_warnings=s.max_warnings or 3,
         is_suspended=s.is_suspended or False,
         suspension_reason=s.suspension_reason,

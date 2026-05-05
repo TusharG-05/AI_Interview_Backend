@@ -137,6 +137,24 @@ def send_result_email_util(db: Session, session: InterviewSession, result_obj: I
             logger.warning(f"No email for candidate {session.candidate_id}, skipping result email.")
             return
 
+        # Format scheduled time in India Standard Time for candidate-facing emails
+        try:
+            from zoneinfo import ZoneInfo
+            ist = ZoneInfo("Asia/Kolkata")
+        except Exception:
+            ist = None
+
+        sched = session.schedule_time
+        if sched is not None:
+            if sched.tzinfo is None:
+                sched = sched.replace(tzinfo=timezone.utc)
+            if ist:
+                scheduled_time_str = sched.astimezone(ist).strftime("%Y-%m-%d %H:%M:%S %Z")
+            else:
+                scheduled_time_str = format_iso_datetime(sched)
+        else:
+            scheduled_time_str = ""
+
         report_data = {
             "candidate_name": candidate_name,
             "date_str": format_iso_datetime(datetime.now(timezone.utc)),
@@ -148,7 +166,7 @@ def send_result_email_util(db: Session, session: InterviewSession, result_obj: I
             "coding_count": coding_count,
             "admin_name": admin_name,
             "round_name": session.interview_round or "General Interview",
-            "scheduled_time": format_iso_datetime(session.schedule_time),
+            "scheduled_time": scheduled_time_str,
             "start_time": format_iso_datetime(session.start_time) if session.start_time else "N/A",
             "duration_mins": str(session.duration_minutes),
             "proctoring_warnings": f"{session.tab_switch_count}/{session.max_warnings}" if session.max_warnings else "0"

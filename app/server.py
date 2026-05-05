@@ -234,7 +234,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             status_code=exc.status_code,
             message=message,
             data=data
-        ).model_dump()
+        ).model_dump() | {"detail": message}
     )
 
 @app.exception_handler(Exception)
