@@ -1720,7 +1720,6 @@ async def get_result(
     proctoring = ProctoringEventRead(
         warning_count=s.warning_count or 0,
         tab_switch_count=s.tab_switch_count or 0,
-        gaze_away_count=s.gaze_away_count or 0,
         max_warnings=s.max_warnings or 3,
         is_suspended=s.is_suspended or False,
         suspension_reason=s.suspension_reason,

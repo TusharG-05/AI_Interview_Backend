@@ -293,7 +293,10 @@ class QuestionAttempt(SQLModel, table=True):
     question_type: str = Field(default="theory") # "theory" or "coding"
     start_time: datetime = Field(default_factory=datetime.utcnow)
     duration_seconds: int = Field(default=300)
+    status: str = Field(default="active")  # active | submitted | expired
     is_completed: bool = Field(default=False)
+    submitted_at: Optional[datetime] = None
+    expired_at: Optional[datetime] = None
     
     session: InterviewSession = Relationship(back_populates="question_attempts")
 

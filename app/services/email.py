@@ -206,12 +206,13 @@ class EmailService:
 
         body_text = "\n".join(body_lines)
 
-        sent = self._send_smtp_email(to_email, subject, body_text)
-        if not sent:
-            logger.error(f"Result email delivery failed for {to_email}")
+        # Prefer SMTP but fall back to Brevo HTTP API if SMTP fails.
+        success, detail = self._send_email_with_fallbacks(to_email, subject, body_text)
+        if not success:
+            logger.error(f"Result email delivery failed for {to_email}: {detail}")
             return False
 
-        logger.info(f"Result email sent to {to_email}")
+        logger.info(f"Result email sent to {to_email}: {detail}")
         return True
 
     def send_otp_email(self, to_email: str, otp: str):
