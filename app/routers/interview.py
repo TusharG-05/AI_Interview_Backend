@@ -968,6 +968,10 @@ async def start_session_logic(
         session.status = InterviewStatus.LIVE
         session.start_time = datetime.now(timezone.utc)
         
+        # Broadcast interview started event to admin dashboard
+        from ..services.status_manager import _fire_async_broadcast, _broadcast_interview_started_event
+        _fire_async_broadcast(_broadcast_interview_started_event(interview_id))
+        
     # Always mark as active once the session is started
     if session.current_status not in [CandidateStatus.INTERVIEW_ACTIVE, CandidateStatus.INTERVIEW_COMPLETED]:
         record_status_change(

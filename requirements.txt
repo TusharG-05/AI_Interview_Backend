@@ -48,6 +48,7 @@ tenacity==9.1.2
 watchfiles==1.1.1
 pyyaml
 pytest==9.0.2
+pytest-asyncio==0.24.0
 celery==5.4.0
 redis==5.2.0
 
