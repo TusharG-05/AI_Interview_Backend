@@ -29,6 +29,10 @@ import asyncio
 
 logger = get_logger(__name__)
 
+# Database engine for ad-hoc queries
+from ..core.database import engine
+from datetime import date, timedelta
+
 # ========== ASYNC WEBSOCKET HELPERS ==========
 
 async def _broadcast_violation_event(interview_id: int, event_type: str, details: Optional[str] = None, tab_switch_count: Optional[int] = None):
@@ -66,11 +70,31 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
             violation_event.model_dump(mode='json')
         )
         
-        # Broadcast to admin dashboard
+        # Broadcast to admin dashboard (include dashboard metrics)
+        try:
+            dashboard = compute_dashboard_metrics()
+        except Exception:
+            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+        admin_payload = {
+            "event_type": "violation_detected",
+            "interview_id": interview_id,
+            "data": {
+                "violation_type": violation_event.violation_type,
+                "details": violation_event.details,
+                "timestamp": violation_event.timestamp.isoformat(),
+                "dashboard_data": dashboard
+            }
+        }
+
+        # Broadcast to per-interview admin dashboards
         await manager.broadcast_to_admin_dashboard(
             interview_id,
-            violation_event.model_dump(mode='json')
+            admin_payload
         )
+        
+        # Broadcast to global admin dashboards
+        await manager.broadcast_to_admins(admin_payload)
         
         logger.debug(f"Violation event broadcast: {event_type} for interview {interview_id}")
         
@@ -87,21 +111,36 @@ async def _broadcast_interview_suspended_event(interview_id: int, violation_type
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        # Create suspension event
-        suspension_event = AdminDashboardEvent(
-            event_type="interview_suspended",
-            interview_id=interview_id,
-            data={
-                "interview_procetering_event": violation_type,
-                "tab_switch_count": tab_switch_count
+        # Create suspension event payload and include dashboard metrics
+        try:
+            dashboard = compute_dashboard_metrics()
+        except Exception:
+            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+        suspension_payload = {
+            "event_type": "interview_suspended",
+            "interview_id": interview_id,
+            "data": {
+                "reason": "max_warnings_exceeded",
+                "warning_count": tab_switch_count,
+                "max_warnings": tab_switch_count,
+                "last_violation": violation_type,
+                "suspension_metadata": {
+                    "auto_suspended": True,
+                    "suspended_at": datetime.now(timezone.utc).isoformat()
+                },
+                "dashboard_data": dashboard
             }
-        )
-        
-        # Broadcast to admin dashboard only
+        }
+
+        # Broadcast to per-interview admin dashboards
         await manager.broadcast_to_admin_dashboard(
             interview_id,
-            suspension_event.model_dump(mode='json')
+            suspension_payload
         )
+        
+        # Broadcast to global admin dashboards
+        await manager.broadcast_to_admins(suspension_payload)
         
         logger.info(f"Interview suspension event broadcast for interview {interview_id}")
         
@@ -115,16 +154,29 @@ async def _broadcast_interview_started_event(interview_id: int):
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        event = AdminDashboardEvent(
-            event_type="interview_started",
-            interview_id=interview_id,
-            data={}
-        )
-        
+        try:
+            dashboard = compute_dashboard_metrics()
+        except Exception:
+            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+        payload = {
+            "event_type": "interview_started",
+            "interview_id": interview_id,
+            "data": {
+                "status": "LIVE",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "dashboard_data": dashboard
+            }
+        }
+
+        # Broadcast to per-interview admin dashboards
         await manager.broadcast_to_admin_dashboard(
             interview_id,
-            event.model_dump(mode='json')
+            payload
         )
+        
+        # Broadcast to global admin dashboards
+        await manager.broadcast_to_admins(payload)
         
         logger.debug(f"Interview started event broadcast for interview {interview_id}")
         
@@ -138,18 +190,29 @@ async def _broadcast_interview_completed_event(interview_id: int, result_status:
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        event = AdminDashboardEvent(
-            event_type="interview_completed",
-            interview_id=interview_id,
-            data={
-                "result_status": result_status
+        try:
+            dashboard = compute_dashboard_metrics()
+        except Exception:
+            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+        payload = {
+            "event_type": "interview_completed",
+            "interview_id": interview_id,
+            "data": {
+                "result_status": result_status,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "dashboard_data": dashboard
             }
-        )
-        
+        }
+
+        # Broadcast to per-interview admin dashboards
         await manager.broadcast_to_admin_dashboard(
             interview_id,
-            event.model_dump(mode='json')
+            payload
         )
+        
+        # Broadcast to global admin dashboards
+        await manager.broadcast_to_admins(payload)
         
         logger.debug(f"Interview completed event broadcast for interview {interview_id}")
         
@@ -163,16 +226,28 @@ async def _broadcast_interview_expired_event(interview_id: int):
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        event = AdminDashboardEvent(
-            event_type="interview_expired",
-            interview_id=interview_id,
-            data={}
-        )
-        
+        try:
+            dashboard = compute_dashboard_metrics()
+        except Exception:
+            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+        payload = {
+            "event_type": "interview_expired",
+            "interview_id": interview_id,
+            "data": {
+                "expired_at": datetime.now(timezone.utc).isoformat(),
+                "dashboard_data": dashboard
+            }
+        }
+
+        # Broadcast to per-interview admin dashboards
         await manager.broadcast_to_admin_dashboard(
             interview_id,
-            event.model_dump(mode='json')
+            payload
         )
+        
+        # Broadcast to global admin dashboards
+        await manager.broadcast_to_admins(payload)
         
         logger.debug(f"Interview expired event broadcast for interview {interview_id}")
         
@@ -255,11 +330,9 @@ def record_status_change(
         _fire_async_broadcast(
             _broadcast_interview_completed_event(interview_session.id, result_status)
         )
-    elif new_status == CandidateStatus.INTERVIEW_EXPIRED:
-        _fire_async_broadcast(
-            _broadcast_interview_expired_event(interview_session.id)
-        )
     # Note: SUSPENDED events are broadcast in add_violation with more context
+    # Note: INTERVIEW_EXPIRED is an InterviewStatus (session-level), not a CandidateStatus —
+    #       expired broadcast is handled separately in the expiry cron/router.
     # START/LIVE transition should be handled by interview start logic
     
     return timeline_entry
@@ -523,6 +596,89 @@ def _get_progress_data(interview_session: InterviewSession, result: Optional[Int
         "total_questions": total_questions,
         "current_question_id": current_question_id
     }
+
+
+def compute_dashboard_metrics(target_date: Optional[date] = None) -> Dict[str, Any]:
+    """
+    Compute aggregated dashboard metrics for admin payloads.
+
+    Returns:
+        { live: int,
+          proctoring_activity: str (percentage),
+          failed_today: int,
+          passed_today: int }
+    """
+    try:
+        from sqlmodel import Session, select
+        from sqlalchemy import distinct
+        from datetime import datetime, timezone
+
+        if target_date is None:
+            now = datetime.now(timezone.utc)
+            target_date = now.date()
+
+        start = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+        end = start + timedelta(days=1)
+
+        with Session(engine) as session:
+            # live count
+            live_sessions = session.exec(
+                select(InterviewSession).where(InterviewSession.status == InterviewStatus.LIVE)
+            ).all()
+            live_count = len(live_sessions)
+
+            # interviews started today (by start_time)
+            interviews_today = session.exec(
+                select(InterviewSession).where(
+                    InterviewSession.start_time >= start,
+                    InterviewSession.start_time < end
+                )
+            ).all()
+            interviews_today_count = len(interviews_today)
+
+            # distinct interviews with violations today
+            violation_rows = session.exec(
+                select(distinct(ProctoringEvent.interview_id)).where(
+                    ProctoringEvent.timestamp >= start,
+                    ProctoringEvent.timestamp < end
+                )
+            ).all()
+            violation_interview_ids = {r[0] if isinstance(r, tuple) else r for r in violation_rows}
+            violations_today_count = len(violation_interview_ids)
+
+            # results completed today
+            results_today = session.exec(
+                select(InterviewResult).where(
+                    InterviewResult.created_at >= start,
+                    InterviewResult.created_at < end
+                )
+            ).all()
+            passed = 0
+            failed = 0
+            for r in results_today:
+                status = (r.result_status or "").upper()
+                if status == "PASS":
+                    passed += 1
+                elif status == "FAIL":
+                    failed += 1
+
+            # proctoring activity percentage
+            if interviews_today_count > 0:
+                pct = (violations_today_count / float(interviews_today_count)) * 100.0
+            else:
+                pct = 0.0
+
+            proctoring_activity = f"{pct:.2f}%"
+
+            return {
+                "live": live_count,
+                "proctoring_activity": proctoring_activity,
+                "failed_today": failed,
+                "passed_today": passed,
+            }
+    except Exception as e:
+        logger.error(f"Failed to compute dashboard metrics: {e}")
+        return {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
 
 
 def get_status_summary(

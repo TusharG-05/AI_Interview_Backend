@@ -11,14 +11,18 @@ class WebSocketManager:
     Handles:
     1. Candidate WebSocket connections per interview
     2. Admin Dashboard connections per interview
+    3. Global Admin Dashboard connections (real-time metrics)
     """
     
     def __init__(self):
         # {interview_id: [WebSocket]} - Candidate connections
         self.candidate_connections: Dict[int, List[WebSocket]] = {}
         
-        # {interview_id: [WebSocket]} - Admin dashboard connections
+        # {interview_id: [WebSocket]} - Admin dashboard connections (per-interview)
         self.admin_dashboard_connections: Dict[int, List[WebSocket]] = {}
+        
+        # Global admin dashboard connections (all admins receive all events)
+        self.admin_connections: List[WebSocket] = []
 
     # ========== CANDIDATE WEBSOCKET ==========
     async def connect_candidate(self, websocket: WebSocket, interview_id: int):
@@ -97,6 +101,30 @@ class WebSocketManager:
         if interview_id in self.admin_dashboard_connections:
             return len(self.admin_dashboard_connections[interview_id])
         return 0
+
+    # ========== GLOBAL ADMIN DASHBOARD ==========
+    # For real-time monitoring across ALL interviews (not per-interview)
+    async def connect_admin(self, websocket: WebSocket):
+        """Register a global admin dashboard connection"""
+        # Already accepted in the endpoint before calling this
+        if websocket not in self.admin_connections:
+            self.admin_connections.append(websocket)
+        logger.info(f"WS: Admin Dashboard connected (Global) - Total: {len(self.admin_connections)}")
+
+    def disconnect_admin(self, websocket: WebSocket):
+        """Unregister a global admin dashboard connection"""
+        if websocket in self.admin_connections:
+            self.admin_connections.remove(websocket)
+        logger.info(f"WS: Admin Dashboard disconnected (Global) - Total: {len(self.admin_connections)}")
+
+    async def broadcast_to_admins(self, message: dict):
+        """Broadcast a message to ALL connected global admin dashboards"""
+        for connection in self.admin_connections[:]:
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"WS Error sending to admin: {e}")
+                self.disconnect_admin(connection)
 
 # Global Singleton
 manager = WebSocketManager()

@@ -135,6 +135,16 @@ class AdminDashboardResponse(BaseModel):
     interview_id: int
     data: Dict[str, Any]
 
+class DashboardData(BaseModel):
+    """Aggregated dashboard metrics included in admin websocket payloads."""
+    live: int
+    proctoring_activity: str  # percentage string, e.g. "12.34%"
+    failed_today: int
+    passed_today: int
+
+    class Config:
+        from_attributes = True
+
     class Config:
         from_attributes = True
 

@@ -326,7 +326,7 @@ if IS_ORCHESTRATOR:
     logger.info("Orchestrator Mode: ML services are disabled but routers are active.")
 
 # General Dashboard Websocket (Real-time monitoring)
-app.include_router(admin_ws.router, prefix="/api")
+app.include_router(admin_ws.router, prefix="/api/admin")
 
 # Event-driven Websocket: Candidate violations + Admin dashboard events
 app.include_router(websocket.router)
