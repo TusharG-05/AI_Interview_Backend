@@ -965,13 +965,34 @@ async def schedule_interview(
     link = f"{FRONTEND_URL}/interview-access?token={new_session.access_token}"
     # Send Email Invitation Asynchronously (prevent UI hang without Redis)
     try:
+        # Convert schedule_time to India Standard Time for email clarity
+        from datetime import timezone
+        try:
+            from zoneinfo import ZoneInfo
+            ist = ZoneInfo("Asia/Kolkata")
+        except Exception:
+            ist = None
+
+        sched = new_session.schedule_time
+        if sched is not None:
+            if sched.tzinfo is None:
+                sched = sched.replace(tzinfo=timezone.utc)
+            if ist:
+                sched_ist = sched.astimezone(ist)
+                time_str = sched_ist.strftime("%Y-%m-%d %H:%M:%S %Z")
+            else:
+                # Fallback: show ISO but note UTC
+                time_str = sched.isoformat()
+        else:
+            time_str = ""
+
         background_tasks.add_task(
             get_email_service().send_interview_invitation,
-            to_email=candidate_email, 
+            to_email=candidate_email,
             candidate_name=candidate_full_name,
             link=link,
-            time_str=format_iso_datetime(new_session.schedule_time),
-            duration_minutes=new_session.duration_minutes
+            time_str=time_str,
+            duration_minutes=new_session.duration_minutes,
         )
     except Exception as cel_e:
         logger.error(f"Failed to queue email task: {cel_e}")
