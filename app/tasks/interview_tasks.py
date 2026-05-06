@@ -270,7 +270,8 @@ def expire_interviews_task():
                         reason="duration_timeout",
                         current_status_label="Completed (Time Limit)",
                     )
-                    process_session_results_task.delay(s.id)
+                    from ..core.tasks import run_background_task
+                    run_background_task(process_session_results_task, s.id)
                     expired_count += 1
         
         if expired_count > 0:
