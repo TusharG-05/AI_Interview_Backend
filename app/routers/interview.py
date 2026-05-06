@@ -12,7 +12,7 @@ from ..services.audio import AudioService
 from ..services.cloudinary_service import CloudinaryService
 from ..schemas.shared.api_response import ApiResponse
 from ..schemas.shared.user import UserNested, LoginUserNested
-from ..schemas.interview.access import AccessInterviewResponse as InterviewAccessResponse, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, QuestionWithAnswer, CodingQuestionWithAnswer, AnswerShort
+from ..schemas.interview.access import AccessInterviewResponse as InterviewAccessResponse, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, QuestionWithAnswer, CodingQuestionWithAnswer, AnswerShort, StartSessionRequest
 from ..schemas.interview.questions import NextQuestionResponse, CodingQuestionBasic, QuestionStartRequest
 from ..schemas.interview.status import TabSwitchRequest, PingResponse, KeepAliveRequest
 
@@ -31,6 +31,8 @@ from ..services.interview_access import (
     LINK_VALIDITY_MINUTES,
     evaluate_interview_access,
     has_started,
+    get_timer_sync_data,
+    to_utc,
 )
 
 def set_auth_cookie(response: Response, token: str):
@@ -919,7 +921,7 @@ async def get_schedule_time(
 @router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])
 async def start_session_logic(
     interview_id: int,
-    enrollment_audio: UploadFile = File(None),
+    req: Optional[StartSessionRequest] = None,
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -965,13 +967,13 @@ async def start_session_logic(
             detail=f"Interview terminated: {session.suspension_reason}"
         )
     
-    # Track enrollment start
-    if enrollment_audio and session.current_status != CandidateStatus.ENROLLMENT_STARTED:
-        record_status_change(
-            session=session_db,
-            interview_session=session,
-            new_status=CandidateStatus.ENROLLMENT_STARTED
-        )
+    # Track enrollment start (Commented out as per request - no enrollment needed)
+    # if session.current_status != CandidateStatus.ENROLLMENT_STARTED:
+    #     record_status_change(
+    #         session=session_db,
+    #         interview_session=session,
+    #         new_status=CandidateStatus.ENROLLMENT_STARTED
+    #     )
     
     # Update Status
     if session.status == InterviewStatus.SCHEDULED:
@@ -991,71 +993,84 @@ async def start_session_logic(
         )
     
     warning = None
-    try:
-        if enrollment_audio:
-            audio_service = get_audio_service()
-            try:
-                content = await enrollment_audio.read()
+    # Voice enrollment is no longer required as per request
+    # #    try:
+    #     if enrollment_audio:
+    #         audio_service = get_audio_service()
+    #         try:
+    #             content = await enrollment_audio.read()
                 
-                # Upload to Cloudinary (Stateless)
-                cloudinary_url = audio_service.upload_audio_blob(content, folder="interview_enrollments")
-                if cloudinary_url:
-                    session.enrollment_audio_path = cloudinary_url
-                else:
-                    logger.error(f"Failed to upload enrollment audio for session {interview_id}")
-                    warning = "Enrollment audio could not be saved to cloud storage."
+    #             # Upload to Cloudinary (Stateless)
+    #             cloudinary_url = audio_service.upload_audio_blob(content, folder="interview_enrollments")
+    #             if cloudinary_url:
+    #                 session.enrollment_audio_path = cloudinary_url
+    #             else:
+    #                 logger.error(f"Failed to upload enrollment audio for session {interview_id}")
+    #                 warning = "Enrollment audio could not be saved to cloud storage."
                 
-                # Simple silence check (Using a temp file locally since energy calculation needs it)
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = tmp.name
+    #             # Simple silence check (Using a temp file locally since energy calculation needs it)
+    #             import tempfile
+    #             with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+    #                 tmp.write(content)
+    #                 tmp_path = tmp.name
                 
-                try:
-                    if audio_service.calculate_energy(tmp_path) < 50:
-                        logger.warning(f"Session {interview_id}: Enrollment audio too silent.")
-                finally:
-                    if os.path.exists(tmp_path): os.remove(tmp_path)
+    #             try:
+    #                 if audio_service.calculate_energy(tmp_path) < 50:
+    #                     logger.warning(f"Session {interview_id}: Enrollment audio too silent.")
+    #             finally:
+    #                 if os.path.exists(tmp_path): os.remove(tmp_path)
 
-            except Exception as e:
-                logger.error(f"Failed to process enrollment audio: {e}")
-                warning = "Failed to process enrollment audio."
+    #         except Exception as e:
+    #             logger.error(f"Failed to process enrollment audio: {e}")
+    #             warning = "Failed to process enrollment audio."
 
             
-            # Track enrollment completion
-            record_status_change(
-                session=session_db,
-                interview_session=session,
-                new_status=CandidateStatus.ENROLLMENT_COMPLETED
-            )
+    #         # Track enrollment completion
+    #         record_status_change(
+    #             session=session_db,
+    #             interview_session=session,
+    #             new_status=CandidateStatus.ENROLLMENT_COMPLETED
+    #         )
             
-        session_db.add(session)
-        session_db.commit()
-    except Exception as e:
-        session_db.rollback()
-        logger.error(f"Failed to start interview for session {session.id if 'session' in locals() else 'unknown'}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to start interview session. Please contact support.")
+    #     session_db.add(session)
+    #     session_db.commit()
+    # except Exception as e:
+    #     session_db.rollback()
+    #     logger.error(f"Failed to start interview for session {session.id if 'session' in locals() else 'unknown'}: {e}", exc_info=True)
+    #     raise HTTPException(status_code=500, detail="Failed to start interview session. Please contact support.")
         
-    # Calculate initial time remaining for the response
-    duration_secs = (session.duration_minutes or 60) * 60
-    time_remaining = duration_secs
-    if session.start_time:
-        start_t = session.start_time
-        if start_t.tzinfo is None:
-            start_t = start_t.replace(tzinfo=timezone.utc)
-        elapsed_secs = (datetime.now(timezone.utc) - start_t).total_seconds()
-        time_remaining = max(0, int(duration_secs - elapsed_secs))
+    # # Calculate initial time remaining for the response
+    # duration_secs = (session.duration_minutes or 60) * 60
+    # time_remaining = duration_secs
+    # if session.start_time:
+    #     start_t = session.start_time
+    #     if start_t.tzinfo is None:
+    #         start_t = start_t.replace(tzinfo=timezone.utc)
+    #     elapsed_secs = (datetime.now(timezone.utc) - start_t).total_seconds()
+    #     time_remaining = max(0, int(duration_secs - elapsed_secs))
+
+
+    session_db.add(session)
+    session_db.commit()
+
+    # Use centralized service for timer and state sync
+    question_id = req.question_id if req else None
+    coding_question_id = req.coding_question_id if req else None
+    sync_data = get_timer_sync_data(session_db, session, question_id, coding_question_id)
+    
+    # Merge with base response
+    response_data = {
+        "interview_id": session.id,
+        "status": session.status.value if hasattr(session.status, 'value') else str(session.status),
+        "warning": warning,
+        "allow_question_navigate": session.allow_question_navigate
+    }
+    response_data.update(sync_data)
 
     return ApiResponse(
         status_code=200,
-        data={
-            "interview_id": session.id, 
-            "status": "LIVE", 
-            "time_remaining": time_remaining,
-            "allow_question_navigate": session.allow_question_navigate,
-            "warning": warning
-        },
-        message="Interview session started successfully"
+        data=response_data,
+        message="Session synchronized successfully"
     )
 
 @router.post("/upload-selfie", response_model=ApiResponse[dict])
@@ -1318,134 +1333,6 @@ async def upload_selfie_session(
             status_code=500,
             detail=f"Face verification processing failed: {str(e)}"
         )
-@router.post("/question/start", response_model=ApiResponse[dict])
-async def start_question_timer(
-    req: QuestionStartRequest,
-    session_db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Unified Timer Endpoint.
-    - If allow_question_navigate is True: Returns global interview timer.
-    - If allow_question_navigate is False: Syncs/Starts per-question timer.
-    """
-    session_obj = session_db.get(InterviewSession, req.sessionId)
-    if not session_obj:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    # Authorization: Only candidate or admin can access
-    if session_obj.candidate_id != current_user.id and session_obj.admin_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this session")
-
-    # Strict Status Checks
-    if session_obj.status == InterviewStatus.CANCELLED:
-        raise HTTPException(status_code=403, detail="Interview is cancelled")
-    
-    if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:
-        raise HTTPException(status_code=403, detail="Interview is already completed")
-
-    if session_obj.is_suspended:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Interview suspended: {session_obj.suspension_reason or 'No reason provided'}"
-        )
-
-    now = datetime.now(timezone.utc)
-    
-    # CASE 1: GLOBAL TIMER MODE
-    if session_obj.allow_question_navigate:
-        duration_secs = (session_obj.duration_minutes or 60) * 60
-        time_remaining = int(duration_secs)
-        is_expired = False
-
-        if session_obj.status == InterviewStatus.LIVE and session_obj.start_time:
-            start_t = session_obj.start_time
-            if start_t.tzinfo is None:
-                start_t = start_t.replace(tzinfo=timezone.utc)
-            elapsed_secs = (now - start_t).total_seconds()
-            time_remaining = max(0, int(duration_secs - elapsed_secs))
-            is_expired = time_remaining <= 0
-        
-        return ApiResponse(
-            status_code=200,
-            data={
-                "mode": "global",
-                "time_remaining": time_remaining,
-                "is_expired": is_expired,
-                "status": session_obj.status,
-                "server_time": int(now.timestamp())
-            },
-            message="Global timer synchronized"
-        )
-
-    # CASE 2: PER-QUESTION TIMER MODE
-    if not req.questionId:
-        raise HTTPException(
-            status_code=400, 
-            detail="questionId is required for sequential (non-navigable) interviews."
-        )
-
-    # Check if an attempt already exists
-    stmt = select(QuestionAttempt).where(
-        QuestionAttempt.session_id == req.sessionId,
-        QuestionAttempt.question_id == req.questionId
-    )
-    attempt = session_db.exec(stmt).first()
-    
-    # Identify question type and default duration
-    q_obj = session_db.get(Questions, req.questionId)
-    if not q_obj:
-        raise HTTPException(status_code=404, detail="Question not found")
-        
-    q_type = "theory"
-    duration = 300 # Default 5 mins
-    if q_obj.response_type == "code" or (q_obj.question_text and q_obj.question_text.startswith("__coding__")):
-        q_type = "coding"
-        duration = 1200 # Default 20 mins
-    
-    if not attempt:
-        attempt = QuestionAttempt(
-            session_id=req.sessionId,
-            question_id=req.questionId,
-            question_type=q_type,
-            start_time=now,
-            duration_seconds=duration,
-            status="active"
-        )
-        session_db.add(attempt)
-        session_db.commit()
-        session_db.refresh(attempt)
-        
-    # Calculate remaining time
-    start_t = attempt.start_time
-    if start_t.tzinfo is None:
-        start_t = start_t.replace(tzinfo=timezone.utc)
-        
-    elapsed = (now - start_t).total_seconds()
-    time_remaining = max(0, int(attempt.duration_seconds - elapsed))
-    is_expired = time_remaining <= 0
-    
-    if is_expired and attempt.status == "active":
-        attempt.status = "expired"
-        attempt.expired_at = now
-        session_db.add(attempt)
-        session_db.commit()
-    
-    return ApiResponse(
-        status_code=200,
-        data={
-            "mode": "sequential",
-            "attempt_id": attempt.id,
-            "question_id": req.questionId,
-            "question_type": q_type,
-            "time_remaining": time_remaining,
-            "duration_seconds": duration,
-            "status": attempt.status,
-            "is_expired": is_expired,
-            "server_time": int(now.timestamp())
-        },
-        message="Sequential timer synchronized"
-    )
 
 @router.post("/question/next", response_model=ApiResponse[dict])
 async def move_to_next_question(
