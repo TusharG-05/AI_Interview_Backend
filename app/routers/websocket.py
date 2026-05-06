@@ -216,6 +216,22 @@ async def websocket_candidate_violations(
                             logger.warning(f"Finish interview: Session {interview_id} not found")
                     except Exception as e:
                         logger.error(f"Error processing finish_interview for interview {interview_id}: {e}", exc_info=True)
+
+                # Handle start interview event (Manual trigger from frontend)
+                elif isinstance(data, dict) and data.get("type") == "start_interview":
+                    try:
+                        from ..services.status_manager import _broadcast_interview_started_event
+                        # Trigger the broadcast that used to be in the REST API
+                        await _broadcast_interview_started_event(interview_id)
+                        logger.info(f"Interview {interview_id} start event triggered via WebSocket")
+                        
+                        # Return confirmation to candidate
+                        await websocket.send_json({
+                            "type": "start_interview_confirmation",
+                            "status": "success"
+                        })
+                    except Exception as e:
+                        logger.error(f"Error processing start_interview for interview {interview_id}: {e}", exc_info=True)
                 
             except WebSocketDisconnect:
                 # Re-raise to catch it in the outer block

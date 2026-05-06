@@ -54,26 +54,16 @@ class WebSocketManager:
         try:
             logger.info(f"DEBUG: Starting candidate_login broadcast for interview {interview_id}")
             # Lazy import to avoid circular dependency
-            from .status_manager import compute_dashboard_metrics
+            from .status_manager import get_enriched_admin_data
             
-            try:
-                start_time = datetime.now()
-                dashboard = compute_dashboard_metrics()
-                duration = (datetime.now() - start_time).total_seconds()
-                logger.info(f"DEBUG: Dashboard metrics computed in {duration}s")
-            except Exception as e:
-                logger.error(f"DEBUG: Error computing dashboard metrics: {e}")
-                dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+            # Create enriched payload
+            enriched_data = get_enriched_admin_data(interview_id)
 
             payload = {
                 "event_type": "candidate_logged_in",
-                "interview_id": interview_id,
                 "data": {
-                    "candidate_id": candidate_info.get("candidate_id"),
-                    "candidate_name": candidate_info.get("candidate_name"),
-                    "candidate_email": candidate_info.get("candidate_email"),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "dashboard_data": dashboard
+                    **enriched_data,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             }
 
@@ -92,19 +82,16 @@ class WebSocketManager:
         try:
             logger.info(f"DEBUG: Broadcasting candidate status '{event_type}' for interview {interview_id}")
             # Lazy import to avoid circular dependency
-            from .status_manager import compute_dashboard_metrics
+            from .status_manager import get_enriched_admin_data
             
-            try:
-                dashboard = compute_dashboard_metrics()
-            except Exception:
-                dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+            # Create enriched payload
+            enriched_data = get_enriched_admin_data(interview_id)
 
             payload = {
                 "event_type": event_type,
-                "interview_id": interview_id,
                 "data": {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "dashboard_data": dashboard
+                    **enriched_data,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
                 }
             }
 
