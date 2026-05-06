@@ -129,23 +129,26 @@ def get_timer_sync_data(
     
     # 2. SEQUENTIAL TIMER MODE (Per-question timing)
     else:
-        if not question_id and not coding_question_id:
-            # If no question_id provided in sequential mode, return global status/time as fallback
-            # but note that specific question sync cannot be performed.
+        # Normalize: Treat 0 as None (frontend might send 0 for "none")
+        q_id = question_id if (question_id and question_id > 0) else None
+        c_q_id = coding_question_id if (coding_question_id and coding_question_id > 0) else None
+
+        if not q_id and not c_q_id:
+            # If no valid ID provided in sequential mode, return global status/time as fallback
             duration_secs = (session_obj.duration_minutes or 60) * 60
             return {
                 "mode": "sequential",
                 "time_remaining": int(duration_secs),
                 "status": session_obj.status.value if hasattr(session_obj.status, 'value') else str(session_obj.status),
-                "message": "question_id_required_for_full_sync"
+                "message": "valid_question_id_required"
             }
 
         # Check if an attempt already exists for this specific question (theory or coding)
         stmt = select(QuestionAttempt).where(QuestionAttempt.session_id == session_obj.id)
-        if question_id:
-            stmt = stmt.where(QuestionAttempt.question_id == question_id)
-        elif coding_question_id:
-            stmt = stmt.where(QuestionAttempt.coding_question_id == coding_question_id)
+        if q_id:
+            stmt = stmt.where(QuestionAttempt.question_id == q_id)
+        else:
+            stmt = stmt.where(QuestionAttempt.coding_question_id == c_q_id)
             
         attempt = db.exec(stmt).first()
         
@@ -154,14 +157,14 @@ def get_timer_sync_data(
             q_type = "theory"
             duration = 300 # Default 5 mins
             
-            if coding_question_id:
-                q_obj = db.get(CodingQuestions, coding_question_id)
+            if c_q_id:
+                q_obj = db.get(CodingQuestions, c_q_id)
                 if not q_obj:
                     return {"error": "Coding question not found", "status_code": 404}
                 q_type = "coding"
                 duration = 1200 # Default 20 mins for coding
             else:
-                q_obj = db.get(Questions, question_id)
+                q_obj = db.get(Questions, q_id)
                 if not q_obj:
                     return {"error": "Theory question not found", "status_code": 404}
                 
@@ -171,8 +174,8 @@ def get_timer_sync_data(
             
             attempt = QuestionAttempt(
                 session_id=session_obj.id,
-                question_id=question_id,
-                coding_question_id=coding_question_id,
+                question_id=q_id,
+                coding_question_id=c_q_id,
                 question_type=q_type,
                 start_time=now,
                 duration_seconds=duration,
