@@ -102,6 +102,25 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Lifespan: Starting Application (API-Only Mode)...")
     
+    # --- Background Expiry Task (Cron-in-code) ---
+    async def periodic_expiry_check():
+        from .tasks.interview_tasks import expire_interviews_task
+        logger.info("Lifespan: Background expiry check loop started.")
+        while True:
+            try:
+                # We call the function directly. Since it's a celery task, 
+                # we call .delay() if we want it in celery, but here we want it in-process
+                # to satisfy "cron in code" without a separate beat worker.
+                # Actually, expire_interviews_task is a regular function decorated with @celery_app.task
+                # so calling it directly works fine.
+                expire_interviews_task()
+            except Exception as e:
+                logger.error(f"Lifespan: Error in background expiry check: {e}")
+            await asyncio.sleep(60)
+
+    import asyncio
+    app.state.expiry_task = asyncio.create_task(periodic_expiry_check())
+    
     # RATE LIMITING: Protect AI resources
     redis_conn = None
     try:

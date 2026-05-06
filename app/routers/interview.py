@@ -712,6 +712,16 @@ async def access_interview(
             )
 
         if access_decision.duration_expired:
+            if session.status == InterviewStatus.LIVE:
+                from ..services.status_manager import complete_interview_session
+                from ..tasks.interview_tasks import process_session_results_task
+                complete_interview_session(
+                    session=session_db,
+                    interview_session=session,
+                    reason="duration_timeout",
+                    current_status_label="Completed (Time Limit)",
+                )
+                process_session_results_task.delay(session.id)
             raise HTTPException(status_code=403, detail="This interview session has expired.")
 
         if access_decision.reason == "explicitly_expired" and has_started(session):
