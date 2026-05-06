@@ -2686,7 +2686,8 @@ async def expire_interviews_manually(
                     reason="duration_timeout",
                     current_status_label="Completed (Time Limit)",
                 )
-                process_session_results_task.delay(interview_session.id)
+                from ..core.tasks import run_background_task
+                run_background_task(process_session_results_task, interview_session.id)
                 expired_count += 1
     
     session.commit()

@@ -20,7 +20,9 @@ def run_background_task(task_func, *args, **kwargs):
         except Exception as e:
             logger.warning(f"Celery dispatch failed, falling back to synchronous execution: {e}")
     
-    # Fallback/Default: Run via BackgroundTasks (provided by the router)
-    # Note: The caller must have access to background_tasks: BackgroundTasks
-    logger.info(f"Task {task_func.__name__} will be handled via BackgroundTasks or Direct Call.")
-    return task_func(*args, **kwargs)
+    # Fallback: Run in a separate thread to avoid blocking the event loop (since AI tasks are heavy)
+    import threading
+    logger.info(f"Task {task_func.__name__} starting in background thread (Celery disabled)...")
+    thread = threading.Thread(target=task_func, args=args, kwargs=kwargs, daemon=True)
+    thread.start()
+    return None

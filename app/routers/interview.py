@@ -712,6 +712,17 @@ async def access_interview(
             )
 
         if access_decision.duration_expired:
+            if session.status == InterviewStatus.LIVE:
+                from ..services.status_manager import complete_interview_session
+                from ..core.tasks import run_background_task
+                from ..tasks.interview_tasks import process_session_results_task
+                complete_interview_session(
+                    session=session_db,
+                    interview_session=session,
+                    reason="duration_timeout",
+                    current_status_label="Completed (Time Limit)",
+                )
+                run_background_task(process_session_results_task, session.id)
             raise HTTPException(status_code=403, detail="This interview session has expired.")
 
         if access_decision.reason == "explicitly_expired" and has_started(session):
@@ -760,85 +771,6 @@ async def access_interview(
         status_code=200,
         data=_serialize_interview_access_detail(session),
         message=return_msg
-    )
-
-
-class RemainingTimeResponse(BaseModel):
-    """Lightweight response for Case 1: Global Timer sync"""
-    timeRemaining: int
-    status: str
-    is_expired: bool
-
-
-@router.get("/session/{interview_id}", response_model=ApiResponse[RemainingTimeResponse])
-async def get_remaining_time(
-    interview_id: int,
-    session_db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Case 1 lightweight endpoint: Returns only remaining time.
-    
-    Called periodically (every 10s) to sync timer without serializing full session.
-    Minimal overhead compared to /access/{token}.
-    
-    Validates:
-    - Session exists
-    - User has access to this session (candidate or admin)
-    - Interview is active (not expired/completed/cancelled)
-    """
-    session = session_db.get(InterviewSession, interview_id)
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Authorization: Only candidate or admin of this session can access
-    is_candidate = session.candidate_id == current_user.id
-    is_admin = session.admin_id == current_user.id
-    
-    if not (is_candidate or is_admin):
-        raise HTTPException(status_code=403, detail="Not authorized to access this session")
-
-    # Check session status
-    now = datetime.now(timezone.utc)
-    
-    if session.status == InterviewStatus.CANCELLED:
-        raise HTTPException(status_code=403, detail="Interview is cancelled")
-    
-    if session.status == InterviewStatus.COMPLETED or session.is_completed:
-        raise HTTPException(status_code=403, detail="Interview is already completed")
-
-    if session.is_suspended:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Interview suspended: {session.suspension_reason or 'No reason provided'}"
-        )
-
-    # Calculate remaining time
-    is_expired = False
-    duration_secs = (session.duration_minutes or 60) * 60
-    
-    if session.status == InterviewStatus.LIVE and session.start_time:
-        start_t = session.start_time
-        if start_t.tzinfo is None:
-            start_t = start_t.replace(tzinfo=timezone.utc)
-        elapsed_secs = (now - start_t).total_seconds()
-        time_remaining = max(0, int(duration_secs - elapsed_secs))
-        
-        if time_remaining <= 0:
-            is_expired = True
-    else:
-        # Interview not yet started
-        time_remaining = int(duration_secs)
-
-    return ApiResponse(
-        status_code=200,
-        data=RemainingTimeResponse(
-            timeRemaining=time_remaining,
-            status=session.status.value if hasattr(session.status, 'value') else str(session.status),
-            is_expired=is_expired
-        ),
-        message="Time remaining retrieved successfully"
     )
 
 
@@ -1377,23 +1309,53 @@ async def start_question_timer(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Sync or start a per-question timer.
-    Implements Case 2: Per-Question Timer.
-    
-    Returns: attempt_id, question_id, type, remaining time, duration, status, and expiry flag.
-    On refresh: Returns existing attempt with updated remaining time (no reset).
+    Unified Timer Endpoint.
+    - If allow_question_navigate is True: Returns global interview timer.
+    - If allow_question_navigate is False: Syncs/Starts per-question timer.
     """
     session_obj = session_db.get(InterviewSession, req.sessionId)
     if not session_obj:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Validate: Interview must allow no navigation (Case 2)
+    # Authorization: Only candidate or admin can access
+    if session_obj.candidate_id != current_user.id and session_obj.admin_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this session")
+
+    now = datetime.now(timezone.utc)
+    
+    # CASE 1: GLOBAL TIMER MODE
     if session_obj.allow_question_navigate:
-        raise HTTPException(
-            status_code=400,
-            detail="This endpoint is for per-question timer mode only. Use /session/{id} for global timer."
-        )
+        duration_secs = (session_obj.duration_minutes or 60) * 60
+        time_remaining = int(duration_secs)
+        is_expired = False
+
+        if session_obj.status == InterviewStatus.LIVE and session_obj.start_time:
+            start_t = session_obj.start_time
+            if start_t.tzinfo is None:
+                start_t = start_t.replace(tzinfo=timezone.utc)
+            elapsed_secs = (now - start_t).total_seconds()
+            time_remaining = max(0, int(duration_secs - elapsed_secs))
+            is_expired = time_remaining <= 0
         
+        return ApiResponse(
+            status_code=200,
+            data={
+                "mode": "global",
+                "time_remaining": time_remaining,
+                "is_expired": is_expired,
+                "status": session_obj.status,
+                "server_time": int(now.timestamp())
+            },
+            message="Global timer synchronized"
+        )
+
+    # CASE 2: PER-QUESTION TIMER MODE
+    if not req.questionId:
+        raise HTTPException(
+            status_code=400, 
+            detail="questionId is required for sequential (non-navigable) interviews."
+        )
+
     # Check if an attempt already exists
     stmt = select(QuestionAttempt).where(
         QuestionAttempt.session_id == req.sessionId,
@@ -1417,7 +1379,7 @@ async def start_question_timer(
             session_id=req.sessionId,
             question_id=req.questionId,
             question_type=q_type,
-            start_time=datetime.now(timezone.utc),
+            start_time=now,
             duration_seconds=duration,
             status="active"
         )
@@ -1426,7 +1388,6 @@ async def start_question_timer(
         session_db.refresh(attempt)
         
     # Calculate remaining time
-    now = datetime.now(timezone.utc)
     start_t = attempt.start_time
     if start_t.tzinfo is None:
         start_t = start_t.replace(tzinfo=timezone.utc)
@@ -1435,7 +1396,6 @@ async def start_question_timer(
     time_remaining = max(0, int(attempt.duration_seconds - elapsed))
     is_expired = time_remaining <= 0
     
-    # Mark as expired if time ran out
     if is_expired and attempt.status == "active":
         attempt.status = "expired"
         attempt.expired_at = now
@@ -1445,16 +1405,17 @@ async def start_question_timer(
     return ApiResponse(
         status_code=200,
         data={
+            "mode": "sequential",
             "attempt_id": attempt.id,
             "question_id": req.questionId,
             "question_type": q_type,
             "time_remaining": time_remaining,
             "duration_seconds": duration,
             "status": attempt.status,
-            "expired": is_expired,
+            "is_expired": is_expired,
             "server_time": int(now.timestamp())
         },
-        message="Timer synchronized"
+        message="Sequential timer synchronized"
     )
 
 @router.post("/question/next", response_model=ApiResponse[dict])
@@ -2621,8 +2582,9 @@ def enforce_interview_duration(db: Session, session_obj: InterviewSession) -> No
             )
 
             # Trigger result processing task if needed
+            from ..core.tasks import run_background_task
             from ..tasks.interview_tasks import process_session_results_task
-            process_session_results_task.delay(session_obj.id)
+            run_background_task(process_session_results_task, session_obj.id)
 
     if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:
         raise HTTPException(
