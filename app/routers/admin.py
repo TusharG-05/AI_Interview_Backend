@@ -876,9 +876,17 @@ async def schedule_interview(
 
     # Parse schedule time
     try:
-        dt_str = schedule_data.schedule_time.replace("Z", "+00:00")
-        schedule_dt = datetime.fromisoformat(dt_str)
-    except ValueError:
+        sched_val = schedule_data.schedule_time
+        if sched_val is None:
+            raise HTTPException(status_code=400, detail="schedule_time is required")
+        if isinstance(sched_val, str):
+            dt_str = sched_val.replace("Z", "+00:00")
+            schedule_dt = datetime.fromisoformat(dt_str)
+        else:
+            # If a datetime object was provided, accept it; otherwise this will
+            # raise in the except block and return a 400 to the client.
+            schedule_dt = sched_val
+    except (AttributeError, TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid schedule_time format. ISO 8601 expected.")
 
     # Compute duration based on question counts when frontend doesn't provide it.
@@ -934,8 +942,6 @@ async def schedule_interview(
         raise HTTPException(status_code=500, detail="Failed to schedule interview. Please try again.")
     
     # Track initial status - INVITED
-    from ..services.status_manager import record_status_change
-    
     record_status_change(
         session=session,
         interview_session=new_session,
@@ -1030,8 +1036,6 @@ async def schedule_interview(
     interview_detail = InterviewSessionDetail(
         id=new_session.id,
         access_token=new_session.access_token,
-        admin_id=new_session.admin_id,
-        candidate_id=new_session.candidate_id,
         paper_id=new_session.paper_id,
         coding_paper_id=new_session.coding_paper_id,
         interview_round=new_session.interview_round.value if new_session.interview_round else None,
@@ -1054,7 +1058,6 @@ async def schedule_interview(
         allow_copy_paste=new_session.allow_copy_paste,
         allow_question_navigate=new_session.allow_question_navigate,
         allow_proctoring=new_session.allow_proctoring,
-        team_id=candidate.team_id,
         admin_user=admin_dict,
         candidate_user=candidate_dict
     )

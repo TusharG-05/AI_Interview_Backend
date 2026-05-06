@@ -139,12 +139,9 @@ async def get_current_user_ws(
 
 async def get_admin_user_ws(current_user: User = Depends(get_current_user_ws)) -> User:
     """Ensure the WebSocket user is an admin."""
-    if current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
-        # Note: We can't easily close from here if we want to return the user, 
-        # but the endpoint can check the role or we can raise and let FastAPI handle it.
-        # However, for WS, it's better to be explicit.
+    if current_user is None or current_user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
-            detail="The user doesn't have enough privileges"
+            detail="Admin role required"
         )
     return current_user

@@ -331,7 +331,7 @@ from .core.config import SECRET_KEY as C_SEC
 from .auth.security import SECRET_KEY as S_SEC
 print(f"DEBUG AUTH: Match={C_SEC == S_SEC} Config={C_SEC[:5]} Security={S_SEC[:5]}")
 
-from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video, admin_ws
+from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video, admin_ws, websocket
 
 print("\033[94m[STARTUP] Including Auth, Settings, Admin, Teams...\033[0m", flush=True)
 app.include_router(auth.router, prefix="/api")
@@ -355,7 +355,10 @@ if IS_ORCHESTRATOR:
     logger.info("Orchestrator Mode: ML services are disabled but routers are active.")
 
 # General Dashboard Websocket (Real-time monitoring)
-app.include_router(admin_ws.router, prefix="/api")
+app.include_router(admin_ws.router, prefix="/api/admin")
+
+# Event-driven Websocket: Candidate violations + Admin dashboard events
+app.include_router(websocket.router)
 
 print("\033[92m[STARTUP] All routers included successfully.\033[0m\n", flush=True)
 
