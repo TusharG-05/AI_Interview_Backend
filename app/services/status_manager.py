@@ -30,7 +30,6 @@ import asyncio
 logger = get_logger(__name__)
 
 # Database engine for ad-hoc queries
-from ..core.database import engine
 from datetime import date, timedelta
 
 # ========== ASYNC WEBSOCKET HELPERS ==========
@@ -359,9 +358,8 @@ def add_violation(
     Returns:
         The created ProctoringEvent
     """
-    # Determine severity (case-insensitive lookup)
-    lookup_key = event_type.lower()
-    severity = force_severity or VIOLATION_SEVERITY.get(lookup_key, "info")
+    # Determine severity
+    severity = force_severity or VIOLATION_SEVERITY.get(event_type, "info")
     
     # Create proctoring event
     event = ProctoringEvent(
@@ -372,11 +370,6 @@ def add_violation(
         triggered_warning=False,
         timestamp=datetime.now(timezone.utc)
     )
-
-    # Increment granular counts
-    if lookup_key == "tab_switch":
-        interview_session.tab_switch_count += 1
-        interview_session.tab_switch_timestamp = datetime.now(timezone.utc)
     
     # Handle critical violations - immediate suspension
     if severity == "critical":
@@ -484,11 +477,11 @@ def complete_interview_session(
 
     result_obj = interview_session.result
     if result_obj is None:
-        result_obj = InterviewResult(interview_id=interview_session.id, result_status="PROCESSING")
+        result_obj = InterviewResult(interview_id=interview_session.id, result_status="COMPLETED")
         interview_session.result = result_obj
         session.add(result_obj)
     elif result_obj.result_status == "PENDING":
-        result_obj.result_status = "PROCESSING"
+        result_obj.result_status = "COMPLETED"
 
     session.add(interview_session)
     session.add(result_obj)
@@ -618,6 +611,7 @@ def compute_dashboard_metrics(target_date: Optional[date] = None) -> Dict[str, A
         from sqlmodel import Session, select
         from sqlalchemy import distinct
         from datetime import datetime, timezone
+        from ..core.database import engine
 
         if target_date is None:
             now = datetime.now(timezone.utc)

@@ -2,6 +2,7 @@ from typing import Dict, List, Any, Set, Optional
 from fastapi import WebSocket
 from ..core.logger import get_logger
 import json
+from datetime import datetime, timezone
 
 logger = get_logger(__name__)
 
@@ -32,8 +33,11 @@ class WebSocketManager:
             self.candidate_connections[interview_id] = []
         self.candidate_connections[interview_id].append(websocket)
         logger.info(f"WS: Candidate connected to Interview {interview_id}")
+        
+        # Broadcast to admin dashboard
+        await self._broadcast_candidate_status(interview_id, "candidate_connected")
 
-    def disconnect_candidate(self, websocket: WebSocket, interview_id: int):
+    async def disconnect_candidate(self, websocket: WebSocket, interview_id: int):
         """Unregister a candidate WebSocket connection"""
         if interview_id in self.candidate_connections:
             if websocket in self.candidate_connections[interview_id]:
@@ -41,6 +45,78 @@ class WebSocketManager:
             if not self.candidate_connections[interview_id]:
                 del self.candidate_connections[interview_id]
         logger.info(f"WS: Candidate disconnected from Interview {interview_id}")
+        
+        # Broadcast to admin dashboard
+        await self._broadcast_candidate_status(interview_id, "candidate_disconnected")
+
+    async def broadcast_candidate_login(self, interview_id: int, candidate_info: dict):
+        """Broadcast candidate login event to all connected admin dashboards"""
+        try:
+            logger.info(f"DEBUG: Starting candidate_login broadcast for interview {interview_id}")
+            # Lazy import to avoid circular dependency
+            from .status_manager import compute_dashboard_metrics
+            
+            try:
+                start_time = datetime.now()
+                dashboard = compute_dashboard_metrics()
+                duration = (datetime.now() - start_time).total_seconds()
+                logger.info(f"DEBUG: Dashboard metrics computed in {duration}s")
+            except Exception as e:
+                logger.error(f"DEBUG: Error computing dashboard metrics: {e}")
+                dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+            payload = {
+                "event_type": "candidate_logged_in",
+                "interview_id": interview_id,
+                "data": {
+                    "candidate_id": candidate_info.get("candidate_id"),
+                    "candidate_name": candidate_info.get("candidate_name"),
+                    "candidate_email": candidate_info.get("candidate_email"),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "dashboard_data": dashboard
+                }
+            }
+
+            # Broadcast to per-interview admin dashboards
+            await self.broadcast_to_admin_dashboard(interview_id, payload)
+            
+            # Broadcast to global admin dashboards
+            await self.broadcast_to_admins(payload)
+            logger.info(f"DEBUG: Successfully broadcasted candidate_logged_in for interview {interview_id}")
+            
+        except Exception as e:
+            logger.error(f"WS Error broadcasting candidate_logged_in for interview {interview_id}: {e}", exc_info=True)
+
+    async def _broadcast_candidate_status(self, interview_id: int, event_type: str):
+        """Helper to broadcast candidate connection status to admins"""
+        try:
+            logger.info(f"DEBUG: Broadcasting candidate status '{event_type}' for interview {interview_id}")
+            # Lazy import to avoid circular dependency
+            from .status_manager import compute_dashboard_metrics
+            
+            try:
+                dashboard = compute_dashboard_metrics()
+            except Exception:
+                dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+            payload = {
+                "event_type": event_type,
+                "interview_id": interview_id,
+                "data": {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "dashboard_data": dashboard
+                }
+            }
+
+            # Broadcast to per-interview admin dashboards
+            await self.broadcast_to_admin_dashboard(interview_id, payload)
+            
+            # Broadcast to global admin dashboards
+            await self.broadcast_to_admins(payload)
+            logger.info(f"DEBUG: Successfully broadcasted {event_type} for interview {interview_id}")
+            
+        except Exception as e:
+            logger.error(f"Failed to broadcast {event_type} for interview {interview_id}: {e}")
 
     # ========== ADMIN DASHBOARD WEBSOCKET ==========
     async def connect_admin_dashboard(self, websocket: WebSocket, interview_id: int):
@@ -89,7 +165,7 @@ class WebSocketManager:
                 logger.debug(f"Event broadcast to candidate for interview {interview_id}: {event.get('event_type')}")
             except Exception as e:
                 logger.error(f"WS Error sending to candidate {interview_id}: {e}")
-                self.disconnect_candidate(connection, interview_id)
+                await self.disconnect_candidate(connection, interview_id)
 
     # ========== UTILITY METHODS ==========
     def has_admin_connections(self, interview_id: int) -> bool:

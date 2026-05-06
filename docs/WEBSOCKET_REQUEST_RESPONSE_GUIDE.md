@@ -114,6 +114,24 @@ The server will close the connection immediately if token is not provided or inv
 
 ---
 
+### 📤 Outgoing Events (Server → Client)
+
+#### 1️⃣ Interview Finished Confirmation
+
+**When:** Candidate successfully finishes the interview via WebSocket.
+
+**Response Body:**
+
+```json
+{
+    "type": "interview_finished_confirmation",
+    "status": "success",
+    "message": "Interview finished. Results are being processed."
+}
+```
+
+---
+
 ### 📤 Violation Event - Candidate Receives
 
 **When:** Candidate violates proctoring rules (tab switch, wrong face, etc.)
@@ -204,16 +222,54 @@ The server will close the connection immediately if token is not provided or inv
 
 ---
 
-### 🔄 Client → Server (Keep-Alive Heartbeat)
+### 🔄 Client → Server (Messages)
 
-**Candidate can send** (optional):
+**1. Keep-Alive Heartbeat** (optional):
 ```json
 {
     "type": "ping"
 }
 ```
 
-**Or any text message** to keep the connection alive. The server will simply log it and continue receiving events.
+**2. Candidate Login Notification** (required for dashboard tracking):
+The frontend should send this message immediately after the WebSocket connection is established to notify the admin of the candidate's active presence.
+
+```json
+{
+    "type": "login",
+    "email": "candidate@example.com"
+}
+```
+
+**3. Tab Switch Notification**:
+Sent by the frontend when the candidate leaves the interview tab.
+
+```json
+{
+    "type": "tab_switch",
+    "interview_id": 42
+}
+```
+
+**4. Tab Return Notification**:
+Sent by the frontend when the candidate returns to the interview tab.
+
+```json
+{
+    "type": "tab_return",
+    "interview_id": 42
+}
+```
+
+**5. Finish Interview Notification**:
+Sent by the frontend when the candidate manually clicks "Finish Interview". This triggers result processing and notifies the admin.
+
+```json
+{
+    "type": "finish_interview",
+    "interview_id": 42
+}
+```
 
 ---
 
@@ -492,9 +548,12 @@ Connection rejected if token is missing, invalid, or user is not an admin.
     "data": {
         "status": "LIVE",
         "started_at": "2026-05-05T13:15:00.000000Z",
-        "candidate_id": 7,
-        "paper_id": 15,
-        "scheduled_duration_minutes": 30
+        "dashboard_data": {
+            "live": 1,
+            "proctoring_activity": "0.00%",
+            "failed_today": 0,
+            "passed_today": 0
+        }
     }
 }
 ```
@@ -521,10 +580,10 @@ Connection rejected if token is missing, invalid, or user is not an admin.
             "suspended_at": "2026-05-05T13:21:00.000000Z"
         },
         "dashboard_data": {
-            "live": 12,
-            "proctoring_activity": "23.45%",
-            "failed_today": 4,
-            "passed_today": 18
+            "live": 0,
+            "proctoring_activity": "100.00%",
+            "failed_today": 1,
+            "passed_today": 0
         }
     }
 }
@@ -549,13 +608,14 @@ Connection rejected if token is missing, invalid, or user is not an admin.
     "event_type": "interview_completed",
     "interview_id": 42,
     "data": {
-        "status": "COMPLETED",
         "result_status": "Pass",
         "completed_at": "2026-05-05T13:45:00.000000Z",
-        "total_questions": 2,
-        "questions_attempted": 2,
-        "questions_solved": 1,
-        "total_violations": 2
+        "dashboard_data": {
+            "live": 0,
+            "proctoring_activity": "0.00%",
+            "failed_today": 0,
+            "passed_today": 1
+        }
     }
 }
 ```
@@ -584,6 +644,67 @@ Connection rejected if token is missing, invalid, or user is not an admin.
         "actual_duration_minutes": 30.5,
         "expired_at": "2026-05-05T13:45:30.000000Z",
         "reason": "duration_timeout"
+    }
+}
+```
+
+---
+
+#### 6️⃣ CANDIDATE CONNECTION EVENTS
+
+**When:** Candidate connects or disconnects from their proctoring stream.
+
+**Candidate Logged In:**
+This event is triggered when the candidate sends a `{"type": "login"}` message over the WebSocket.
+```json
+{
+    "event_type": "candidate_logged_in",
+    "interview_id": 42,
+    "data": {
+        "candidate_id": 7,
+        "candidate_name": "John Doe",
+        "candidate_email": "candidate@example.com",
+        "timestamp": "2026-05-05T13:15:00.000000Z",
+        "dashboard_data": {
+            "live": 1,
+            "proctoring_activity": "0.00%",
+            "failed_today": 0,
+            "passed_today": 0
+        }
+    }
+}
+```
+
+**Connection Established:**
+```json
+{
+    "event_type": "candidate_connected",
+    "interview_id": 42,
+    "data": {
+        "timestamp": "2026-05-05T13:15:00.000000Z",
+        "dashboard_data": {
+            "live": 1,
+            "proctoring_activity": "0.00%",
+            "failed_today": 0,
+            "passed_today": 0
+        }
+    }
+}
+```
+
+**Connection Lost:**
+```json
+{
+    "event_type": "candidate_disconnected",
+    "interview_id": 42,
+    "data": {
+        "timestamp": "2026-05-05T13:45:00.000000Z",
+        "dashboard_data": {
+            "live": 0,
+            "proctoring_activity": "0.00%",
+            "failed_today": 0,
+            "passed_today": 1
+        }
     }
 }
 ```
