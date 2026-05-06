@@ -41,6 +41,7 @@ async def admin_dashboard_ws(
     from ..core.database import get_db as get_session_func
     from ..models.db_models import User, UserRole
     
+    print(f"DEBUG: admin_dashboard_ws handshake for {token[:10] if token else 'None'}", flush=True)
     logger.info(f"🔍 Admin WS handshake initiated. Token from query: {bool(token)}")
     
     # Manual token extraction (mimic get_current_user_ws)

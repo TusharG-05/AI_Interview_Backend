@@ -2313,9 +2313,6 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
     from ..tasks.interview_tasks import process_session_results
     background_tasks.add_task(process_session_results, interview_id)
     
-    # Broadcast finish event
-    broadcast_interview_update(session_db, interview_session, update_type="interview_finished")
-    
     # Cleanup proctoring resources
     from ..services.camera import CameraService
     CameraService().clear_session(interview_id)
