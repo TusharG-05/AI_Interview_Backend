@@ -1036,9 +1036,25 @@ async def start_session_logic(
         logger.error(f"Failed to start interview for session {session.id if 'session' in locals() else 'unknown'}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to start interview session. Please contact support.")
         
+    # Calculate initial time remaining for the response
+    duration_secs = (session.duration_minutes or 60) * 60
+    time_remaining = duration_secs
+    if session.start_time:
+        start_t = session.start_time
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
+        elapsed_secs = (datetime.now(timezone.utc) - start_t).total_seconds()
+        time_remaining = max(0, int(duration_secs - elapsed_secs))
+
     return ApiResponse(
         status_code=200,
-        data={"interview_id": session.id, "status": "LIVE", "warning": warning},
+        data={
+            "interview_id": session.id, 
+            "status": "LIVE", 
+            "time_remaining": time_remaining,
+            "allow_question_navigate": session.allow_question_navigate,
+            "warning": warning
+        },
         message="Interview session started successfully"
     )
 
@@ -1320,6 +1336,19 @@ async def start_question_timer(
     # Authorization: Only candidate or admin can access
     if session_obj.candidate_id != current_user.id and session_obj.admin_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to access this session")
+
+    # Strict Status Checks
+    if session_obj.status == InterviewStatus.CANCELLED:
+        raise HTTPException(status_code=403, detail="Interview is cancelled")
+    
+    if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:
+        raise HTTPException(status_code=403, detail="Interview is already completed")
+
+    if session_obj.is_suspended:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Interview suspended: {session_obj.suspension_reason or 'No reason provided'}"
+        )
 
     now = datetime.now(timezone.utc)
     
