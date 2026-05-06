@@ -30,4 +30,4 @@ class AnswerRequest(BaseModel):
 
 class QuestionStartRequest(BaseModel):
     sessionId: int
-    questionId: int
+    questionId: Optional[int] = None
