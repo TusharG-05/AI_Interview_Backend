@@ -109,3 +109,7 @@ class ProctoringEvent(BaseModel):
 
     class Config:
         from_attributes = True
+
+class StartSessionRequest(BaseModel):
+    question_id: Optional[int] = None
+    coding_question_id: Optional[int] = None
