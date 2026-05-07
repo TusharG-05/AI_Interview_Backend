@@ -32,6 +32,9 @@ class AdminInterviewsList(BaseModel):
     schedule_time: str
     total_score: Optional[float] = Field(default=0.0)
     interview_round: Optional[str] = None
+    result_status: Optional[str] = Field(default="PENDING", description="Evaluation status: PENDING, PROCESSING, COMPLETED, PASS, or FAIL")
+    allow_proctoring: bool = True
+
     class Config:
         from_attributes = True
 

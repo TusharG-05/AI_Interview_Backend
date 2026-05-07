@@ -1127,7 +1127,9 @@ async def list_interviews(
             status=s.status.value,
             schedule_time=format_iso_datetime(s.schedule_time),
             total_score=(s.result.total_score if s.result else s.total_score) or 0.0,
-            interview_round=s.interview_round.value if s.interview_round else None
+            interview_round=s.interview_round.value if s.interview_round else None,
+            result_status=(s.result.result_status if s.result else "PENDING"),
+            allow_proctoring=s.allow_proctoring if s.allow_proctoring is not None else True
         ))
     return ApiResponse(
         status_code=200,
