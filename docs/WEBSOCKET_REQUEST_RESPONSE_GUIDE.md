@@ -508,13 +508,27 @@ Connection rejected if token is missing, invalid, or user is not an admin.
 ```json
 {
     "event_type": "violation_detected",
-    "interview_id": 42,
     "data": {
+        "interview_id": 42,
+        "interview_status": "LIVE",
+        "candidate": {
+            "candidate_id": 123,
+            "candidate_name": "John Doe",
+            "candidate_email": "john@example.com"
+        },
+        "proctoring_events": {
+            "tab_switch_count": 1
+        },
         "violation_type": "tab_switch",
-        "violation_count": 1,
+        "details": "Candidate switched to another tab",
         "timestamp": "2026-05-05T13:20:15.123456Z",
         "severity": "warning",
-        "details": "Candidate switched to another tab"
+        "dashboard_data": {
+            "live": 1,
+            "proctoring_activity": "5.00%",
+            "failed_today": 0,
+            "passed_today": 0
+        }
     }
 }
 ```
@@ -544,9 +558,17 @@ Connection rejected if token is missing, invalid, or user is not an admin.
 ```json
 {
     "event_type": "interview_started",
-    "interview_id": 42,
     "data": {
-        "status": "LIVE",
+        "interview_id": 42,
+        "interview_status": "LIVE",
+        "candidate": {
+            "candidate_id": 123,
+            "candidate_name": "John Doe",
+            "candidate_email": "john@example.com"
+        },
+        "proctoring_events": {
+            "tab_switch_count": 0
+        },
         "started_at": "2026-05-05T13:15:00.000000Z",
         "dashboard_data": {
             "live": 1,
@@ -569,8 +591,17 @@ Connection rejected if token is missing, invalid, or user is not an admin.
 ```json
 {
     "event_type": "interview_suspended",
-    "interview_id": 42,
     "data": {
+        "interview_id": 42,
+        "interview_status": "SUSPENDED",
+        "candidate": {
+            "candidate_id": 123,
+            "candidate_name": "John Doe",
+            "candidate_email": "john@example.com"
+        },
+        "proctoring_events": {
+            "tab_switch_count": 3
+        },
         "reason": "max_warnings_exceeded",
         "warning_count": 3,
         "max_warnings": 3,
@@ -606,8 +637,17 @@ Connection rejected if token is missing, invalid, or user is not an admin.
 ```json
 {
     "event_type": "interview_completed",
-    "interview_id": 42,
     "data": {
+        "interview_id": 42,
+        "interview_status": "COMPLETED",
+        "candidate": {
+            "candidate_id": 123,
+            "candidate_name": "John Doe",
+            "candidate_email": "john@example.com"
+        },
+        "proctoring_events": {
+            "tab_switch_count": 0
+        },
         "result_status": "Pass",
         "completed_at": "2026-05-05T13:45:00.000000Z",
         "dashboard_data": {
@@ -637,13 +677,27 @@ Connection rejected if token is missing, invalid, or user is not an admin.
 ```json
 {
     "event_type": "interview_expired",
-    "interview_id": 42,
     "data": {
-        "status": "EXPIRED",
+        "interview_id": 42,
+        "interview_status": "EXPIRED",
+        "candidate": {
+            "candidate_id": 123,
+            "candidate_name": "John Doe",
+            "candidate_email": "john@example.com"
+        },
+        "proctoring_events": {
+            "tab_switch_count": 0
+        },
         "scheduled_duration_minutes": 30,
         "actual_duration_minutes": 30.5,
         "expired_at": "2026-05-05T13:45:30.000000Z",
-        "reason": "duration_timeout"
+        "reason": "duration_timeout",
+        "dashboard_data": {
+            "live": 0,
+            "proctoring_activity": "0.00%",
+            "failed_today": 0,
+            "passed_today": 1
+        }
     }
 }
 ```
@@ -659,11 +713,17 @@ This event is triggered when the candidate sends a `{"type": "login"}` message o
 ```json
 {
     "event_type": "candidate_logged_in",
-    "interview_id": 42,
     "data": {
-        "candidate_id": 7,
-        "candidate_name": "John Doe",
-        "candidate_email": "candidate@example.com",
+        "interview_id": 42,
+        "interview_status": "LIVE",
+        "candidate": {
+            "candidate_id": 123,
+            "candidate_name": "John Doe",
+            "candidate_email": "john@example.com"
+        },
+        "proctoring_events": {
+            "tab_switch_count": 0
+        },
         "timestamp": "2026-05-05T13:15:00.000000Z",
         "dashboard_data": {
             "live": 1,

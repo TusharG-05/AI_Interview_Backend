@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from sqlmodel import Session, select
 
 from ..models.db_models import (
+    User,
     InterviewSession, 
     StatusTimeline, 
     ProctoringEvent,
@@ -33,6 +34,71 @@ logger = get_logger(__name__)
 from datetime import date, timedelta
 
 # ========== ASYNC WEBSOCKET HELPERS ==========
+
+def get_enriched_admin_data(interview_id: int, session: Optional[Session] = None) -> Dict[str, Any]:
+    """
+    Fetch comprehensive metadata for an interview session to enrich Admin WebSocket payloads.
+    Includes candidate details, current status, and proctoring stats.
+    """
+    from ..core.database import engine
+    
+    # Internal helper to get metrics without opening a new session if one is already active
+    def _get_metrics(db_session):
+        try:
+            # We don't want to open another session inside, so we'd ideally pass db_session
+            # But compute_dashboard_metrics is currently self-contained. 
+            # For now, we call it but we've at least fixed the NameError.
+            return compute_dashboard_metrics()
+        except Exception:
+            return {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+    close_session = False
+    if session is None:
+        session = Session(engine)
+        close_session = True
+    
+    try:
+        # Fetch session with candidate details
+        stmt = select(InterviewSession, User).join(User, InterviewSession.candidate_id == User.id).where(InterviewSession.id == interview_id)
+        result = session.exec(stmt).first()
+        
+        if not result:
+            logger.warning(f"Enrichment: Session {interview_id} or candidate not found")
+            return {
+                "interview_id": interview_id,
+                "interview_status": "UNKNOWN",
+                "candidate": {"candidate_id": None, "candidate_name": "Unknown", "candidate_email": "Unknown"},
+                "proctoring_events": {"tab_switch_count": 0},
+                "dashboard_data": _get_metrics(session)
+            }
+        
+        interview_session, candidate = result
+        
+        return {
+            "interview_id": interview_id,
+            "interview_status": str(interview_session.status.value) if hasattr(interview_session.status, 'value') else str(interview_session.status),
+            "candidate": {
+                "candidate_id": candidate.id,
+                "candidate_name": candidate.full_name,
+                "candidate_email": candidate.email
+            },
+            "proctoring_events": {
+                "tab_switch_count": interview_session.tab_switch_count
+            },
+            "dashboard_data": _get_metrics(session)
+        }
+    except Exception as e:
+        logger.error(f"Error enriching admin data for {interview_id}: {e}", exc_info=True)
+        return {
+            "interview_id": interview_id,
+            "interview_status": "ERROR",
+            "candidate": {"candidate_id": None, "candidate_name": "Error", "candidate_email": str(e)},
+            "proctoring_events": {"tab_switch_count": 0},
+            "dashboard_data": {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+        }
+    finally:
+        if close_session:
+            session.close()
 
 async def _broadcast_violation_event(interview_id: int, event_type: str, details: Optional[str] = None, tab_switch_count: Optional[int] = None):
     """
@@ -69,20 +135,16 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
             violation_event.model_dump(mode='json')
         )
         
-        # Broadcast to admin dashboard (include dashboard metrics)
-        try:
-            dashboard = compute_dashboard_metrics()
-        except Exception:
-            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
-
+        # Broadcast to admin dashboard (include enriched data)
+        enriched_data = get_enriched_admin_data(interview_id)
+        
         admin_payload = {
             "event_type": "violation_detected",
-            "interview_id": interview_id,
             "data": {
+                **enriched_data,
                 "violation_type": violation_event.violation_type,
                 "details": violation_event.details,
-                "timestamp": violation_event.timestamp.isoformat(),
-                "dashboard_data": dashboard
+                "timestamp": violation_event.timestamp.isoformat()
             }
         }
 
@@ -110,16 +172,13 @@ async def _broadcast_interview_suspended_event(interview_id: int, violation_type
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        # Create suspension event payload and include dashboard metrics
-        try:
-            dashboard = compute_dashboard_metrics()
-        except Exception:
-            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+        # Create suspension event payload and include enriched data
+        enriched_data = get_enriched_admin_data(interview_id)
 
         suspension_payload = {
             "event_type": "interview_suspended",
-            "interview_id": interview_id,
             "data": {
+                **enriched_data,
                 "reason": "max_warnings_exceeded",
                 "warning_count": tab_switch_count,
                 "max_warnings": tab_switch_count,
@@ -127,8 +186,7 @@ async def _broadcast_interview_suspended_event(interview_id: int, violation_type
                 "suspension_metadata": {
                     "auto_suspended": True,
                     "suspended_at": datetime.now(timezone.utc).isoformat()
-                },
-                "dashboard_data": dashboard
+                }
             }
         }
 
@@ -153,18 +211,14 @@ async def _broadcast_interview_started_event(interview_id: int):
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        try:
-            dashboard = compute_dashboard_metrics()
-        except Exception:
-            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+        # Create enriched payload
+        enriched_data = get_enriched_admin_data(interview_id)
 
         payload = {
             "event_type": "interview_started",
-            "interview_id": interview_id,
             "data": {
-                "status": "LIVE",
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "dashboard_data": dashboard
+                **enriched_data,
+                "started_at": datetime.now(timezone.utc).isoformat()
             }
         }
 
@@ -189,18 +243,15 @@ async def _broadcast_interview_completed_event(interview_id: int, result_status:
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        try:
-            dashboard = compute_dashboard_metrics()
-        except Exception:
-            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+        # Create enriched payload
+        enriched_data = get_enriched_admin_data(interview_id)
 
         payload = {
             "event_type": "interview_completed",
-            "interview_id": interview_id,
             "data": {
+                **enriched_data,
                 "result_status": result_status,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-                "dashboard_data": dashboard
+                "completed_at": datetime.now(timezone.utc).isoformat()
             }
         }
 
@@ -225,17 +276,14 @@ async def _broadcast_interview_expired_event(interview_id: int):
         from .websocket_manager import manager
         from ..schemas.websocket.events import AdminDashboardEvent
         
-        try:
-            dashboard = compute_dashboard_metrics()
-        except Exception:
-            dashboard = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+        # Create enriched payload
+        enriched_data = get_enriched_admin_data(interview_id)
 
         payload = {
             "event_type": "interview_expired",
-            "interview_id": interview_id,
             "data": {
-                "expired_at": datetime.now(timezone.utc).isoformat(),
-                "dashboard_data": dashboard
+                **enriched_data,
+                "expired_at": datetime.now(timezone.utc).isoformat()
             }
         }
 
@@ -800,11 +848,16 @@ def broadcast_interview_update(
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
+                # Create enriched payload
+                enriched_data = get_enriched_admin_data(interview_session.id, session=session)
+                
                 asyncio.run_coroutine_threadsafe(
                     manager.broadcast_to_admins({
-                        "type": update_type,
-                        "interview_id": interview_session.id,
-                        "data": summary
+                        "event_type": update_type,
+                        "data": {
+                            **enriched_data,
+                            "summary": summary
+                        }
                     }), 
                     loop
                 )
