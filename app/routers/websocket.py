@@ -3,7 +3,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status, Query, De
 from sqlmodel import Session, select
 from datetime import datetime, timezone
 from ..core.database import get_db as get_session
-from ..models.db_models import User, InterviewSession, CandidateStatus
+from ..models.db_models import User, InterviewSession, CandidateStatus, InterviewStatus
 from ..core.logger import get_logger
 from ..services.websocket_manager import manager
 from ..services.status_manager import add_violation, record_status_change
@@ -41,6 +41,27 @@ async def websocket_candidate_violations(
         
         await manager.connect_candidate(websocket, interview_id)
         logger.info(f"Candidate WebSocket connected: Interview {interview_id}")
+        
+        # Update database status to CONNECTED or return to LIVE
+        try:
+            session_obj = session.exec(
+                select(InterviewSession).where(InterviewSession.id == interview_id)
+            ).first()
+            
+            if session_obj and session_obj.status not in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
+                old_status = session_obj.status
+                if session_obj.start_time:
+                    session_obj.status = InterviewStatus.LIVE
+                else:
+                    session_obj.status = InterviewStatus.CONNECTED
+                
+                if old_status != session_obj.status:
+                    session.add(session_obj)
+                    session.commit()
+                    session.refresh(session_obj)
+                    logger.info(f"Interview {interview_id} status updated: {old_status} -> {session_obj.status}")
+        except Exception as e:
+            logger.error(f"Error updating connection status for interview {interview_id}: {e}")
         
         # Keep connection alive
         while True:
@@ -252,6 +273,28 @@ async def websocket_candidate_violations(
     except WebSocketDisconnect:
         await manager.disconnect_candidate(websocket, interview_id)
         logger.info(f"Candidate WebSocket disconnected (Cleanly): Interview {interview_id}")
+        
+        # Update database status to DISCONNECTED
+        try:
+            # We need a new session as the old one might be closed or bound to a different thread
+            from ..core.database import engine
+            with Session(engine) as disconnect_session:
+                session_obj = disconnect_session.exec(
+                    select(InterviewSession).where(InterviewSession.id == interview_id)
+                ).first()
+                
+                if session_obj and session_obj.status not in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
+                    old_status = session_obj.status
+                    session_obj.status = InterviewStatus.DISCONNECTED
+                    
+                    if old_status != session_obj.status:
+                        disconnect_session.add(session_obj)
+                        disconnect_session.commit()
+                        disconnect_session.refresh(session_obj)
+                        logger.info(f"Interview {interview_id} status updated to DISCONNECTED")
+        except Exception as e:
+            logger.error(f"Error updating disconnection status for interview {interview_id}: {e}")
+
     except Exception as e:
         logger.error(f"Candidate WebSocket error {interview_id}: {e}")
         try:
@@ -259,6 +302,21 @@ async def websocket_candidate_violations(
         except:
             pass
         await manager.disconnect_candidate(websocket, interview_id)
+        
+        # Update database status to DISCONNECTED on error too
+        try:
+            from ..core.database import engine
+            with Session(engine) as disconnect_session:
+                session_obj = disconnect_session.exec(
+                    select(InterviewSession).where(InterviewSession.id == interview_id)
+                ).first()
+                
+                if session_obj and session_obj.status not in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
+                    session_obj.status = InterviewStatus.DISCONNECTED
+                    disconnect_session.add(session_obj)
+                    disconnect_session.commit()
+        except Exception as inner_e:
+            logger.error(f"Error updating disconnection status on error for interview {interview_id}: {inner_e}")
 
 
 # ========== ADMIN DASHBOARD STREAM ==========

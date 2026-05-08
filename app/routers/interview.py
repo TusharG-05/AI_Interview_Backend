@@ -236,7 +236,7 @@ async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session:
 
 from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
-from ..services.status_manager import record_status_change, update_last_activity, broadcast_interview_update, add_violation
+from ..services.status_manager import record_status_change, update_last_activity, add_violation
 _audio_service = None
 _cloudinary_service = None
 
@@ -613,7 +613,7 @@ def _evaluate_and_update_score(
         )
         
         # Broadcast full update to admins for real-time scoring
-        broadcast_interview_update(db, session_obj, update_type="score_update")
+        # session_obj.total_score = total_score (Already handled)
 
     except Exception as exc:
         # Roll back only the evaluation updates; the answer row itself was already
@@ -635,7 +635,7 @@ def ensure_session_started(db: Session, session_obj: InterviewSession) -> None:
     Promote a scheduled session to LIVE when candidate actively interacts with interview APIs.
     This protects against frontend/network misses of the explicit start-session call.
     """
-    if session_obj.status == InterviewStatus.SCHEDULED:
+    if session_obj.status in [InterviewStatus.SCHEDULED, InterviewStatus.CONNECTED, InterviewStatus.DISCONNECTED]:
         now = datetime.now(timezone.utc)
         session_obj.status = InterviewStatus.LIVE
         if session_obj.start_time is None:
@@ -976,7 +976,7 @@ async def start_session_logic(
     #     )
     
     # Update Status
-    if session.status == InterviewStatus.SCHEDULED:
+    if session.status in [InterviewStatus.SCHEDULED, InterviewStatus.CONNECTED, InterviewStatus.DISCONNECTED]:
         session.status = InterviewStatus.LIVE
         session.start_time = datetime.now(timezone.utc)
         
@@ -1846,8 +1846,7 @@ async def submit_answer_audio(
             session_db.add(session_obj)
             session_db.commit()
             
-            from ..services.status_manager import broadcast_interview_update
-            broadcast_interview_update(session_db, session_obj, update_type="score_update")
+            # broadcast_interview_update(session_db, session_obj, update_type="score_update")
 
     # Refresh to get latest score/feedback written by the helper
     try:
@@ -1944,8 +1943,7 @@ async def submit_answer_code(
         session_db.add(result)
         session_db.add(session)
         session_db.commit()
-        from ..services.status_manager import broadcast_interview_update
-        broadcast_interview_update(session_db, session, update_type="score_update")
+        # broadcast_interview_update(session_db, session, update_type="score_update")
     
     session_db.refresh(answer)
 
@@ -2067,8 +2065,7 @@ async def submit_answer_text(
             session_db.add(result)
             session_db.add(session)
             session_db.commit()
-            from ..services.status_manager import broadcast_interview_update
-            broadcast_interview_update(session_db, session, update_type="score_update")
+            # broadcast_interview_update(session_db, session, update_type="score_update")
         session_db.refresh(answer)
 
         from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer

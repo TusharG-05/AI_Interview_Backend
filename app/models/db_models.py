@@ -12,7 +12,9 @@ class UserRole(str, Enum):
 
 class InterviewStatus(str, Enum):
     SCHEDULED = "SCHEDULED"
+    CONNECTED = "CONNECTED"
     LIVE = "LIVE"
+    DISCONNECTED = "DISCONNECTED"
     COMPLETED = "COMPLETED"
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"

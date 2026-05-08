@@ -117,7 +117,7 @@ All Admin events now use a **Standardized Enriched Format**. The `interview_id` 
     "event_type": "EVENT_NAME",
     "data": {
         "interview_id": 62,
-        "interview_status": "LIVE",
+        "interview_status": "CONNECTED", // Possible: SCHEDULED, CONNECTED, LIVE, DISCONNECTED, COMPLETED, EXPIRED
         "candidate": {
             "candidate_id": 123,
             "candidate_name": "John Doe",

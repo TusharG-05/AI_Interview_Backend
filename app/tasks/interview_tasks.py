@@ -248,7 +248,7 @@ def expire_interviews_task():
         now = datetime.now(timezone.utc)
         # Find all active interviews that still need expiry checks
         stmt = select(InterviewSession).where(
-            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.CONNECTED, InterviewStatus.LIVE, InterviewStatus.DISCONNECTED])
         )
         scheduled_sessions = db.exec(stmt).all()
         
@@ -263,7 +263,7 @@ def expire_interviews_task():
             
             elif access_decision.duration_expired:
                 # Interview duration passed for a LIVE session
-                if s.status == InterviewStatus.LIVE:
+                if s.status in [InterviewStatus.LIVE, InterviewStatus.DISCONNECTED]:
                     complete_interview_session(
                         session=db,
                         interview_session=s,

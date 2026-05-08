@@ -113,7 +113,7 @@ def get_timer_sync_data(
         time_remaining = duration_secs
         is_expired = False
 
-        if session_obj.status == InterviewStatus.LIVE and session_obj.start_time:
+        if session_obj.status in (InterviewStatus.LIVE, InterviewStatus.DISCONNECTED) and session_obj.start_time:
             # Re-use to_utc helper from this module
             start_t = to_utc(session_obj.start_time)
             elapsed_secs = (now - start_t).total_seconds()

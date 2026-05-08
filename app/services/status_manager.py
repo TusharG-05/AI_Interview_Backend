@@ -680,7 +680,7 @@ def compute_dashboard_metrics(target_date: Optional[date] = None) -> Dict[str, A
         with Session(engine) as session:
             # live count
             live_sessions = session.exec(
-                select(InterviewSession).where(InterviewSession.status == InterviewStatus.LIVE)
+                select(InterviewSession).where(InterviewSession.status.in_([InterviewStatus.LIVE, InterviewStatus.CONNECTED, InterviewStatus.DISCONNECTED]))
             ).all()
             live_count = len(live_sessions)
 
@@ -830,7 +830,8 @@ def update_last_activity(
     session.commit()
     
     if broadcast:
-        broadcast_interview_update(session, interview_session)
+        # broadcast_interview_update(session, interview_session)
+        pass
 
 def broadcast_interview_update(
     session: Session,
