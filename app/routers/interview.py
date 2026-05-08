@@ -2283,21 +2283,11 @@ async def log_tab_switch(
         )
         
         if session_obj.tab_switch_count >= 3:
-            # Immediate termination
-            session_obj.is_suspended = True
-            session_obj.suspension_reason = "multiple_tab_switch"
-            session_obj.suspended_at = now
-            session_obj.tab_warning_active = False # Deactivate warning as it's now a termination
-            
-            record_status_change(
-                session=session_db,
-                interview_session=session_obj,
-                new_status=CandidateStatus.SUSPENDED,
-                metadata={"reason": "multiple_tab_switch", "count": session_obj.tab_switch_count}
-            )
-            # Ensure database is committed before raising exception
-            session_db.add(session_obj)
-            session_db.commit()
+            # Immediate termination (handled inside add_violation now, but we trigger task here)
+            # add_violation called above already marked it as COMPLETED if it reached the threshold
+            from ..core.tasks import run_background_task
+            from ..tasks.interview_tasks import process_session_results_task
+            run_background_task(process_session_results_task, session_obj.id)
 
             raise HTTPException(
                 status_code=403,
@@ -2322,6 +2312,9 @@ async def log_tab_switch(
             if elapsed > 30:
                 # Terminate
                 session_obj.is_suspended = True
+                session_obj.status = InterviewStatus.COMPLETED
+                session_obj.is_completed = True
+                session_obj.end_time = now
                 session_obj.suspension_reason = "tab_switch_timeout"
                 session_obj.suspended_at = now
                 session_obj.tab_warning_active = False
@@ -2335,6 +2328,10 @@ async def log_tab_switch(
                 # Ensure database is committed before raising exception
                 session_db.add(session_obj)
                 session_db.commit()
+
+                from ..core.tasks import run_background_task
+                from ..tasks.interview_tasks import process_session_results_task
+                run_background_task(process_session_results_task, session_obj.id)
 
                 raise HTTPException(
                     status_code=403,
@@ -2447,6 +2444,9 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
         if elapsed > 30:
             logger.warning(f"Session {session_obj.id}: Proactive termination due to tab-switch timeout ({elapsed}s)")
             session_obj.is_suspended = True
+            session_obj.status = InterviewStatus.COMPLETED
+            session_obj.is_completed = True
+            session_obj.end_time = now
             session_obj.suspension_reason = "tab_switch_timeout"
             session_obj.suspended_at = now
             session_obj.tab_warning_active = False
@@ -2461,6 +2461,10 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
             db.add(session_obj)
             db.commit()
             db.refresh(session_obj)
+
+            from ..core.tasks import run_background_task
+            from ..tasks.interview_tasks import process_session_results_task
+            run_background_task(process_session_results_task, session_obj.id)
             
     if session_obj.is_suspended:
         raise HTTPException(

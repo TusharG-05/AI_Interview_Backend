@@ -423,6 +423,9 @@ def add_violation(
     if severity == "critical":
         event.triggered_warning = True
         interview_session.is_suspended = True
+        interview_session.status = InterviewStatus.COMPLETED
+        interview_session.is_completed = True
+        interview_session.end_time = datetime.now(timezone.utc)
         interview_session.suspension_reason = f"Critical violation: {event_type}"
         interview_session.suspended_at = datetime.now(timezone.utc)
         
@@ -455,6 +458,9 @@ def add_violation(
         # Check if warnings exceeded
         if interview_session.warning_count >= interview_session.max_warnings:
             interview_session.is_suspended = True
+            interview_session.status = InterviewStatus.COMPLETED
+            interview_session.is_completed = True
+            interview_session.end_time = datetime.now(timezone.utc)
             interview_session.suspension_reason = f"Exceeded maximum warnings ({interview_session.max_warnings})"
             interview_session.suspended_at = datetime.now(timezone.utc)
             
@@ -568,6 +574,9 @@ def check_and_suspend(
         return False
     
     interview_session.is_suspended = True
+    interview_session.status = InterviewStatus.COMPLETED
+    interview_session.is_completed = True
+    interview_session.end_time = datetime.now(timezone.utc)
     interview_session.suspension_reason = reason
     interview_session.suspended_at = datetime.now(timezone.utc)
     
@@ -581,7 +590,7 @@ def check_and_suspend(
     session.add(interview_session)
     session.commit()
     
-    logger.info(f"Session {interview_session.id} manually suspended: {reason}")
+    logger.info(f"Session {interview_session.id} manually suspended and marked COMPLETED: {reason}")
     return True
 
 

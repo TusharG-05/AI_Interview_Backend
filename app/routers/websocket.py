@@ -105,20 +105,13 @@ async def websocket_candidate_violations(
                                 force_severity="warning"
                             )
                             
-                            # Check for suspension (3+ switches)
-                            if session_obj.tab_switch_count >= 3:
-                                session_obj.is_suspended = True
-                                session_obj.suspension_reason = "multiple_tab_switch"
-                                session_obj.suspended_at = now
-                                session_obj.tab_warning_active = False
-                                
-                                record_status_change(
-                                    session=session,
-                                    interview_session=session_obj,
-                                    new_status=CandidateStatus.SUSPENDED,
-                                    metadata={"reason": "multiple_tab_switch", "count": session_obj.tab_switch_count}
-                                )
-                            
+                            # Check for suspension (handled inside add_violation now, but we trigger task here)
+                            if session_obj.is_suspended:
+                                import asyncio
+                                from ..tasks.interview_tasks import process_session_results
+                                asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+                                logger.info(f"Interview {interview_id} suspended via tab-switch threshold, triggering evaluation.")
+
                             session.add(session_obj)
                             session.commit()
                             logger.info(f"Tab switch handled for interview {interview_id} (Count: {session_obj.tab_switch_count})")
@@ -148,6 +141,9 @@ async def websocket_candidate_violations(
                             if elapsed > 30:
                                 # Terminate due to timeout
                                 session_obj.is_suspended = True
+                                session_obj.status = InterviewStatus.COMPLETED
+                                session_obj.is_completed = True
+                                session_obj.end_time = now
                                 session_obj.suspension_reason = "tab_switch_timeout"
                                 session_obj.suspended_at = now
                                 session_obj.tab_warning_active = False
@@ -158,7 +154,12 @@ async def websocket_candidate_violations(
                                     new_status=CandidateStatus.SUSPENDED,
                                     metadata={"reason": "tab_switch_timeout", "elapsed_seconds": elapsed}
                                 )
-                                logger.warning(f"Interview {interview_id} suspended due to tab-switch timeout ({elapsed}s)")
+                                
+                                import asyncio
+                                from ..tasks.interview_tasks import process_session_results
+                                asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+                                
+                                logger.warning(f"Interview {interview_id} suspended due to tab-switch timeout ({elapsed}s), triggering evaluation.")
                             else:
                                 # Valid return within 30s
                                 session_obj.tab_warning_active = False
