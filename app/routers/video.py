@@ -1,15 +1,12 @@
 from typing import Optional, List, Dict, Union
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
-from fastapi.responses import StreamingResponse
-from fastapi_limiter.depends import RateLimiter
+from pydantic import BaseModel
 from ..services.camera import CameraService
 from ..schemas.shared.api_response import ApiResponse
-from pydantic import BaseModel
-import json
-import time
 from ..core.logger import get_logger
 from ..auth.dependencies import get_current_user_ws
-from ..models.db_models import User, UserRole
+from ..models.db_models import User
+from ..services import websocket_handler as handler
 
 # Proctoring/Heartbeat Limit (Rate limiting handled per-endpoint when needed)
 heavy_throttle = []
@@ -58,58 +55,28 @@ async def websocket_video_stream(
 ):
     """
     Binary WebSocket Fallback for Video Proctoring.
-    Receives raw frames from client, processes them via CameraService,
-    and returns real-time AI results (JSON) over the same connection.
-    
-    In development with ALLOW_UNAUTHENTICATED_WEBSOCKET=true, authentication is optional.
     """
-    # If auth failed and test mode not enabled, connection already closed by get_current_user_ws
-    if current_user is None:
+    connected = await handler.handle_video_stream_connect(interview_id, websocket, current_user)
+    if not connected:
         return
-
-    # Security: Candidate can only stream for THEIR OWN session.
-    # Admin / SuperAdmin can stream for anyone.
-    if current_user and current_user.role == UserRole.CANDIDATE:
-         from ..core.database import engine
-         from sqlmodel import Session, select
-         from ..models.db_models import InterviewSession
-         with Session(engine) as db_session:
-             session_obj = db_session.get(InterviewSession, interview_id)
-             if not session_obj or session_obj.candidate_id != current_user.id:
-                 await websocket.close(code=4003, reason="Forbidden: Not your session")
-                 return
-
-    await websocket.accept()
-    camera_service = get_camera_service()
-    
-    # Ensure detectors are running
-    if not camera_service.running:
-        camera_service.start()
-        
-    logger.info(f"WS-Video: Interview {interview_id} connected for binary streaming (user: {current_user.email if current_user else 'test-mode'}).")
     
     try:
         while True:
-            # 1. Receive binary frame
-            data = await websocket.receive_bytes()
-            if not data:
+            try:
+                data = await websocket.receive_bytes()
+                if not data:
+                    break
+                await handler.process_video_frame(interview_id, websocket, data)
+            except WebSocketDisconnect:
+                raise
+            except Exception as e:
+                handler.log_error(interview_id, f"Error receiving video bytes: {e}")
                 break
                 
-            # 2. Process via AI (Decodes and runs Face/Gaze models)
-            results = camera_service.process_external_frame(data, interview_id=interview_id)
-            
-            # 3. Return results instantly
-            await websocket.send_json({
-                "type": "proctoring_update",
-                "interview_id": interview_id,
-                "data": results,
-                "timestamp": time.time()
-            })
-            
     except WebSocketDisconnect:
-        logger.info(f"WS-Video: Interview {interview_id} disconnected.")
+        await handler.handle_video_stream_disconnect(interview_id)
     except Exception as e:
-        logger.error(f"WS-Video: Error in session {interview_id}: {e}")
+        handler.log_error(interview_id, f"Critical Video Stream error: {e}")
     finally:
         try:
             await websocket.close()
