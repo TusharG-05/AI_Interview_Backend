@@ -472,6 +472,21 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
                 elapsed_on_q = (now - last_sub_time).total_seconds()
                 curr_question_timer = max(0, int(q_duration_secs - elapsed_on_q))
 
+        # --- DYNAMIC GLOBAL TIMER FOR SEQUENTIAL MODE ---
+        # Recalculate global remaining time as the sum of all remaining budgets.
+        # This "refunds" time spent disconnected between questions.
+        n_theory = len(session.paper.questions) if session.paper else 0
+        n_coding = len(session.coding_paper.questions) if session.coding_paper else 0
+        idx = session.current_question_index or 0
+        
+        # Future budgets (excluding current question)
+        future_theory = max(0, n_theory - (idx + 1))
+        future_coding = max(0, n_coding - max(0, (idx + 1) - n_theory))
+        
+        # Total = Current + Future
+        dynamic_global_secs = (curr_question_timer or 0) + (future_theory * 300) + (future_coding * 1200)
+        curr_interview_timer = int(dynamic_global_secs)
+
     return InterviewAccessResponse(
         id=session.id,
         access_token=session.access_token,
@@ -1817,42 +1832,7 @@ async def submit_answer_audio(
     if question:
         q_text = question.question_text or question.content or ""
 
-    # Only evaluate if the frontend didn't already provide a score/feedback (from the separate Evaluate API)
-    if (answer.score == 0.0 or not answer.feedback) and not (score is not None and feedback is not None):
-        _evaluate_and_update_score(
-            db=session_db,
-            answer=answer,
-            question_text=q_text,
-            session_obj=session_obj,
-            result_obj=result,
-        )
-    else:
-        # If we skipped evaluation because data was provided, we still need to update the total result score
-        if session_obj and result:
-            from ..utils import calculate_total_score
-            from ..models.db_models import CodingAnswers
-            
-            all_answers = session_db.exec(select(Answers).where(Answers.interview_result_id == result.id)).all()
-            all_coding_answers = session_db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result.id)).all()
-            
-            all_scores = [a.score for a in all_answers if a.score is not None]
-            all_scores.extend([ca.score for ca in all_coding_answers if ca.score is not None])
-            
-            new_total = calculate_total_score(all_scores)
-            result.total_score = new_total
-            session_obj.total_score = new_total
-            
-            session_db.add(result)
-            session_db.add(session_obj)
-            session_db.commit()
-            
-            # broadcast_interview_update(session_db, session_obj, update_type="score_update")
-
-    # Refresh to get latest score/feedback written by the helper
-    try:
-        session_db.refresh(answer)
-    except Exception:
-        pass
+    # Evaluation is now handled by the separate Evaluate API to ensure millisecond response time.
 
     return ApiResponse(
         status_code=200,
@@ -1924,26 +1904,7 @@ async def submit_answer_code(
     question = session_db.get(CodingQuestions, coding_question_id)
     if not question: raise HTTPException(status_code=404, detail="Coding question not found")
 
-    if (answer.score == 0.0 or not answer.feedback) and not (score is not None and feedback is not None):
-        try:
-            _evaluate_and_update_score(session_db, answer, question.problem_statement or question.title or "", session, result)
-        except Exception as e:
-            logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
-    else:
-        # Recompute total score if evaluation was skipped
-        from ..utils import calculate_total_score
-        from ..models.db_models import Answers as TheoryAnswers
-        all_theory = session_db.exec(select(TheoryAnswers).where(TheoryAnswers.interview_result_id == result.id)).all()
-        all_coding = session_db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result.id)).all()
-        all_scores = [a.score for a in all_theory if a.score is not None]
-        all_scores.extend([ca.score for ca in all_coding if ca.score is not None])
-        new_total = calculate_total_score(all_scores)
-        result.total_score = new_total
-        session.total_score = new_total
-        session_db.add(result)
-        session_db.add(session)
-        session_db.commit()
-        # broadcast_interview_update(session_db, session, update_type="score_update")
+    # Evaluation is now handled by the separate Evaluate API.
     
     session_db.refresh(answer)
 
@@ -2049,24 +2010,7 @@ async def submit_answer_text(
         session_db.commit()
         session_db.refresh(answer)
 
-        if (answer.score == 0.0 or not answer.feedback) and not (score is not None and feedback is not None):
-            _evaluate_and_update_score(session_db, answer, coding_q.problem_statement or coding_q.title or "", session, result)
-        else:
-            # Recompute running total_score (sum) — same logic as in _evaluate_and_update_score
-            from ..utils import calculate_total_score
-            from ..models.db_models import Answers as TheoryAnswers
-            all_theory = session_db.exec(select(TheoryAnswers).where(TheoryAnswers.interview_result_id == result.id)).all()
-            all_coding = session_db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result.id)).all()
-            all_scores = [a.score for a in all_theory if a.score is not None]
-            all_scores.extend([ca.score for ca in all_coding if ca.score is not None])
-            new_total = calculate_total_score(all_scores)
-            result.total_score = new_total
-            session.total_score = new_total
-            session_db.add(result)
-            session_db.add(session)
-            session_db.commit()
-            # broadcast_interview_update(session_db, session, update_type="score_update")
-        session_db.refresh(answer)
+        # Evaluation is now handled by the separate Evaluate API.
 
         from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
         import json as _json
@@ -2133,7 +2077,7 @@ async def submit_answer_text(
     session_db.commit()
     session_db.refresh(answer)
 
-    _evaluate_and_update_score(session_db, answer, question.question_text or question.content or "", session, result)
+    # Evaluation is now handled by the separate Evaluate API.
     session_db.refresh(answer)
 
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer
@@ -2475,20 +2419,42 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
 
 def enforce_interview_duration(db: Session, session_obj: InterviewSession) -> None:
     """
-    Checks if the interview duration has exceeded based on start_time.
-    If expired, marks the interview as COMPLETED and blocks further actions.
+    Checks if the interview duration has exceeded.
+    
+    Behavior:
+    - Global Mode: Strictly enforced from start_time.
+    - Sequential Mode: Dynamically extended to ensure all questions get their full budget.
     """
     if session_obj.status == InterviewStatus.LIVE and session_obj.start_time:
         now = datetime.now(timezone.utc)
-        start_time = session_obj.start_time
-        if start_time.tzinfo is None:
-            start_time = start_time.replace(tzinfo=timezone.utc)
-            
-        expiration_time = start_time + timedelta(minutes=session_obj.duration_minutes)
         
-        if now > expiration_time:
+        if session_obj.allow_question_navigate:
+            # 1. GLOBAL MODE: Hard wall-clock limit
+            start_time = session_obj.start_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+                
+            expiration_time = start_time + timedelta(minutes=session_obj.duration_minutes)
+            is_expired = now > expiration_time
+        else:
+            # 2. SEQUENTIAL MODE: Relaxation.
+            # Sequential interviews are managed per-question. The "global" deadline 
+            # is dynamic and managed in serialization/enforcement. 
+            # We allow access as long as the session isn't explicitly completed.
+            is_expired = False
+            
+            # Optional: Add a safety timeout (e.g. 24 hours)
+            start_time = session_obj.start_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            if now > start_time + timedelta(hours=24):
+                is_expired = True
+
+        if is_expired:
             logger.warning(f"Session {session_obj.id}: Automatic completion due to duration timeout")
             from ..services.status_manager import complete_interview_session
+            from ..core.tasks import run_background_task
+            from ..tasks.interview_tasks import process_session_results_task
 
             complete_interview_session(
                 session=db,
@@ -2496,10 +2462,6 @@ def enforce_interview_duration(db: Session, session_obj: InterviewSession) -> No
                 reason="duration_timeout",
                 current_status_label="Completed (Time Limit)",
             )
-
-            # Trigger result processing task if needed
-            from ..core.tasks import run_background_task
-            from ..tasks.interview_tasks import process_session_results_task
             run_background_task(process_session_results_task, session_obj.id)
 
     if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:

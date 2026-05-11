@@ -67,17 +67,31 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
     started = has_started(session_obj)
     accessed = has_been_accessed(session_obj)
 
-    # For started sessions, enforce interview duration from start_time.
+    # For started sessions, enforce interview duration.
     if started:
         if session_obj.start_time is not None:
-            start_time = to_utc(session_obj.start_time)
-            duration_deadline = start_time + timedelta(minutes=session_obj.duration_minutes)
-            if now_utc > duration_deadline:
-                return InterviewAccessDecision(
-                    allowed=False,
-                    reason="duration_expired",
-                    duration_expired=True,
-                )
+            # 1. GLOBAL TIMER MODE: Enforce strict duration from start_time.
+            if session_obj.allow_question_navigate:
+                start_time = to_utc(session_obj.start_time)
+                duration_deadline = start_time + timedelta(minutes=session_obj.duration_minutes)
+                if now_utc > duration_deadline:
+                    return InterviewAccessDecision(
+                        allowed=False,
+                        reason="duration_expired",
+                        duration_expired=True,
+                    )
+            # 2. SEQUENTIAL MODE: Relaxation.
+            # Sequential interviews are managed per-question. We relax the strict
+            # duration_minutes, but add a 24-hour safety limit to cleanup orphaned sessions.
+            else:
+                start_time = to_utc(session_obj.start_time)
+                if now_utc > start_time + timedelta(hours=24):
+                    return InterviewAccessDecision(
+                        allowed=False,
+                        reason="duration_expired_safety",
+                        duration_expired=True,
+                    )
+            
         return InterviewAccessDecision(allowed=True, reason="started")
 
     entry_deadline = schedule_time + timedelta(minutes=session_obj.duration_minutes)
