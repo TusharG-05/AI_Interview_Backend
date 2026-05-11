@@ -81,11 +81,34 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
                         duration_expired=True,
                     )
             # 2. SEQUENTIAL MODE: Relaxation.
-            # Sequential interviews are managed per-question. We relax the strict
-            # duration_minutes, but add a 24-hour safety limit to cleanup orphaned sessions.
+            # Candidates get their full expected budget (sum of question times) 
+            # plus a 1-hour wall-clock buffer for disconnections/breaks.
             else:
+                # Calculate total expected duration based on budgets
+                # Theory: 5m each, Coding: 20m each
+                theory_count = 0
+                if session_obj.paper:
+                    try:
+                        theory_count = session_obj.paper.question_count or 0
+                    except Exception:
+                        pass
+                
+                coding_count = 0
+                if session_obj.coding_paper:
+                    try:
+                        coding_count = session_obj.coding_paper.question_count or 0
+                    except Exception:
+                        pass
+                
+                # Total budget in minutes
+                total_budget_mins = (theory_count * 5) + (coding_count * 20)
+                
+                # Use max of calculated budget or duration_minutes (legacy support)
+                base_duration = max(total_budget_mins, session_obj.duration_minutes or 0)
+                
+                # Safety limit = Total Duration + 60 minute buffer
                 start_time = to_utc(session_obj.start_time)
-                if now_utc > start_time + timedelta(hours=24):
+                if now_utc > start_time + timedelta(minutes=base_duration + 60):
                     return InterviewAccessDecision(
                         allowed=False,
                         reason="duration_expired_safety",
