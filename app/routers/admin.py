@@ -1323,8 +1323,13 @@ async def update_interview(
             detail="Not authorized to modify this interview session"
         )
     
-    # Prevent updates to live or completed interviews (business rule)
-    if interview_session.status in [InterviewStatus.LIVE, InterviewStatus.COMPLETED]:
+    # Prevent updates to active or completed interviews (business rule)
+    if interview_session.status in [
+        InterviewStatus.CONNECTED,
+        InterviewStatus.LIVE,
+        InterviewStatus.DISCONNECTED,
+        InterviewStatus.COMPLETED
+    ]:
         raise HTTPException(
             status_code=400, 
             detail=f"Cannot update interview with status '{interview_session.status.value}'. Only scheduled interviews can be modified."
