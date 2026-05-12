@@ -24,6 +24,9 @@ class ProgressInfo(BaseModel):
     total_questions: int
     current_question_id: Optional[int] = None
 
+class ProctoringEventResponse(BaseModel):
+    tab_switch_count: int
+
 class AdminInterviewsList(BaseModel):
     id: int
     access_token: Optional[str] = None
@@ -34,6 +37,7 @@ class AdminInterviewsList(BaseModel):
     interview_round: Optional[str] = None
     result_status: Optional[str] = Field(default="PENDING", description="Evaluation status: PENDING, PROCESSING, COMPLETED, PASS, or FAIL")
     allow_proctoring: bool = True
+    proctoring_event: Optional[ProctoringEventResponse] = None
 
     class Config:
         from_attributes = True
