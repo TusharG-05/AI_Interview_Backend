@@ -153,25 +153,59 @@ All Admin events now use a **Standardized Enriched Format**. The `interview_id` 
 
 ---
 
-### Example: Enriched Violation Event (Admin Side)
+## 3. Video Proctoring WebSocket (`/video/stream/{id}`)
+
+This is a high-frequency **Binary WebSocket** used for real-time AI proctoring (face detection, gaze tracking, and authentication).
+
+### 📥 Client → Server (Binary Data)
+
+The client should send raw video frames as binary data (`Blob` or `ArrayBuffer`). Frames are typically captured from a `<video>` element or `MediaStreamTrack` and sent at a rate of 1-5 frames per second.
+
+- **Format**: `Binary (JPEG/PNG)`
+- **Endpoint**: `/video/stream/{interview_id}?token=ACCESS_TOKEN`
+
+### 📤 Server → Client (Proctoring Updates)
+
+The server returns a JSON object for **every** frame processed.
+
+#### **Proctoring Update**
 ```json
 {
-    "event_type": "violation_detected",
+    "type": "proctoring_update",
+    "interview_id": 62,
+    "timestamp": 1715422800.123,
     "data": {
-        "interview_id": 62,
-        "interview_status": "LIVE",
-        "candidate": {
-            "candidate_id": 123,
-            "candidate_name": "John Doe",
-            "candidate_email": "john@example.com"
-        },
-        "proctoring_events": {
-            "tab_switch_count": 2
-        },
-        "dashboard_data": { "live": 1, "proctoring_activity": "5.00%", "failed_today": 0, "passed_today": 0 },
-        "violation_type": "tab_switch",
-        "details": "Tab switch detected (Attempt 2)",
-        "timestamp": "2026-05-06T13:20:15Z"
+        "auth": true,               // Whether the face matches the registered candidate
+        "auth_dist": 0.42,          // Confidence score (lower is better for matching)
+        "faces": 1,                 // Number of faces detected in the frame
+        "gaze": "Gazing Center",    // Gaze direction or "WARNING: Gazing Away"
+        "warning": "",              // "MULTIPLE FACES DETECTED", "NO FACE DETECTED", etc.
+        "box": [100, 200, 300, 150] // [top, right, bottom, left] of the detected face
     }
 }
 ```
+
+#### **Possible Warnings**
+- `""` (Empty string means no issues)
+- `INITIALIZING AI...` (Models are still loading on the server)
+- `MULTIPLE FACES DETECTED`
+- `NO FACE DETECTED`
+- `SECURITY ALERT: UNAUTHORIZED PERSON` (Face does not match the candidate)
+- `WARNING: Gazing Away`
+- `Bad Frame` (Frame decoding failed)
+
+---
+
+## 4. System Status WebSocket (`/status/ws`)
+
+A lightweight feed purely for real-time proctoring warnings (without the full AI coordinate data).
+
+### 📤 Server → Client (JSON)
+
+#### **Warning Feed**
+```json
+{
+    "warning": "NO FACE DETECTED"
+}
+```
+Possible values match the `warning` field in the Video Proctoring stream.

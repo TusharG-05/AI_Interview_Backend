@@ -1082,11 +1082,28 @@ async def list_interviews(
     skip: int = 0,
     limit: int = 20,
     search: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
     current_user: User = Depends(get_admin_user), 
     session: Session = Depends(get_session)
 ):
     """List interviews created by this admin."""
     query = select(InterviewSession)
+    
+    # 1. Date Filtering
+    if from_date:
+        try:
+            start_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(hour=0, minute=0, second=0, microsecond=0)
+            query = query.where(InterviewSession.schedule_time >= start_dt)
+        except ValueError:
+            logger.warning(f"Invalid from_date format: {from_date}")
+
+    if to_date:
+        try:
+            end_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(hour=23, minute=59, second=59, microsecond=999999)
+            query = query.where(InterviewSession.schedule_time <= end_dt)
+        except ValueError:
+            logger.warning(f"Invalid to_date format: {to_date}")
     
     if current_user.role != UserRole.SUPER_ADMIN:
         query = query.where(

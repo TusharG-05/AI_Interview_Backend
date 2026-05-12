@@ -993,7 +993,8 @@ async def start_session_logic(
     # Update Status
     if session.status in [InterviewStatus.SCHEDULED, InterviewStatus.CONNECTED, InterviewStatus.DISCONNECTED]:
         session.status = InterviewStatus.LIVE
-        session.start_time = datetime.now(timezone.utc)
+        if session.start_time is None:
+            session.start_time = datetime.now(timezone.utc)
         
         # Note: Broadcast removed here and moved to WebSocket 'start_interview' event
         # as requested to be triggered from frontend through candidate websocket.
