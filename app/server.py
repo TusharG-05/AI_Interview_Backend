@@ -4,6 +4,7 @@ import contextlib
 import sentry_sdk
 from typing import Any
 from fastapi import FastAPI
+from fastapi.routing import APIRouter, APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.routing import APIRouter, APIRoute
 from fastapi.responses import JSONResponse
@@ -181,6 +182,13 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Lifespan: Error closing Redis connection: {redis_close_err}")
     
     logger.info("Application Shutdown Complete.")
+
+class ExcludeNoneRoute(APIRoute):
+    """Custom route class that excludes None values from responses by default."""
+    def __init__(self, *args, **kw):
+        if "response_model_exclude_none" not in kw:
+            kw["response_model_exclude_none"] = True
+        super().__init__(*args, **kw)
 
 class ExcludeNoneRoute(APIRoute):
     """Custom route class that excludes None values from responses by default."""
