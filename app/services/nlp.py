@@ -35,8 +35,11 @@ class NLPService:
         
         temp_file_path = None
         try:
-            # 1. Handle Cloudinary or Local Path
-            if resume_path.startswith(('http://', 'https://')):
+            # 1. Handle Cloudinary or Local Path (Enforce HTTPS)
+            if resume_path.startswith('http://'):
+                resume_path = resume_path.replace('http://', 'https://', 1)
+
+            if resume_path.startswith('https://'):
                 def _download():
                     response = requests.get(resume_path, timeout=30)
                     response.raise_for_status()

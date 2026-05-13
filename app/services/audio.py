@@ -193,7 +193,10 @@ class AudioService:
         if not audio_path:
             return "", False
             
-        if audio_path.startswith(("http://", "https://")):
+        if audio_path.startswith("http://"):
+            audio_path = audio_path.replace("http://", "https://", 1)
+            
+        if audio_path.startswith("https://"):
             import tempfile
             import requests
             def _download_audio():

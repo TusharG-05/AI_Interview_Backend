@@ -18,8 +18,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     redis-server \
     && rm -rf /var/lib/apt/lists/*
 
+# Create a non-root user
+RUN useradd -m -u 1000 user
+USER user
+
 # Environment variables
-ENV PYTHONUNBUFFERED=TRUE \
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH \
+    PYTHONUNBUFFERED=TRUE \
     PYTHONPATH=/app \
     ENV=production \
     RENDER=true \
@@ -32,7 +38,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # ── Copy application code ────────────────────────────────────────────────────
-COPY . /app
+COPY --chmod=555 . /app
 
 # ── Skip ML model pre-download ──────────────────────────────────────────────
 # In orchestrator mode, models are offloaded to Modal/HF API.

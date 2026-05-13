@@ -28,13 +28,13 @@ ENV HOME=/home/user \
 
 # ── Install Python dependencies ──────────────────────────────────────────────
 # Copy unified requirements first to leverage Docker layer cache
-COPY --chown=user requirements.txt /app/requirements.txt
+COPY --chown=user --chmod=555 requirements.txt /app/requirements.txt
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # ── Copy application code ────────────────────────────────────────────────────
-COPY --chown=user . /app
+COPY --chown=user --chmod=555 . /app
 
 # ── Pre-download ML models at build time (avoids cold-start latency) ─────────
 RUN chmod +x /app/start.sh && \

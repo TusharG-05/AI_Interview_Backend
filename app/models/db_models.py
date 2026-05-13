@@ -160,7 +160,7 @@ class CodingQuestions(SQLModel, table=True):
     __tablename__ = "codingquestions"
 
     # Use a high random default id in tests to avoid numeric id collisions with Questions table
-    id: Optional[int] = Field(default_factory=lambda: random.randint(100000, 999999), primary_key=True)
+    id: Optional[int] = Field(default_factory=lambda: __import__('secrets').randbelow(900000) + 100000, primary_key=True)
     paper_id: int = Field(
         sa_column=Column(Integer, ForeignKey("codingquestionpaper.id", ondelete="CASCADE"), nullable=False)
     )

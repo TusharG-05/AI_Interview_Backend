@@ -107,7 +107,7 @@ async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_sessi
         raise HTTPException(status_code=403, detail="Interview link is not active.")
 
     # 3. Generate a secure 6-digit OTP
-    otp = f"{random.randint(100000, 999999)}"
+    otp = "".join(__import__('secrets').choice("0123456789") for _ in range(6))
     
     # 4. Store in Cache (Redis/In-Memory) with a 10-minute expiry
     redis_key = f"otp:{user.email.lower()}:{otp_data.access_token}"

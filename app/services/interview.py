@@ -97,20 +97,25 @@ def _safe_feedback_from_score(score_out_of_10: Any) -> str:
 
 def _extract_target_term(question: str) -> str:
     """Extract the main concept from definition-style questions."""
+    # Collapse multiple spaces and strip to normalize input for faster matching
     q = re.sub(r"\s+", " ", (question or "").strip().lower())
+    
+    # Use explicit single spaces since we collapsed them above, avoiding ReDoS risks
     patterns = [
-        r"^what\s+is\s+an?\s+(.+?)\??$",
-        r"^what\s+are\s+(.+?)\??$",
-        r"^define\s+(.+?)\??$",
-        r"^explain\s+(.+?)\??$",
+        r"^what is an? (.+?)\??$",
+        r"^what are (.+?)\??$",
+        r"^define (.+?)\??$",
+        r"^explain (.+?)\??$",
     ]
     for pattern in patterns:
         m = re.match(pattern, q)
         if m:
             term = m.group(1).strip(" .?")
-            # Remove trailing context words that are usually not part of the term.
-            term = re.sub(r"\s+in\s+python$", "", term).strip()
-            term = re.sub(r"^(a|an|the)\s+", "", term).strip()
+            # Optimized removal of common trailing context
+            if term.endswith(" in python"):
+                term = term[:-10].strip()
+            # Remove leading articles
+            term = re.sub(r"^(?:a|an|the) ", "", term).strip()
             return term
     return ""
 

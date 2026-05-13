@@ -1404,7 +1404,7 @@ async def update_interview(
         
         # Re-select questions
         if new_max:
-            selected_questions = random.sample(available_questions, new_max)
+            selected_questions = __import__('secrets').SystemRandom().sample(available_questions, new_max)
         else:
             selected_questions = available_questions
         
@@ -2114,8 +2114,12 @@ async def get_response_audio(
     if not (is_owner or is_unassigned or current_user.role == UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
-    if response.audio_path.startswith(("http://", "https://")):
+    if response.audio_path.startswith("https://"):
         return RedirectResponse(url=response.audio_path)
+    elif response.audio_path.startswith("http://"):
+        # Auto-upgrade to https or block if needed. Here we upgrade for better UX with security.
+        secure_url = response.audio_path.replace("http://", "https://", 1)
+        return RedirectResponse(url=secure_url)
         
     if not os.path.exists(response.audio_path):
         raise HTTPException(status_code=404, detail="Audio file missing on server")
@@ -2148,8 +2152,11 @@ async def get_enrollment_audio(
     if not (is_owner or is_unassigned or current_user.role == UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
-    if interview_session.enrollment_audio_path.startswith(("http://", "https://")):
+    if interview_session.enrollment_audio_path.startswith("https://"):
         return RedirectResponse(url=interview_session.enrollment_audio_path)
+    elif interview_session.enrollment_audio_path.startswith("http://"):
+        secure_url = interview_session.enrollment_audio_path.replace("http://", "https://", 1)
+        return RedirectResponse(url=secure_url)
 
     if not os.path.exists(interview_session.enrollment_audio_path):
         raise HTTPException(status_code=404, detail="Enrollment audio file missing on server")

@@ -115,8 +115,13 @@ async def generate_resume_prompt(
 
     temp_file_path = None
     try:
-        # 1. Handle Cloudinary or Local Path
-        if user.resume_path.startswith('https://') or user.resume_path.startswith('http://'):
+        # 1. Handle Cloudinary or Local Path (Enforce HTTPS)
+        if user.resume_path.startswith('https://'):
+            pass # Valid
+        elif user.resume_path.startswith('http://'):
+            user.resume_path = user.resume_path.replace('http://', 'https://', 1)
+        
+        if user.resume_path.startswith('https://'):
             # Download from URL
             def _download():
                 resp = requests.get(user.resume_path, timeout=30)
