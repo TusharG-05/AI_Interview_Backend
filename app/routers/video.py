@@ -131,12 +131,17 @@ async def offer(params: Offer):
     
     interview_id = params.interview_id or 0
     
-    # 1. Initialize Proctoring Data Channel (Server-provided status push)
-    channel = pc.createDataChannel("proctoring")
-    logger.info(f"WebRTC: Created Proctoring DataChannel for Session {interview_id}")
-    
-    active_sessions[interview_id] = {"pc": pc, "track": None, "channel": channel}
+    # 1. Register for Admin Ghost Mode (Identity handled below)
+    active_sessions[interview_id] = {"pc": pc, "track": None, "channel": None}
 
+    @pc.on("datachannel")
+    def on_datachannel(channel):
+        logger.info(f"WebRTC: DataChannel received from client for Session {interview_id}")
+        active_sessions[interview_id]["channel"] = channel
+        
+        # If the track was already initialized, link the channel now
+        if active_sessions[interview_id]["track"]:
+            active_sessions[interview_id]["track"].channel = channel
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
@@ -149,13 +154,16 @@ async def offer(params: Offer):
     @pc.on("track")
     def on_track(track):
         if track.kind == "video":
-            # 1. Wrap with AI and pass the DataChannel for real-time results
-            local_track = VideoTransformTrack(track, interview_id=interview_id, channel=channel)
+            # 1. Wrap with AI and pass the DataChannel (if already received)
+            current_channel = active_sessions.get(interview_id, {}).get("channel")
+            local_track = VideoTransformTrack(track, interview_id=interview_id, channel=current_channel)
+            
             # 2. Add to PC (Echo back to candidate)
             pc.addTrack(local_track)
+            
             # 3. Register for Admin Ghost Mode
             active_sessions[interview_id]["track"] = local_track
-            logger.info(f"WebRTC: Track registered for Session {interview_id} (DataChannel enabled)")
+            logger.info(f"WebRTC: Track registered for Session {interview_id} (Track initialized)")
 
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     await pc.setRemoteDescription(offer)

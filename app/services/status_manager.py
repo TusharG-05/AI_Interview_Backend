@@ -325,8 +325,8 @@ VIOLATION_SEVERITY = {
     "MULTIPLE FACES DETECTED": "warning",
     "NO FACE DETECTED": "warning",
     "tab_switch": "warning",
-    "SECURITY ALERT: UNAUTHORIZED PERSON": "critical",
-    "unauthorized_device": "critical",
+    "SECURITY ALERT: UNAUTHORIZED PERSON": "warning",
+    "unauthorized_device": "warning",
 }
 
 

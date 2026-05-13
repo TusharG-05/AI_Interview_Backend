@@ -4,288 +4,609 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Proctoring Live Monitor (V2)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Syne:wght@700;800&display=swap" rel="stylesheet">
     <style>
         :root {
             --primary: #6366f1;
             --danger: #ef4444;
             --success: #10b981;
+            --warning: #f59e0b;
             --bg: #0f172a;
             --card: #1e293b;
+            --card-border: rgba(255,255,255,0.06);
             --text: #f8fafc;
+            --muted: #94a3b8;
+            --idle: #64748b;
         }
-        body { 
-            font-family: 'Inter', sans-serif; 
-            background: var(--bg); 
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'JetBrains Mono', monospace;
+            background: var(--bg);
             color: var(--text);
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            padding: 40px;
-            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            min-height: 100vh;
         }
-        .container { max-width: 1000px; width: 100%; }
-        h1 { font-weight: 800; letter-spacing: -1px; margin-bottom: 30px; text-align: center; background: linear-gradient(to right, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        
+
+        /* Subtle grid overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            max-width: 1020px;
+            width: 100%;
+            position: relative;
+            z-index: 1;
+        }
+
+        h1 {
+            font-family: 'Syne', sans-serif;
+            font-weight: 800;
+            font-size: 2rem;
+            letter-spacing: -1px;
+            margin-bottom: 8px;
+            text-align: center;
+            background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            text-align: center;
+            font-size: 11px;
+            color: var(--muted);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-bottom: 32px;
+        }
+
+        /* ── Controls ─────────────────────────────────────── */
+        .controls {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 28px;
+            flex-wrap: wrap;
+        }
+
+        .controls label {
+            font-size: 12px;
+            color: var(--muted);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
+        .controls input {
+            background: var(--card);
+            border: 1px solid var(--card-border);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            width: 90px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .controls input:focus { border-color: var(--primary); }
+        .controls input.error { border-color: var(--danger); }
+
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 10px 28px;
+            border-radius: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 13px;
+            cursor: pointer;
+            letter-spacing: 1px;
+            transition: opacity 0.2s, transform 0.1s, background 0.2s;
+        }
+
+        .btn:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+        .btn:active:not(:disabled) { transform: translateY(0); }
+        .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+        .btn.stop { background: var(--danger); }
+
+        /* ── Dashboard Grid ───────────────────────────────── */
         .dashboard {
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-bottom: 20px;
+            gap: 18px;
+            margin-bottom: 18px;
+        }
+
+        @media (max-width: 680px) {
+            .dashboard { grid-template-columns: 1fr; }
+            #violation-alert { grid-column: span 1; }
         }
 
         .card {
             background: var(--card);
             border-radius: 16px;
-            padding: 24px;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255,255,255,0.05);
+            padding: 22px;
+            border: 1px solid var(--card-border);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         }
 
-        .video-box { position: relative; overflow: hidden; border-radius: 12px; background: #000; aspect-ratio: 4/3; }
-        video { width: 100%; height: 100%; object-fit: cover; }
-        .video-label { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; z-index: 10; }
-
-        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        .stat-item { background: rgba(255,255,255,0.03); padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
-        .stat-label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
-        .stat-value { font-size: 18px; font-weight: 700; color: #64748b; } /* Default to gray until data arrives */
-
+        /* ── Violation Banner ─────────────────────────────── */
         #violation-alert {
             grid-column: span 2;
-            padding: 20px;
+            padding: 18px 24px;
             border-radius: 12px;
             text-align: center;
+            font-family: 'Syne', sans-serif;
             font-weight: 800;
-            font-size: 20px;
-            background: rgba(100, 116, 139, 0.1);
-            color: #64748b;
-            border: 2px solid #64748b;
-            transition: all 0.3s ease;
+            font-size: 18px;
+            letter-spacing: 1px;
+            background: rgba(100, 116, 139, 0.08);
+            color: var(--idle);
+            border: 2px solid var(--idle);
+            transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
             text-transform: uppercase;
         }
+
         #violation-alert.scanning {
-            background: rgba(16, 185, 129, 0.1);
+            background: rgba(16, 185, 129, 0.08);
             color: var(--success);
             border-color: var(--success);
         }
+
         #violation-alert.active {
             background: rgba(239, 68, 68, 0.1);
             color: var(--danger);
             border-color: var(--danger);
-            animation: shake 0.5s ease-in-out;
+            animation: shake 0.45s ease-in-out;
         }
 
-        .controls { display: flex; gap: 10px; align-items: center; justify-content: center; margin-bottom: 30px; }
-        input { background: var(--card); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 10px 15px; border-radius: 8px; width: 80px; }
-        button { background: var(--primary); color: white; border: none; padding: 10px 25px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        @media (max-width: 680px) {
+            #violation-alert { grid-column: span 1; font-size: 14px; }
+        }
 
-        .logs { 
-            background: #000; 
-            color: #10b981; 
-            font-family: 'Fira Code', monospace; 
-            font-size: 12px; 
-            padding: 15px; 
-            border-radius: 12px; 
-            height: 150px; 
+        /* ── Video ────────────────────────────────────────── */
+        .video-box {
+            position: relative;
+            overflow: hidden;
+            border-radius: 10px;
+            background: #000;
+            aspect-ratio: 4/3;
+        }
+
+        video { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+        .video-label {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.65);
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            z-index: 10;
+            color: #e2e8f0;
+        }
+
+        /* ── Stats ────────────────────────────────────────── */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .stat-item {
+            background: rgba(255,255,255,0.03);
+            padding: 14px;
+            border-radius: 10px;
+            border: 1px solid var(--card-border);
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: var(--muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+
+        .stat-value {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--idle);
+            transition: color 0.3s;
+        }
+
+        /* ── Local Camera ─────────────────────────────────── */
+        .local-cam-wrap { margin-top: 18px; }
+
+        .local-cam-wrap .stat-label { margin-bottom: 8px; }
+
+        .local-video-box {
+            position: relative;
+            overflow: hidden;
+            border-radius: 8px;
+            background: #000;
+            height: 90px;
+        }
+
+        .local-video-box video { width: 100%; height: 100%; object-fit: cover; }
+
+        /* ── Logs ─────────────────────────────────────────── */
+        .logs {
+            background: #050d1a;
+            color: #10b981;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11.5px;
+            padding: 14px 16px;
+            border-radius: 12px;
+            height: 160px;
             overflow-y: auto;
-            border: 1px solid rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.06);
             width: 100%;
-            box-sizing: border-box;
+            line-height: 1.7;
         }
+
+        .logs::-webkit-scrollbar { width: 4px; }
+        .logs::-webkit-scrollbar-track { background: transparent; }
+        .logs::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+        /* ── Connection Badge ─────────────────────────────── */
+        #conn-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--muted);
+            margin-left: 8px;
+        }
+
+        #conn-badge .dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--idle);
+            transition: background 0.3s;
+        }
+
+        #conn-badge.connected .dot { background: var(--success); box-shadow: 0 0 6px var(--success); }
+        #conn-badge.failed .dot    { background: var(--danger);  box-shadow: 0 0 6px var(--danger); }
 
         @keyframes shake {
             0%, 100% { transform: translateX(0); }
-            25% { transform: translateX(-5px); }
-            75% { transform: translateX(5px); }
+            20%       { transform: translateX(-6px); }
+            40%       { transform: translateX(6px); }
+            60%       { transform: translateX(-4px); }
+            80%       { transform: translateX(4px); }
         }
     </style>
 </head>
 <body>
+<div class="container">
+    <h1>AI Proctoring Live Monitor</h1>
+    <p class="subtitle">Real-time AI-powered exam surveillance · V2</p>
 
-    <div class="container">
-        <h1>AI Proctoring Live Monitor (V2)</h1>
+    <div class="controls">
+        <label for="interviewId">Interview ID</label>
+        <input type="number" id="interviewId" value="1" min="1">
+        <button class="btn" id="startButton">Start Session</button>
+        <button class="btn stop" id="stopButton" disabled>Stop</button>
+        <span id="conn-badge"><span class="dot"></span><span id="conn-text">Idle</span></span>
+    </div>
 
-        <div class="controls">
-            <label>Interview ID:</label>
-            <input type="number" id="interviewId" value="1">
-            <button id="startButton">Start Live Session</button>
-        </div>
+    <div class="dashboard">
+        <!-- Violation Banner -->
+        <div id="violation-alert">Waiting for AI Feed…</div>
 
-        <div class="dashboard">
-            <!-- VIOLATION BANNER -->
-            <div id="violation-alert">Waiting for AI Feed...</div>
-
-            <!-- VIDEO FEEDS -->
-            <div class="card">
-                <div class="video-box">
-                    <div class="video-label">LIVE FEED (AI ANALYZED)</div>
-                    <video id="remoteVideo" autoplay playsinline></video>
-                </div>
-            </div>
-
-            <!-- LIVE STATS -->
-            <div class="card">
-                <div class="stats-grid">
-                    <div class="stat-item">
-                        <div class="stat-label">Faces Detected</div>
-                        <div id="val-faces" class="stat-value">--</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">Authentication</div>
-                        <div id="val-auth" class="stat-value">--</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">Gaze Status</div>
-                        <div id="val-gaze" class="stat-value">--</div>
-                    </div>
-                    <div class="stat-item">
-                        <div class="stat-label">Data Channel</div>
-                        <div id="val-dc" class="stat-value">Closed</div>
-                    </div>
-                </div>
-                <div style="margin-top: 20px;">
-                    <div class="stat-label">Local Camera Source (Handshake Source)</div>
-                    <div class="video-box" style="aspect-ratio: 16/9; margin-top: 10px; height: 100px;">
-                        <video id="localVideo" autoplay playsinline muted></video>
-                    </div>
-                </div>
+        <!-- Remote Video -->
+        <div class="card">
+            <div class="video-box">
+                <div class="video-label">Live Feed — AI Analyzed</div>
+                <video id="remoteVideo" autoplay playsinline></video>
             </div>
         </div>
 
-        <div class="logs" id="logs">
-            <div>[System] Initializing...</div>
+        <!-- Stats + Local Camera -->
+        <div class="card">
+            <div class="stats-grid">
+                <div class="stat-item">
+                    <div class="stat-label">Faces Detected</div>
+                    <div id="val-faces" class="stat-value">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Authentication</div>
+                    <div id="val-auth" class="stat-value">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Gaze Status</div>
+                    <div id="val-gaze" class="stat-value">--</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Data Channel</div>
+                    <div id="val-dc" class="stat-value">Closed</div>
+                </div>
+            </div>
+
+            <div class="local-cam-wrap">
+                <div class="stat-label">Local Camera (Handshake Source)</div>
+                <div class="local-video-box">
+                    <video id="localVideo" autoplay playsinline muted></video>
+                </div>
+            </div>
         </div>
     </div>
 
-    <script>
-        const localVideo = document.getElementById('localVideo');
-        const remoteVideo = document.getElementById('remoteVideo');
-        const startButton = document.getElementById('startButton');
-        const logsDiv = document.getElementById('logs');
-        
-        // Stats Elements
-        const elFaces = document.getElementById('val-faces');
-        const elAuth = document.getElementById('val-auth');
-        const elGaze = document.getElementById('val-gaze');
-        const elDC = document.getElementById('val-dc');
-        const elAlert = document.getElementById('violation-alert');
+    <div class="logs" id="logs">
+        <div>[System] Ready. Enter an Interview ID and press Start.</div>
+    </div>
+</div>
 
-        let pc = null;
-        let dc = null;
+<script>
+    // ── DOM refs ────────────────────────────────────────────────
+    const localVideo   = document.getElementById('localVideo');
+    const remoteVideo  = document.getElementById('remoteVideo');
+    const startButton  = document.getElementById('startButton');
+    const stopButton   = document.getElementById('stopButton');
+    const logsDiv      = document.getElementById('logs');
+    const idInput      = document.getElementById('interviewId');
+    const connBadge    = document.getElementById('conn-badge');
+    const connText     = document.getElementById('conn-text');
 
-        function log(msg, color = "#10b981") {
-            const div = document.createElement('div');
-            div.style.color = color;
-            div.textContent = `[${new Date().toLocaleTimeString()}] > ${msg}`;
-            logsDiv.appendChild(div);
-            logsDiv.scrollTop = logsDiv.scrollHeight;
+    const elFaces = document.getElementById('val-faces');
+    const elAuth  = document.getElementById('val-auth');
+    const elGaze  = document.getElementById('val-gaze');
+    const elDC    = document.getElementById('val-dc');
+    const elAlert = document.getElementById('violation-alert');
+
+    // ── State ───────────────────────────────────────────────────
+    let pc     = null;   // RTCPeerConnection
+    let dc     = null;   // RTCDataChannel
+    let stream = null;   // Local MediaStream
+
+    // ── Helpers ─────────────────────────────────────────────────
+    function log(msg, color = '#10b981') {
+        const div = document.createElement('div');
+        div.style.color = color;
+        div.textContent = `[${new Date().toLocaleTimeString()}] > ${msg}`;
+        logsDiv.appendChild(div);
+        logsDiv.scrollTop = logsDiv.scrollHeight;
+    }
+
+    function setConnectionBadge(state) {
+        // state: 'idle' | 'connecting' | 'connected' | 'failed'
+        connBadge.className = '';
+        if (state === 'connected') { connBadge.classList.add('connected'); connText.textContent = 'Connected'; }
+        else if (state === 'failed') { connBadge.classList.add('failed');  connText.textContent = 'Failed'; }
+        else if (state === 'connecting')  { connText.textContent = 'Connecting…'; }
+        else { connText.textContent = 'Idle'; }
+    }
+
+    // FIX 7 – reset stat values and their colors explicitly (not via querySelectorAll)
+    function resetStats() {
+        const pairs = [
+            [elFaces, '--'], [elGaze, '--'],
+            [elAuth,  '--'], [elDC,   'Closed']
+        ];
+        for (const [el, txt] of pairs) {
+            el.textContent = txt;
+            el.style.color = 'var(--idle)';
+        }
+        elAlert.textContent = 'Waiting for AI Feed…';
+        elAlert.className   = '';
+    }
+
+    // FIX 4 + 5 – properly tear down all resources
+    function cleanup() {
+        if (dc) { try { dc.close(); } catch (_) {} dc = null; }
+
+        if (pc) {
+            pc.ontrack              = null;
+            pc.ondatachannel        = null;
+            pc.onconnectionstatechange  = null;
+            pc.oniceconnectionstatechange = null;
+            pc.onicegatheringstatechange  = null;
+            try { pc.close(); } catch (_) {}
+            pc = null;
         }
 
-        async function start() {
-            startButton.disabled = true;
-            elDC.textContent = "Connecting...";
-            log("Step 1: Requesting Media Devices...");
+        // FIX 5 – stop camera tracks to release the hardware indicator
+        if (stream) {
+            stream.getTracks().forEach(t => t.stop());
+            stream = null;
+        }
 
-            try {
-                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                localVideo.srcObject = stream;
-                log("Step 2: Local Camera Active.");
+        localVideo.srcObject  = null;
+        remoteVideo.srcObject = null;
 
-                const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
-                pc = new RTCPeerConnection(config);
+        // Reset DC stat specifically (it has its own colour logic)
+        elDC.textContent  = 'Closed';
+        elDC.style.color  = 'var(--idle)';
 
-                // Monitor connection state
-                pc.onconnectionstatechange = () => {
-                    log(`Connection State Change: ${pc.connectionState}`, "#c084fc");
-                };
+        setConnectionBadge('idle');
+        startButton.disabled = false;
+        stopButton.disabled  = true;
+    }
 
-                stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    // ── Main start ──────────────────────────────────────────────
+    async function start() {
+        // FIX 9 – validate Interview ID before doing anything
+        const interviewId = parseInt(idInput.value, 10);
+        if (isNaN(interviewId) || interviewId < 1) {
+            idInput.classList.add('error');
+            log('ERROR: Invalid Interview ID. Please enter a positive integer.', '#ef4444');
+            setTimeout(() => idInput.classList.remove('error'), 2000);
+            return;
+        }
 
-                pc.ontrack = (event) => {
-                    log("Step 5: Server Video Stream Received (Echo).", "#6366f1");
-                    remoteVideo.srcObject = event.streams[0];
-                };
+        // FIX 4 – tear down any existing connection before creating a new one
+        cleanup();
 
-                // The server will create the DataChannel. We must be ready to receive it.
-                pc.ondatachannel = (event) => {
-                    dc = event.channel;
-                    log(`Step 6: DataChannel Received (${dc.label})`, "#fbbf24");
-                    
-                    dc.onopen = () => {
-                        log("DataChannel is now OPEN.", "#10b981");
-                        elDC.textContent = "Open";
-                        elDC.style.color = "var(--success)";
-                        // Send a ping to the server to ensure the pipe is flowing
-                        dc.send(JSON.stringify({type: "ping"}));
-                    };
+        startButton.disabled = true;
+        stopButton.disabled  = false;
+        setConnectionBadge('connecting');
+        resetStats();
 
-                    dc.onclose = () => {
-                        log("DataChannel is CLOSED.", "#ef4444");
-                        elDC.textContent = "Closed";
-                    };
+        log('Step 1: Requesting media devices…');
 
-                    dc.onmessage = (e) => {
-                        try {
-                            const msg = JSON.parse(e.data);
-                            if (msg.type === "proctoring_update") {
-                                updateUI(msg.data);
-                            }
-                        } catch (err) {
-                            log("Non-JSON message received: " + e.data, "#94a3b8");
-                        }
-                    };
-                };
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            localVideo.srcObject = stream;
+            log('Step 2: Local camera active.');
 
-                log("Step 3: Creating WebRTC Offer...");
-                const offer = await pc.createOffer();
-                await pc.setLocalDescription(offer);
+            const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            pc = new RTCPeerConnection(config);
 
-                log("Step 4: Sending Offer to API...");
-                const response = await fetch('/api/video/offer', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sdp: pc.localDescription.sdp,
-                        type: pc.localDescription.type,
-                        interview_id: parseInt(document.getElementById('interviewId').value)
-                    })
-                });
+            // FIX 3 – handle connection failures, re-enable UI on terminal states
+            pc.onconnectionstatechange = () => {
+                const s = pc.connectionState;
+                log(`Connection state → ${s}`, '#c084fc');
 
-                const result = await response.json();
-                if (result.status_code === 200) {
-                    log("Step 5: Server Answer Received. Completing Handshake...");
-                    await pc.setRemoteDescription(new RTCSessionDescription(result.data));
-                } else {
-                    throw new Error(result.message || "Server Error");
+                if (s === 'connected') {
+                    setConnectionBadge('connected');
                 }
 
-            } catch (err) {
-                log(`CRITICAL ERROR: ${err.message}`, "#ef4444");
-                elDC.textContent = "Failed";
-                startButton.disabled = false;
+                if (['failed', 'disconnected', 'closed'].includes(s)) {
+                    log('Connection lost. Session ended.', '#ef4444');
+                    setConnectionBadge('failed');
+                    cleanup();
+                }
+            };
+
+            // FIX 8 – surface ICE failures
+            pc.oniceconnectionstatechange = () => {
+                log(`ICE connection state → ${pc.iceConnectionState}`, '#94a3b8');
+                if (pc.iceConnectionState === 'failed') {
+                    log('ICE negotiation failed. Check network / TURN settings.', '#ef4444');
+                }
+            };
+
+            pc.onicegatheringstatechange = () => {
+                log(`ICE gathering state → ${pc.iceGatheringState}`, '#94a3b8');
+            };
+
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+            pc.ontrack = (event) => {
+                // FIX 1 – corrected step number (was duplicated as Step 5)
+                log('Step 6: Server video stream received (echo).', '#6366f1');
+                remoteVideo.srcObject = event.streams[0];
+            };
+
+            // Step 7: Create DataChannel on client side (Offerer)
+            // This ensures the channel is negotiated correctly in the SDP offer.
+            dc = pc.createDataChannel("proctoring");
+            log('Step 7: DataChannel created ("proctoring").', '#fbbf24');
+
+            dc.onopen = () => {
+                log('DataChannel is now OPEN.', '#10b981');
+                elDC.textContent = 'Open';
+                elDC.style.color = 'var(--success)';
+                dc.send(JSON.stringify({ type: 'ping' }));
+            };
+
+            dc.onclose = () => {
+                log('DataChannel closed.', '#ef4444');
+                elDC.textContent = 'Closed';
+                elDC.style.color = 'var(--idle)';
+            };
+
+            dc.onerror = (err) => {
+                log(`DataChannel error: ${err}`, '#ef4444');
+            };
+
+            dc.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    if (msg.type === 'proctoring_update') updateUI(msg.data);
+                } catch (_) {
+                    log('Non-JSON message received: ' + e.data, '#94a3b8');
+                }
+            };
+
+            log('Step 3: Creating WebRTC offer…');
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            log('Step 4: Sending offer to API…');
+            const response = await fetch('/api/video/offer', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sdp:          pc.localDescription.sdp,
+                    type:         pc.localDescription.type,
+                    interview_id: interviewId          // already validated above
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
-        }
 
-        function updateUI(data) {
-            // Wake up the stats UI
-            document.querySelectorAll('.stat-value').forEach(el => el.style.color = "var(--text)");
+            const result = await response.json();
 
-            elFaces.textContent = data.faces;
-            elAuth.textContent = data.auth ? "Verified ✓" : "Unauthorized ✗";
-            elAuth.style.color = data.auth ? "var(--success)" : "var(--danger)";
-            elGaze.textContent = data.gaze;
-
-            if (data.warning && data.warning !== "") {
-                elAlert.textContent = `⚠️ VIOLATION: ${data.warning}`;
-                elAlert.className = "active";
+            if (result.status_code === 200) {
+                log('Step 5: Server answer received. Completing handshake…');
+                await pc.setRemoteDescription(new RTCSessionDescription(result.data));
             } else {
-                elAlert.textContent = "✅ NO VIOLATIONS DETECTED";
-                elAlert.className = "scanning";
+                throw new Error(result.message || 'Unknown server error');
             }
-        }
 
-        startButton.onclick = start;
-    </script>
+        } catch (err) {
+            log(`CRITICAL ERROR: ${err.message}`, '#ef4444');
+            setConnectionBadge('failed');
+            cleanup();   // FIX 2 + 5 – always re-enable button and free camera on error
+        }
+    }
+
+    function updateUI(data) {
+        // FIX 7 – update only the relevant stats, each with its own colour logic
+        elFaces.textContent = data.faces;
+        elFaces.style.color = 'var(--text)';
+
+        elGaze.textContent = data.gaze;
+        elGaze.style.color = 'var(--text)';
+
+        elAuth.textContent = data.auth ? 'Verified ✓' : 'Unauthorized ✗';
+        elAuth.style.color = data.auth ? 'var(--success)' : 'var(--danger)';
+
+        // Leave elDC alone — it is managed by the DataChannel open/close events
+
+        if (data.warning && data.warning.trim() !== '') {
+            elAlert.textContent = `⚠ VIOLATION: ${data.warning}`;
+            elAlert.className   = 'active';
+        } else {
+            elAlert.textContent = '✅ NO VIOLATIONS DETECTED';
+            elAlert.className   = 'scanning';
+        }
+    }
+
+    // ── Button bindings ─────────────────────────────────────────
+    startButton.onclick = start;
+
+    stopButton.onclick = () => {
+        log('Session manually stopped by operator.', '#f59e0b');
+        cleanup();
+    };
+</script>
 </body>
 </html>
