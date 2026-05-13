@@ -26,9 +26,12 @@ class TestAIReScoring(unittest.TestCase):
         # Invalid input: "bad" as score -> 0.0
         self.assertEqual(calculate_scaled_score("bad", 10.0), 0.0)
 
-    @patch('app.services.interview.groq_client')
-    def test_evaluate_answer_scaling_groq(self, mock_groq):
+    @patch('app.services.interview.get_interview_groq')
+    def test_evaluate_answer_scaling_groq(self, mock_get_groq):
         """Test that evaluate_answer_content correctly scales Groq output."""
+        mock_groq = MagicMock()
+        mock_get_groq.return_value = mock_groq
+        
         mock_response = MagicMock()
         mock_response.choices[0].message.content = json.dumps({
             "feedback": "Excellent work.",
@@ -46,9 +49,12 @@ class TestAIReScoring(unittest.TestCase):
         self.assertEqual(result['score'], 19.0)
         self.assertEqual(result['feedback'], "Excellent work.")
 
-    @patch('app.services.interview.groq_client')
-    def test_retry_mechanism(self, mock_groq):
+    @patch('app.services.interview.get_interview_groq')
+    def test_retry_mechanism(self, mock_get_groq):
         """Test that the 2-attempt retry works if JSON is malformed initially."""
+        mock_groq = MagicMock()
+        mock_get_groq.return_value = mock_groq
+        
         # 1st call fails (malformed JSON), 2nd call succeeds
         mock_groq.chat.completions.create.side_effect = [
             Exception("Simulated API Error"),

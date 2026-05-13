@@ -1,47 +1,100 @@
-from typing import Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse
+from typing import Optional, List, Dict, Union
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from pydantic import BaseModel
 from ..services.camera import CameraService
-from ..schemas.api_response import ApiResponse
-import time
-import asyncio
-import json
+from ..schemas.shared.api_response import ApiResponse
 from ..core.logger import get_logger
+from ..auth.dependencies import get_current_user_ws
+from ..models.db_models import User
+from ..services import websocket_handler as handler
+
+# Proctoring/Heartbeat Limit (Rate limiting handled per-endpoint when needed)
+heavy_throttle = []
 
 
-router = APIRouter(tags=["Gaze & Face Analysis"])
+
 logger = get_logger(__name__)
-camera_service = CameraService()
 
-def frame_generator(interview_id: int):
-    """Yields MJPEG frames synchronized with the camera service for a specific session."""
-    last_id = -1
-    while True:
-        frame, current_id = camera_service.get_frame(interview_id)
-        if frame is None:
-            # Placeholder for inactive sessions
-            placeholder = b'\xff\xd8\xff\xdb\x00\x43\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\x09\x09\x08\x0a\x0c\x14\x0d\x0c\x0b\x0b\x0c\x19\x12\x13\x0f\x14\x1d\x1a\x1f\x1e\x1d\x1a\x1c\x1c\x20\x24\x2e\x27\x20\x22\x2c\x23\x1c\x1c\x28\x37\x29\x2c\x30\x31\x34\x34\x34\x1f\x27\x39\x3d\x38\x32\x3c\x2e\x33\x34\x32\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00\xff\xc4\x00\x1a\x00\x01\x01\x01\x01\x01\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x05\x01\x02\x03\x06\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00\xf5\x7a\x00\xff\xd9'
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + placeholder + b'\r\n')
-            time.sleep(1.0) # Slow pulse for inactive
-            continue
-        if current_id == last_id:
-            time.sleep(0.01)
-            continue
-        last_id = current_id
-        yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+router = APIRouter(prefix="/video", tags=["Video"])
 
-@router.get("/video/video_feed")
-async def video_feed(interview_id: int):
-    """Streams the isolated annotated video feed for a specific session."""
-    if not camera_service.running: camera_service.start()
-    return StreamingResponse(frame_generator(interview_id), media_type="multipart/x-mixed-replace; boundary=frame")
+# --- Camera Service Singleton ---
+def get_camera_service():
+    """Returns the CameraService singleton instance."""
+    return CameraService()
 
+# --- Proctoring Helpers ---
+
+
+@router.get("/status", dependencies=heavy_throttle)
+async def proctoring_status(interview_id: int = Query(0)):
+    """Returns the current proctoring warning and detection details for a session."""
+    camera_service = get_camera_service()
+    if not camera_service._detectors_ready:
+        return ApiResponse(status_code=202, data={"status": "initializing"}, message="Detectors are not ready yet.")
+    warning = camera_service.get_current_warning(interview_id)
+    detectors_ready = camera_service._detectors_ready
+    last_result = camera_service.session_results.get(interview_id, {})
+    return ApiResponse(
+        status_code=200,
+        data={
+            "interview_id": interview_id,
+            "warning": warning,
+            "detectors_ready": detectors_ready,
+            "faces_detected": last_result.get("faces", "N/A"),
+            "gaze": last_result.get("gaze", "N/A"),
+            "detectors": last_result.get("detectors", {}),
+        },
+        message="OK"
+    )
+
+@router.websocket("/stream/{interview_id}")
+async def websocket_video_stream(
+    websocket: WebSocket, 
+    interview_id: int,
+    current_user: User = Depends(get_current_user_ws)
+):
+    """
+    Binary WebSocket Fallback for Video Proctoring.
+    """
+    connected = await handler.handle_video_stream_connect(interview_id, websocket, current_user)
+    if not connected:
+        return
+    
+    try:
+        while True:
+            try:
+                data = await websocket.receive_bytes()
+                if not data:
+                    break
+                await handler.process_video_frame(interview_id, websocket, data)
+            except WebSocketDisconnect:
+                raise
+            except Exception as e:
+                handler.log_error(interview_id, f"Error receiving video bytes: {e}")
+                break
+                
+    except WebSocketDisconnect:
+        await handler.handle_video_stream_disconnect(interview_id)
+    except Exception as e:
+        handler.log_error(interview_id, f"Critical Video Stream error: {e}")
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # --- WebRTC Signaling ---
-from aiortc import RTCPeerConnection, RTCSessionDescription
-from ..services.webrtc import VideoTransformTrack
-from pydantic import BaseModel
+# aiortc requires native system libs (libsrtp2, libav) that are unavailable on some
+# platforms (e.g. HF Spaces). Import it conditionally so startup never crashes.
+try:
+    from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
+    from ..services.webrtc import VideoTransformTrack
+    WEBRTC_AVAILABLE = True
+except ImportError:
+    WEBRTC_AVAILABLE = False
+    logger.warning("aiortc not installed — WebRTC endpoints are disabled on this deployment.")
+
 
 class Offer(BaseModel):
     sdp: str
@@ -53,41 +106,37 @@ pcs = set()
 # Global registry for active sessions: {interview_id: {"pc": pc, "track": video_track}}
 active_sessions = {}
 
-@router.post("/video/offer", response_model=ApiResponse[dict])
+@router.post("/offer", response_model=ApiResponse[dict], dependencies=heavy_throttle)
 async def offer(params: Offer):
     """
     Candidate Connection (Proctoring Source). 
     Registers identity and initializes session-isolated AI.
     """
-    offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
+    logger.info(f"WebRTC: Offer received for interview_id: {params.interview_id}")
     
+    if not WEBRTC_AVAILABLE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="WebRTC (aiortc) is not available on this deployment.")
+
+
     # Cloud Optimization: Add Google STUN servers for NAT traversal
-    ice_config = {
-        "iceServers": [
-            {"urls": "stun:stun.l.google.com:19302"},
-            {"urls": "stun:stun1.l.google.com:19302"},
-            {"urls": "stun:stun2.l.google.com:19302"}
-        ]
-    }
-    pc = RTCPeerConnection(configuration=ice_config)
+    ice_servers = [
+        RTCIceServer(urls="stun:stun.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun1.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun2.l.google.com:19302")
+    ]
+    configuration = RTCConfiguration(iceServers=ice_servers)
+    pc = RTCPeerConnection(configuration=configuration)
+    pcs.add(pc)
     
     interview_id = params.interview_id or 0
-    active_sessions[interview_id] = {"pc": pc, "track": None}
-
-    # Register Candidate Identity (Embedding) from DB
-    from ..core.database import engine
-    from sqlmodel import Session, select
-    from ..models.db_models import InterviewSession, User
     
-    with Session(engine) as db_session:
-        # Join session and user to get embedding
-        stmt = select(User).join(InterviewSession, InterviewSession.candidate_id == User.id).where(InterviewSession.id == interview_id)
-        user = db_session.exec(stmt).first()
-        if user and user.face_embedding:
-            camera_service.face_detector.register_session_identity(interview_id, user.face_embedding)
-            logger.info(f"Identity registered for Session {interview_id}")
+    # 1. Initialize Proctoring Data Channel (Server-provided status push)
+    channel = pc.createDataChannel("proctoring")
+    logger.info(f"WebRTC: Created Proctoring DataChannel for Session {interview_id}")
+    
+    active_sessions[interview_id] = {"pc": pc, "track": None, "channel": channel}
 
-    logger.info(f"WebRTC: New Candidate Connection {interview_id}")
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
@@ -100,17 +149,39 @@ async def offer(params: Offer):
     @pc.on("track")
     def on_track(track):
         if track.kind == "video":
-            # 1. Wrap with AI
-            local_track = VideoTransformTrack(track, interview_id=interview_id)
+            # 1. Wrap with AI and pass the DataChannel for real-time results
+            local_track = VideoTransformTrack(track, interview_id=interview_id, channel=channel)
             # 2. Add to PC (Echo back to candidate)
             pc.addTrack(local_track)
             # 3. Register for Admin Ghost Mode
             active_sessions[interview_id]["track"] = local_track
-            logger.info(f"WebRTC: Track registered for Session {interview_id}")
+            logger.info(f"WebRTC: Track registered for Session {interview_id} (DataChannel enabled)")
 
+    offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
+
+
+    # Register Candidate Identity (Embedding) from DB
+    from ..core.database import engine
+    from sqlmodel import Session, select
+    from ..models.db_models import InterviewSession, User
+    
+    with Session(engine) as db_session:
+        # Join session and user to get embedding
+        stmt = select(User).join(InterviewSession, InterviewSession.candidate_id == User.id).where(InterviewSession.id == interview_id)
+        user = db_session.exec(stmt).first()
+        if user and user.face_embedding:
+            cam = get_camera_service()
+            if cam.face_detector:
+                cam.face_detector.register_session_identity(interview_id, user.face_embedding)
+                logger.info(f"Identity registered for Session {interview_id}")
+            else:
+                logger.info(f"Identity registration skipped: Face detector is not initialized in this environment.")
+
+
+    logger.info(f"WebRTC: Handshake complete for Session {interview_id}")
 
     return ApiResponse(
         status_code=200,
@@ -118,12 +189,16 @@ async def offer(params: Offer):
         message="WebRTC offer processed successfully"
     )
 
-@router.post("/video/watch/{target_session_id}", response_model=ApiResponse[dict])
+
+@router.post("/watch/{target_session_id}", response_model=ApiResponse[dict], dependencies=heavy_throttle)
 async def watch(target_session_id: int, params: Offer):
     """
     Admin Ghost Mode: Watch an active session.
     Waits up to 10 seconds for candidate stream to be available.
     """
+    if not WEBRTC_AVAILABLE:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=503, detail="WebRTC (aiortc) is not available on this deployment.")
     import asyncio
     import time
     
@@ -149,14 +224,13 @@ async def watch(target_session_id: int, params: Offer):
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     
     # Cloud Optimization: Add Google STUN servers for NAT traversal
-    ice_config = {
-        "iceServers": [
-            {"urls": "stun:stun.l.google.com:19302"},
-            {"urls": "stun:stun1.l.google.com:19302"},
-            {"urls": "stun:stun2.l.google.com:19302"}
-        ]
-    }
-    pc = RTCPeerConnection(configuration=ice_config)
+    ice_servers = [
+        RTCIceServer(urls="stun:stun.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun1.l.google.com:19302"),
+        RTCIceServer(urls="stun:stun2.l.google.com:19302")
+    ]
+    configuration = RTCConfiguration(iceServers=ice_servers)
+    pc = RTCPeerConnection(configuration=configuration)
     
     # Track the admin PC to prevent garbage collection
     pcs.add(pc)

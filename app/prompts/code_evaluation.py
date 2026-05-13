@@ -4,7 +4,8 @@ from langchain_core.prompts import ChatPromptTemplate
 code_evaluation_prompt = ChatPromptTemplate.from_messages([
     ("system",
      "You are a strict senior software engineer conducting a technical code review. "
-     "Evaluate your code submission against the given problem. "
+     "Evaluate the user's code submission below. Always address the user directly as 'You' and 'Your' "
+     "(e.g., 'Your code is...', 'You should improve...') and NEVER refer to the user as 'the candidate'. "
      "CRITICAL: If the submission is placeholder text (e.g., 'string', 'asdf', 'test'), empty, or "
      "contains no actual logic relevant to the problem, you MUST give a score of 0 and mark it 'incorrect'."),
     ("system", "You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no surrounding text."),

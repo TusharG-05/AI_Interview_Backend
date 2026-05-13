@@ -1,12 +1,8 @@
-
-import requests
 import uuid
-import os
 import os
 from datetime import datetime, timezone, timedelta
 from app.models.db_models import UserRole, InterviewStatus
 
-BASE_URL = "http://localhost:8000/api"
 ADMIN_EMAIL = "admin@test.com"
 ADMIN_PASS = "admin123"
 
@@ -55,7 +51,7 @@ def test_comprehensive_workflow(client, session, test_users, auth_headers, super
         "difficulty": "Easy",
         "marks": 10,
         "response_type": "text"
-    })
+    }, headers=auth_headers)
     assert q_res.status_code == 201, f"Adding Question failed: {q_res.text}"
     q_id = q_res.json()["data"]["id"]
     print(f" Question Added: ID {q_id}")
@@ -68,7 +64,7 @@ def test_comprehensive_workflow(client, session, test_users, auth_headers, super
         "interview_round": "ROUND_1",
         "schedule_time": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
         "duration_minutes": 60
-    })
+    }, headers=auth_headers)
     assert sched_res.status_code == 201, f"Scheduling failed: {sched_res.text}"
     interview_id = sched_res.json()["data"]["interview"]["id"]
     access_token = sched_res.json()["data"]["access_token"]
@@ -80,17 +76,17 @@ def test_comprehensive_workflow(client, session, test_users, auth_headers, super
         "password": "TestPass123!", 
         "access_token": access_token
     })
-    assert cand_login_res.status_code == 200, f"Candidate Login failed: {cand_login_res.text}"
-    cand_token = cand_login_res.json()["data"]["access_token"]
+    assert login_res.status_code == 200, f"Candidate Login failed: {login_res.text}"
+    cand_token = login_res.json()["data"]["access_token"]
     cand_headers = {"Authorization": f"Bearer {cand_token}"}
     
-    start_res = requests.post(f"{BASE_URL}/interview/start-session/{interview_id}", headers=cand_headers)
+    start_res = client.post(f"/api/interview/start-session/{interview_id}", headers=cand_headers)
     assert start_res.status_code == 200, f"Session Start failed: {start_res.text}"
     print(" Candidate Login and Session Started")
 
     # 9. CANDIDATE: Submit Answer
     print("\n[9] Testing Submitting Answer...")
-    sub_res = requests.post(f"{BASE_URL}/interview/submit-answer-text", headers=cand_headers, data={
+    sub_res = client.post(f"/api/interview/submit-answer-text", headers=cand_headers, data={
         "interview_id": interview_id,
         "question_id": q_id,
         "answer_text": "Python is a programming language."

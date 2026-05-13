@@ -24,7 +24,9 @@ def test_admin_paper_management(client, session, auth_headers):
     # 4. List Papers
     response = client.get("/api/admin/papers", headers=auth_headers)
     assert response.status_code == 200
-    assert any(p["id"] == paper_id for p in response.json()["data"])
+    data = response.json()["data"]
+    items = data["items"] if isinstance(data, dict) and "items" in data else data
+    assert any(p["id"] == paper_id for p in items)
 
     # 5. Delete Paper
     response = client.delete(f"/api/admin/papers/{paper_id}", headers=auth_headers)
@@ -55,7 +57,9 @@ def test_admin_question_management(client, session, auth_headers):
     # 2. Get Questions for Paper
     response = client.get(f"/api/admin/papers/{paper_id}/questions", headers=auth_headers)
     assert response.status_code == 200
-    assert len(response.json()["data"]) == 1
+    data = response.json()["data"]
+    items = data["items"] if isinstance(data, dict) and "items" in data else data
+    assert len(items) == 1
 
     # 3. Update Question
     response = client.patch(f"/api/admin/questions/{q_id}", json={"marks": 20}, headers=auth_headers)

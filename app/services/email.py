@@ -1,10 +1,20 @@
-import os
-import requests
+import ssl
 import smtplib
+import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from ..core.logger import get_logger
-from ..core.config import MAIL_USERNAME, MAIL_PASSWORD
+from ..core.config import (
+    MAIL_USERNAME,
+    MAIL_PASSWORD,
+    BREVO_SENDER_EMAIL,
+    MAIL_FROM_NAME,
+    BREVO_API_KEY,
+    SMTP_HOST,
+    SMTP_PORT,
+    SMTP_STARTTLS,
+    SMTP_USE_SSL,
+)
 
 logger = get_logger(__name__)
 
@@ -12,90 +22,210 @@ class EmailService:
     def __init__(self):
         self.username = MAIL_USERNAME
         self.password = MAIL_PASSWORD
-        self.smtp_server = "smtp.gmail.com"
-        self.smtp_port = 587
-        
+        self.sender_email = BREVO_SENDER_EMAIL
+        self.sender_name = MAIL_FROM_NAME
+        self.smtp_server = SMTP_HOST
+        self.smtp_port = SMTP_PORT
+        self.smtp_starttls = SMTP_STARTTLS
+        self.smtp_use_ssl = SMTP_USE_SSL
+
+    def _get_sender_email(self) -> str:
+        sender_email = self.sender_email or self.username
+        if not sender_email:
+            return ""
+
+        if sender_email.endswith("@smtp-brevo.com"):
+            logger.error(
+                "Invalid email sender configured: %s. Set BREVO_SENDER_EMAIL or MAIL_FROM_EMAIL to a validated sender address.",
+                sender_email,
+            )
+            return ""
+
+        return sender_email
+
+    def _create_smtp_client(self):
+        if self.smtp_use_ssl:
+            return smtplib.SMTP_SSL(
+                self.smtp_server,
+                self.smtp_port,
+                timeout=15,
+                context=ssl.create_default_context(),
+            )
+
+        server = smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15)
+        if self.smtp_starttls:
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+        return server
+
+    def _send_smtp_email(self, to_email: str, subject: str, body_text: str) -> bool:
+        """Helper to send email via SMTP with robust logging."""
+        if not self.username or not self.password:
+            logger.warning("SMTP credentials missing (MAIL_USERNAME or MAIL_PASSWORD).")
+            return False
+
+        sender_email = self._get_sender_email()
+        if not sender_email:
+            return False
+
+        try:
+            logger.info(f"Attempting SMTP connection to {self.smtp_server}:{self.smtp_port}...")
+            msg = MIMEMultipart()
+            msg['From'] = f"{self.sender_name} <{sender_email}>"
+            msg['To'] = to_email
+            msg['Subject'] = subject
+            msg.attach(MIMEText(body_text, 'plain'))
+
+            server = self._create_smtp_client()
+            try:
+                server.login(self.username, self.password)
+            except smtplib.SMTPAuthenticationError as auth_err:
+                logger.error(f"SMTP Authentication Failed for {self.username}. "
+                             f"Error: {auth_err.smtp_code} {auth_err.smtp_error.decode() if isinstance(auth_err.smtp_error, bytes) else auth_err.smtp_error}")
+                if "gmail.com" in self.smtp_server:
+                    logger.error("TIP: If using Gmail, ensure you are using an 'App Password' if 2FA is enabled. "
+                                 "Regular passwords will NOT work.")
+                return False
+
+            server.send_message(msg)
+            server.quit()
+            logger.info(f"SMTP Email Sent Successfully to {to_email}")
+            return True
+        except Exception as e:
+            logger.warning(
+                f"SMTP connection/delivery failed ({self.smtp_server}:{self.smtp_port}, starttls={self.smtp_starttls}, ssl={self.smtp_use_ssl}): {e}"
+            )
+            return False
+
+    def _send_brevo_email(self, to_email: str, subject: str, body_text: str) -> bool:
+        """Fallback email delivery using Brevo's HTTP API."""
+        if not BREVO_API_KEY:
+            logger.warning("Brevo API key missing (BREVO_API_KEY).")
+            return False
+
+        sender_email = self._get_sender_email()
+        if not sender_email:
+            logger.warning("Brevo fallback skipped because no valid sender email is configured.")
+            return False
+
+        payload = {
+            "sender": {"name": self.sender_name, "email": sender_email},
+            "to": [{"email": to_email}],
+            "subject": subject,
+            "textContent": body_text,
+        }
+
+        try:
+            logger.info(f"Attempting Brevo HTTP email delivery to {to_email}...")
+            response = requests.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers={
+                    "api-key": BREVO_API_KEY,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=15,
+            )
+            
+            logger.info(f"Brevo HTTP response: status={response.status_code}")
+            
+            if response.status_code in (200, 201, 202):
+                logger.info(f"Brevo Email Sent Successfully to {to_email} (status: {response.status_code})")
+                if response.text:
+                    logger.debug(f"Brevo response body: {response.text[:200]}")
+                return True
+
+            logger.warning(
+                f"Brevo delivery failed for {to_email}: HTTP {response.status_code}\nResponse: {response.text[:500]}"
+            )
+            return False
+        except requests.exceptions.Timeout as te:
+            logger.warning(f"Brevo delivery timeout for {to_email}: {te}")
+            return False
+        except Exception as e:
+            logger.warning(f"Brevo delivery exception for {to_email}: {type(e).__name__}: {e}")
+            return False
+
+    def _send_email_with_fallbacks(self, to_email: str, subject: str, body_text: str) -> tuple[bool, str]:
+        if self._send_smtp_email(to_email, subject, body_text):
+            return True, "Success (SMTP)"
+
+        if self._send_brevo_email(to_email, subject, body_text):
+            return True, "Success (Brevo)"
+
+        return False, "Delivery Failed (SMTP + Brevo)"
+
     def send_interview_invitation(self, to_email: str, candidate_name: str, link: str, time_str: str, duration_minutes: int):
         """
-        Sends an email with the interview link using SendGrid v3 HTTP API.
-        Falls back to Gmail SMTP if SendGrid fails or is not configured.
+        Sends an email with the interview link via SMTP.
         """
         logger.info(f"--- EMAIL TASK STARTING: Sending invite to {to_email} ---")
         
         body_text = f"Hi {candidate_name},\n\nYou have been invited to an AI-Proctored Interview.\n\nDetails:\n- Scheduled Time: {time_str}\n- Duration: {duration_minutes} minutes\n- Link: {link}\n\nPlease click the link at the scheduled time to begin.\nNote: The link will not work before the scheduled time.\n\nGood Luck!"
 
-        sendgrid_api_key = os.getenv("SENDGRID_API_KEY")
+        success, message = self._send_email_with_fallbacks(to_email, "Your AI Interview Invitation", body_text)
+        if success:
+            return True, message
+
+        logger.error(f"FINAL DELIVERY FAILURE for {to_email}")
+        return False, message
+
+    def send_interview_result_email(self, to_email: str, report_data: dict) -> bool:
+        """
+        Send interview result summary to candidate via SMTP.
+        Expects `report_data` to contain keys like: candidate_name, date_str, id,
+        score, max_score, status, theory_count, coding_count, admin_name,
+        round_name, scheduled_time, start_time, duration_mins, proctoring_warnings
+        """
+        logger.info(f"--- EMAIL TASK STARTING: Sending result email to {to_email} ---")
+
+        candidate = report_data.get("candidate_name", "Candidate")
+        subject = f"Your Interview Results - {report_data.get('round_name','') or ''}".strip()
+
+        body_lines = [
+            f"Hi {candidate},",
+            "",
+            "Here are your interview results:",
+            f"Date: {report_data.get('date_str','')}",
+            f"Session ID: {report_data.get('id','')}",
+            f"Score: {report_data.get('score',0)} / {report_data.get('max_score',0)}",
+            f"Result: {report_data.get('status','')}",
+            f"Theory Questions: {report_data.get('theory_count',0)}",
+            f"Coding Questions: {report_data.get('coding_count',0)}",
+            f"Round: {report_data.get('round_name','')}",
+            f"Scheduled Time: {report_data.get('scheduled_time','')}",
+            f"Start Time: {report_data.get('start_time','N/A')}",
+            f"Duration (mins): {report_data.get('duration_mins','')}",
+            f"Proctoring Warnings: {report_data.get('proctoring_warnings','0')}",
+            "",
+            f"Admin: {report_data.get('admin_name','Platform Admin')}",
+            "",
+            "Thank you for participating. If you have any questions, contact the admin.",
+        ]
+
+        body_text = "\n".join(body_lines)
+
+        # Prefer SMTP but fall back to Brevo HTTP API if SMTP fails.
+        success, detail = self._send_email_with_fallbacks(to_email, subject, body_text)
+        if not success:
+            logger.error(f"Result email delivery failed for {to_email}: {detail}")
+            return False
+
+        logger.info(f"Result email sent to {to_email}: {detail}")
+        return True
+
+    def send_otp_email(self, to_email: str, otp: str):
+        """
+        Sends an OTP code for candidate login via SMTP.
+        """
+        logger.info(f"--- EMAIL TASK STARTING: Sending OTP to {to_email} ---")
         
-        # 1. Try SendGrid First
-        if sendgrid_api_key:
-            try:
-                logger.info(f"Attempting SendGrid API connection...")
-                url = "https://api.sendgrid.com/v3/mail/send"
-                headers = {
-                    "Authorization": f"Bearer {sendgrid_api_key}",
-                    "Content-Type": "application/json"
-                }
-                # from_email MUST be verified as a 'Single Sender' in SendGrid
-                from_email = os.getenv("MAIL_USERNAME", "tushar@chicmicstudios.in") 
-                payload = {
-                    "personalizations": [
-                        {
-                            "to": [{"email": to_email, "name": candidate_name}],
-                            "subject": "Your AI Interview Invitation"
-                        }
-                    ],
-                    "from": {"email": from_email, "name": "AI Interview Platform"},
-                    "content": [
-                        {
-                            "type": "text/plain",
-                            "value": body_text
-                        }
-                    ],
-                    "tracking_settings": {
-                        "click_tracking": {
-                            "enable": False,
-                            "enable_text": False
-                        }
-                    }
-                }
-                response = requests.post(url, json=payload, headers=headers)
-                if response.status_code in [202, 201, 200]:
-                    logger.info(f"SendGrid Request Successful!")
-                    return True, "Success (SendGrid HTTP API)"
-                else:
-                    err_content = response.text
-                    logger.warning(f"SendGrid API Error ({response.status_code}): {err_content}. Falling back to SMTP...")
-            except Exception as sg_e:
-                logger.warning(f"SendGrid Connection Failed: {sg_e}. Falling back to SMTP...")
-        else:
-            logger.info("No SENDGRID_API_KEY found, defaulting to SMTP...")
+        body_text = f"Your Verification Code for AI Interview Login is:\n\n{otp}\n\nThis code is valid for 10 minutes.\n\nIf you did not request this, please ignore this email."
 
-        # 2. Fallback to Gmail SMTP
-        if not self.username or not self.password:
-            logger.warning(f"MOCK MODE: No MAIL_USERNAME or MAIL_PASSWORD found. Link: {link}")
-            return True, "Mock Mode: Sent successfully (simulated - Missing SMTP Credentials)"
+        success, _message = self._send_email_with_fallbacks(to_email, f"{otp} is your verification code", body_text)
+        if success:
+            return True
 
-        msg = MIMEMultipart()
-        msg['From'] = f"AI Interview Platform <{self.username}>"
-        msg['To'] = to_email
-        msg['Subject'] = "Your AI Interview Invitation"
-        
-        msg.attach(MIMEText(body_text, 'plain'))
-
-        try:
-            logger.info(f"Attempting SMTP connection to {self.smtp_server}:{self.smtp_port}...")
-            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
-            server.starttls()
-            server.login(self.username, self.password)
-            server.send_message(msg)
-            server.quit()
-            
-            logger.info(f"SMTP Email Sent Successfully!")
-            return True, "Success (Gmail SMTP)"
-
-        except Exception as e:
-            err_msg = str(e)
-            logger.error(f"SMTP Connection Failed: {err_msg}")
-            logger.warning(f"FALLBACK MOCK LINK FOR {to_email}: {link}")
-            return False, f"Delivery Failed (SendGrid & SMTP). Final Error: {err_msg}"
-
+        logger.error(f"FINAL OTP DELIVERY FAILURE for {to_email}")
+        return False

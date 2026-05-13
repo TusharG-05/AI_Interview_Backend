@@ -1,16 +1,16 @@
-import cv2
 import time
-import numpy as np
 import multiprocessing
 import os
 import threading
+from typing import Any, List, Optional
+from ..core.config import IS_ORCHESTRATOR
 from ..utils.image_processing import convert_to_rgb, resize_with_aspect_ratio
 from ..core.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Modal integration flag
-USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
+
+from ..core.config import IS_ORCHESTRATOR, USE_MODAL
 
 # Lazy import Modal DeepFace
 _modal_get_embedding = None
@@ -34,6 +34,14 @@ def get_modal_embedding():
 class MediaPipeDetector:
     """Handles face detection using MediaPipe."""
     def __init__(self, model_path='app/assets/face_landmarker.task', num_faces=4, min_confidence=0.5):
+        # --- Skip initialization in Orchestrator Mode or HF Space (Lazy) ---
+        is_hf = os.getenv("SPACE_ID") is not None
+        if IS_ORCHESTRATOR or is_hf:
+            logger.info(f"MediaPipeDetector: Skipping eager initialization (Mode: {'Orchestrator' if IS_ORCHESTRATOR else 'HF'})")
+
+            self.detector = None
+            return
+
         import mediapipe as mp
         from mediapipe.tasks import python
         from mediapipe.tasks.python import vision
@@ -61,6 +69,9 @@ class MediaPipeDetector:
         self.detector = vision.FaceLandmarker.create_from_options(options)
 
     def detect(self, img_rgb):
+        if self.detector is None:
+            return []
+            
         import mediapipe as mp
         h, w = img_rgb.shape[:2]
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=img_rgb)
@@ -89,16 +100,40 @@ class FaceRecognizer:
         # Default local/fallback model is SFace (lightweight: 35MB)
         self.model_name = "SFace"
         
+        # --- Skip initialization in Orchestrator Mode (Render) ---
+        if IS_ORCHESTRATOR:
+            logger.info("FaceRecognizer: Skipping local model initialization (Orchestrator Mode)")
+            # In orchestrator mode, we only use Modal/HF clients which are lazy loaded.
+            return
+
+
         # SFace is light enough to build even on HF Spaces (Free Tier)
         # We only skip if DeepFace is missing
         try:
+            # Explicitly handle TensorFlow/Keras environment for SFace
+            # tf-keras 2.13.0 is recommended for tensorflow 2.13.0
+            try:
+                import tf_keras
+                import os
+                os.environ["TF_USE_LEGACY_KERAS"] = "1"
+                logger.info("Initializing tf-keras compatibility layer.")
+            except ImportError:
+                logger.debug("tf-keras not found, proceeding with default backend.")
+                
             from deepface import DeepFace
-            logger.info(f"Building local Face Model: {self.model_name}...")
+            # Ensure CPU-only optimization for HF Spaces
+            if os.getenv("SPACE_ID"):
+                import tensorflow as tf
+                tf.config.set_visible_devices([], 'GPU')
+                logger.info("HF Space detected: TensorFlow GPU disabled for CPU-only efficiency.")
+
+            logger.info(f"Building local Face Model: {self.model_name} (SFace)...")
             DeepFace.build_model(self.model_name)
+            logger.info(f"Local {self.model_name} model ready.")
         except ImportError:
-            logger.warning("DeepFace not installed - face recognition disabled")
+            logger.error("CRITICAL: DeepFace not installed. Local face recognition is DISABLED.")
         except Exception as e:
-            logger.warning(f"Local {self.model_name} model build failed: {e}")
+            logger.warning(f"Local {self.model_name} model build failed (will try lazy load on first attempt): {e}")
 
     def recognize(self, img_rgb, locs):
         """
@@ -153,11 +188,15 @@ class FaceRecognizer:
                             result = modal_cls().get_embedding.remote(img_encoded.tobytes())
                             if result.get("success"):
                                 curr_emb = result["embedding"]
+                            else:
+                                logger.warning(f"Modal DeepFace returned error: {result.get('error')}")
                         except Exception as e:
-                            logger.warning(f"Modal DeepFace call failed: {e}")
+                            # Catch Modal specific errors (like credits exhausted or connection issues)
+                            logger.warning(f"Modal Face Recognition call failed (likely credits or connection): {e}")
                 
                 # 2. Local fallback (Lightweight: SFace) if Modal fails or is disabled
                 if curr_emb is None:
+                    # If we are in Orchestrator mode, DeepFace import might fail (not in requirements)
                     try:
                         from deepface import DeepFace
                         objs = DeepFace.represent(
@@ -168,8 +207,16 @@ class FaceRecognizer:
                             align=False
                         )
                         curr_emb = objs[0]["embedding"]
+                        logger.info(f"Local {self.model_name} fallback successful.")
+                    except ImportError:
+                        if IS_ORCHESTRATOR:
+                            logger.error("Face Recognition Fail: Modal failed and Local models (DeepFace) are NOT installed in Orchestrator mode.")
+                        else:
+                            logger.error("Face Recognition Fail: Local DeepFace import failed.")
                     except Exception as e:
                         logger.warning(f"Local {self.model_name} fallback failed: {e}")
+
+
                 
                 if curr_emb is None:
                     matches.append(False)
@@ -184,6 +231,7 @@ class FaceRecognizer:
                     matches.append(False)
                     continue
 
+                import numpy as np
                 a = np.array(known_vec)
                 b = np.array(curr_emb)
                 
@@ -197,6 +245,7 @@ class FaceRecognizer:
                 # Threshold: 0.40 is generally safe for both ArcFace and SFace
                 # but SFace is more compact, sometimes more strict.
                 matches.append(bool(cos_sim > 0.40))
+
                 
             except Exception as e:
                 logger.debug(f"Face recognition error: {e}")
@@ -242,11 +291,13 @@ def face_worker_process(frame_queue, result_queue):
             
             recognizer.known_encoding = embedding_cache.get(interview_id)
             
+            import cv2
             frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
             h, w = frame_rgb.shape[:2]
             target_h = 540
             s = target_h / h if h > target_h else 1.0
             img = cv2.resize(frame_rgb, (0,0), fx=s, fy=s) if s < 1.0 else frame_rgb
+
             
             locs = detector.detect(img)
             matches = recognizer.recognize(img, locs)
@@ -262,8 +313,20 @@ def face_worker_process(frame_queue, result_queue):
 class FaceService:
     """The main interface for face-related services (Multi-User Isolated)."""
     def __init__(self):
-        logger.info("Starting Multi-User Face Service (Isolated Sessions)...")
-        
+        # Session Isolation: {interview_id: value}
+        self.session_results = {}
+        self.session_encodings = {}
+
+        # --- Avoid Multiprocessing in Orchestrator Mode (Render Free Tier) ---
+        if IS_ORCHESTRATOR:
+            logger.info("FaceService: Orchestrator Mode enabled. Worker Process DISABLED to save memory.")
+            self.worker = None
+            self.frame_queue = None
+            self.result_queue = None
+            # Initialize an in-thread recognizer (lazy)
+            self._lazy_recognizer = None
+            return
+
         self.frame_queue = multiprocessing.Queue(maxsize=10)
         self.result_queue = multiprocessing.Queue(maxsize=10)
         self.worker = multiprocessing.Process(
@@ -278,19 +341,53 @@ class FaceService:
         self.session_encodings = {}
 
     def process_frame(self, frame_bgr, interview_id: int):
-        # 1. Provide encoding to worker if not already sent
+        # 1. Update session encoding
         encoding = self.session_encodings.get(interview_id)
-        
+
+        # --- ORCHESTRATOR PATH: In-thread (Modal only) ---
+        if IS_ORCHESTRATOR:
+            # Throttle processing to save memory/cpu: Only process 1 in 10 frames
+            # In orchestrator mode, we primarily serve as a pass-through
+            # unless a Modal call is strictly needed.
+            # For now, we'll return the cached result to avoid blocking the main thread too long.
+            if not hasattr(self, "_process_counter"): self._process_counter = 0
+            self._process_counter += 1
+            
+            if self._process_counter % 30 == 0: # Every ~30 frames (approx 3-5 seconds)
+                if self._lazy_recognizer is None:
+                    self._lazy_recognizer = FaceRecognizer(known_encoding=encoding)
+                else:
+                    self._lazy_recognizer.known_encoding = encoding
+
+                # Run detection & recognition in-thread (since it's mostly Modal await)
+                import cv2
+                from ..utils.image_processing import resize_with_aspect_ratio
+                img_small, _ = resize_with_aspect_ratio(frame_bgr, target_height=240)
+                # Note: No local detector in orchestrator mode, we just use a full-frame fake loc for now
+                # or we can just send the crop if we had a light detector.
+                # Since MediaPipe is removed from requirements-render, we skip local detection.
+                
+                # If Modal is enabled, recognizer.recognize will call it.
+                # If not, it returns False.
+                h, w = img_small.shape[:2]
+                matches = self._lazy_recognizer.recognize(img_small, [(0, w, h, 0)])
+                is_authorized = any(matches) if matches else False
+                self.session_results[interview_id] = (is_authorized, 1.0, 1 if matches else 0, [(0, w, h, 0)])
+
+            return self.session_results.get(interview_id, (False, 1.0, 0, []))
+
+        # --- STANDARD PATH: Worker Process ---
         if not self.frame_queue.full():
+            from ..utils.image_processing import resize_with_aspect_ratio
             img_small, _ = resize_with_aspect_ratio(frame_bgr, target_height=360)
             self.frame_queue.put((interview_id, img_small, encoding))
         
-        # 2. Drain results and update map
+        # Drain results and update map
         while not self.result_queue.empty():
             try:
                 sid, match, conf, n_faces, locs = self.result_queue.get_nowait()
                 self.session_results[sid] = (match, conf, n_faces, locs)
-            except multiprocessing.queues.Empty:
+            except:
                 break
         
         return self.session_results.get(interview_id, (False, 1.0, 0, []))

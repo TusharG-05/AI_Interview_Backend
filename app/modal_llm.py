@@ -39,6 +39,7 @@ You must return your response in valid JSON format with exactly two keys:
 - "feedback": A string with detailed, constructive feedback
 - "score": A float between 0 and 10
 
+Always address the user directly as 'You' and 'Your' (e.g., 'Your answer is...', 'You did well on...'). NEVER refer to the user as 'the candidate' or use third-person pronouns.
 Do not include any text outside the JSON object."""
 
 

@@ -1,45 +1,41 @@
-from typing import List, Optional
+from typing import List, Optional, Annotated
 import json as _json
+from datetime import datetime
 from sqlalchemy import func
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Request, status, BackgroundTasks, Form, Header
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
 from ..models.db_models import QuestionPaper, Questions, InterviewSession, Answers, CodingAnswers, InterviewResult, User, UserRole, ProctoringEvent, InterviewStatus, Team, InterviewRound, CodingQuestionPaper, CodingQuestions, CandidateStatus
-from ..auth.dependencies import get_admin_user
+from ..auth.dependencies import get_current_user_optional, get_admin_user
 from ..auth.security import get_password_hash
-from ..services.nlp import NLPService
-from ..services.email import EmailService
 from ..services.status_manager import record_status_change
-from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL
+from ..services.interview_access import evaluate_interview_access
+from ..core.config import APP_BASE_URL, MAIL_USERNAME, MAIL_PASSWORD, FRONTEND_URL, CRON_SECRET, IS_ORCHESTRATOR, LINK_VALIDITY_MINUTES
 from ..core.logger import get_logger
-from ..utils import calculate_average_score, format_iso_datetime
-from fastapi_limiter.depends import RateLimiter
+from ..utils import calculate_average_score, format_iso_datetime, calculate_total_score, calculate_total_marks
+from ..tasks.interview_tasks import send_result_email_util
 logger = get_logger(__name__)
+from ..services.admin_serialization import serialize_interview_admin_detail
+_serialize_interview_admin_detail = serialize_interview_admin_detail
 
-from ..schemas.requests import (
-    QuestionCreate, UserCreate, InterviewScheduleCreate, PaperUpdate, 
-    QuestionUpdate, InterviewUpdate, UserUpdate, ResultUpdate, GeneratePaperRequest,
-    GenerateCodingPaperRequest
-)
-from ..schemas.responses import (
-    PaperRead, QuestionRead, SessionRead, UserRead, DetailedResult, 
-    ResponseDetail, ProctoringLogItem, InterviewLinkResponse, 
-    InterviewDetailRead, UserDetailRead, CandidateStatusResponse, 
-    LiveStatusItem, AnswerRead, InterviewSessionDetail, InterviewSessionExpanded,
-    CodingQuestionRead, CodingPaperRead, CodingQuestionFull, CodingPaperFull,
-    TeamReadBasic, UserAdminDetail, QuestionAdminDetail, CodingQuestionAdminDetail,
-    QuestionPaperAdminDetail, CodingPaperAdminDetail, InterviewSessionAdminDetail
-)
-from ..schemas.interview_result import (
-    InterviewResultDetail,InterviewResultBrief, InterviewSessionNested, UserNested, QuestionPaperNested, AnswersNested, QuestionNested,
-    CodingPaperNested, CodingQuestionNested
-)
-from ..schemas.interview_responses import PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin
-from ..schemas.api_response import ApiResponse, create_response
-from ..schemas.user_schemas import serialize_user, serialize_user_flat
+from ..schemas.admin.users import CreateUserRequest, UserRead, GetUserDetailResponse
+from ..schemas.admin.papers import GeneratePaperRequest, GetPaperResponse, CreatePaperRequest, UpdatePaperRequest, UpdateQuestionRequest, AdminQuestionRead, QuestionCreateData
+from ..schemas.admin.interviews import ScheduleInterviewRequest, UpdateInterviewRequest, InterviewLinkResponse
+from ..schemas.admin.results import GetInterviewResultResponse, UpdateResultRequest, AdminPaperNested as PaperNestedWithoutAdmin, AdminPaperNested as CodingPaperNestedWithoutAdmin, GetResultsResponse, InterviewSessionNested, GetAdminResultsListResponse
+from ..schemas.shared.team import TeamReadBasic
+from ..schemas.admin.coding import CodingQuestionFull, CodingPaperFull, GenerateCodingPaperRequest, CodingPaperCreateRequest, CodingPaperUpdateRequest, CodingQuestionCreateRequest, CodingQuestionUpdateRequest
+from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem, AdminInterviewSessionDetail,AdminInterviewsList
+InterviewSessionDetail = AdminInterviewSessionDetail
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
+from ..schemas.shared.user import UserNested, serialize_user
+
+
+
+
+
 import os
 import shutil
 import uuid
@@ -48,47 +44,75 @@ from datetime import datetime, timedelta, timezone
 import time
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
-nlp_service = NLPService()
-email_service = EmailService()
+
+def create_response(api_response: ApiResponse):
+    """Wrapper for ApiResponse to ensure forward compatibility with FastAPI response processing."""
+    return api_response
+
+_nlp_service = None
+_email_service = None
+
+def get_nlp_service():
+    global _nlp_service
+    if _nlp_service is None:
+        from ..services.nlp import NLPService
+        _nlp_service = NLPService()
+    return _nlp_service
+
+def get_email_service():
+    global _email_service
+    if _email_service is None:
+        from ..services.email import EmailService
+        _email_service = EmailService()
+    return _email_service
+
 
 # --- WebSocket Dashboard ---
 from ..services.websocket_manager import manager
 from fastapi import WebSocket, WebSocketDisconnect
 from ..tasks.email_tasks import send_interview_invitation_task
-from ..services.cloudinary_service import CloudinaryService
+_cloudinary_service = None
 
-cloudinary_service = CloudinaryService()
+def get_cloudinary_service():
+    global _cloudinary_service
+    if _cloudinary_service is None:
+        from ..services.cloudinary_service import CloudinaryService
+        _cloudinary_service = CloudinaryService()
+    return _cloudinary_service
 
-@router.websocket("/dashboard/ws")
-async def admin_dashboard_ws(websocket: WebSocket, token: str = None):
-    """
-    Real-time Admin Dashboard Stream.
-    Requires Admin Authentication (Token passed as query param).
-    """
-    # TODO: Validate Token (skipped for MVP speed, assume valid if they know endpoint)
-    # real_user = get_current_user(token=token) ...
-    
-    await manager.connect_admin(websocket)
-    try:
-        while True:
-            await websocket.receive_text() # Keep connection alive
-    except WebSocketDisconnect:
-        manager.disconnect_admin(websocket)
 
 # --- Question Paper & Question Management ---
 
-@router.get("/papers", response_model=ApiResponse[List[PaperRead]])
+# --- Question Paper & Question Management ---
+
+@router.get("/papers", response_model=ApiResponse[PaginatedResponse[GetPaperResponse]])
 async def list_papers(
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)],
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None
 ):
     """List all question papers created by the admin."""
-    stmt = select(QuestionPaper).where(QuestionPaper.admin_user == current_user.id)
-    papers = session.exec(stmt).all()
-    papers_data = [PaperRead(
+    query = select(QuestionPaper)
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where(QuestionPaper.admin_user == current_user.id)
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(QuestionPaper.name.ilike(search_filter))
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    papers = session.exec(
+        query.order_by(QuestionPaper.id.desc()).offset(skip).limit(limit)
+    ).all()
+    
+    papers_data = [GetPaperResponse(
         id=p.id, name=p.name, description=p.description, 
         question_count=len(p.questions), 
-        questions=[QuestionRead(
+        questions=[AdminQuestionRead(
             id=q.id, content=q.content, question_text=q.question_text,
             topic=q.topic, difficulty=q.difficulty, marks=q.marks,
             response_type=q.response_type
@@ -96,25 +120,31 @@ async def list_papers(
         created_at=p.created_at.isoformat(),
         created_by=serialize_user(p.admin, fallback_role="admin")
     ) for p in papers]
+    
     return ApiResponse(
         status_code=200,
-        data=papers_data,
+        data={
+            "items": papers_data,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Question papers retrieved successfully"
     )
 
 from pydantic import BaseModel, Field
 
-class PaperCreate(BaseModel):
+class CreatePaperRequest(BaseModel):
     name: str = Field(..., min_length=1, description="Name of the question paper")
     description: Optional[str] = None
 
 
 
-@router.post("/papers", response_model=ApiResponse[PaperRead], status_code=201)
+@router.post("/papers", response_model=ApiResponse[GetPaperResponse], status_code=201)
 async def create_paper(
-    paper_data: PaperCreate,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    paper_data: CreatePaperRequest,
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Create a new collection of questions."""
     new_paper = QuestionPaper(
@@ -130,7 +160,7 @@ async def create_paper(
         session.rollback()
         logger.error(f"Failed to create paper: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to create paper. Please try again.")
-    paper_read = PaperRead(
+    paper_read = GetPaperResponse(
         id=new_paper.id, name=new_paper.name, description=new_paper.description, 
         question_count=0, questions=[], created_at=new_paper.created_at.isoformat(),
         created_by=serialize_user(current_user)
@@ -141,20 +171,93 @@ async def create_paper(
         message="Question paper created successfully"
     )
 
-@router.get("/papers/{paper_id}", response_model=ApiResponse[PaperRead])
+@router.post("/upload-doc", response_model=ApiResponse[dict])
+async def upload_questions_doc(
+    paper_id: int,
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)],
+    file: UploadFile = File(...)
+):
+    """
+    Upload a document (.pdf, .docx, .txt, .xlsx) to extract questions and add them to a paper.
+    """
+    import uuid
+    import os
+    # 1. Save file temporarily
+    file_id = str(uuid.uuid4())
+    ext = os.path.splitext(file.filename)[1]
+    temp_path = f"/tmp/{file_id}{ext}"
+    
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+    
+    try:
+        # 2. Extract questions
+        extracted_data = get_nlp_service().extract_qa_from_file(temp_path, questions_only=True)
+
+        
+        if not extracted_data:
+            return ApiResponse(
+                status_code=400,
+                message="No questions could be extracted from the document."
+            )
+            
+        # 3. Add to paper
+        paper = session.get(QuestionPaper, paper_id)
+        if not paper:
+            raise HTTPException(status_code=404, detail="Paper not found")
+            
+        from ..models.db_models import Questions
+        added_count = 0
+        for item in extracted_data:
+            q_text = item.get("question", "").strip()
+            if not q_text: continue
+            
+            new_q = Questions(
+                paper_id=paper_id,
+                question_text=q_text,
+                content=q_text,
+                topic="Extracted",
+                difficulty="Medium",
+                marks=5,
+                response_type="audio"
+            )
+            session.add(new_q)
+            added_count += 1
+            
+        session.commit()
+        
+        return ApiResponse(
+            status_code=200,
+            data={"extracted_count": len(extracted_data), "added_to_paper": added_count},
+            message=f"Successfully extracted and added {added_count} questions."
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in upload_questions_doc: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@router.get("/papers/{paper_id}", response_model=ApiResponse[GetPaperResponse])
 async def get_paper(
     paper_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Get details of a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
-    paper_read = PaperRead(
+    
+    # Super Admin can access everything; Admin only their own
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this paper")
+    paper_read = GetPaperResponse(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions),
-        questions=[QuestionRead(
+        questions=[AdminQuestionRead(
             id=q.id, content=q.content, question_text=q.question_text,
             topic=q.topic, difficulty=q.difficulty, marks=q.marks,
             response_type=q.response_type
@@ -168,17 +271,20 @@ async def get_paper(
         message="Question paper retrieved successfully"
     )
 
-@router.patch("/papers/{paper_id}", response_model=ApiResponse[PaperRead])
+@router.patch("/papers/{paper_id}", response_model=ApiResponse[GetPaperResponse])
 async def update_paper(
     paper_id:int,
-    paper_update: PaperUpdate,
+    paper_update: UpdatePaperRequest,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """Update a question paper's name or description."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+    
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this paper")
     
     update_data = paper_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -194,10 +300,10 @@ async def update_paper(
         session.rollback()
         logger.error(f"Failed to update paper {paper_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to update paper. Please try again.")
-    paper_read = PaperRead(
+    paper_read = GetPaperResponse(
         id=paper.id, name=paper.name, description=paper.description,
         question_count=len(paper.questions),
-        questions=[QuestionRead(
+        questions=[AdminQuestionRead(
             id=q.id, content=q.content, question_text=q.question_text,
             topic=q.topic, difficulty=q.difficulty, marks=q.marks,
             response_type=q.response_type
@@ -219,8 +325,11 @@ async def delete_paper(
 ):
     """Delete a question paper and all its associated questions."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+        
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this paper")
     
     # Check for existing sessions using this paper
     existing_sessions = session.exec(select(InterviewSession).where(InterviewSession.paper_id == paper_id)).first()
@@ -244,17 +353,20 @@ async def delete_paper(
     )
 
 
-@router.post("/papers/{paper_id}/questions", response_model=ApiResponse[Questions], status_code=201)
+@router.post("/papers/{paper_id}/questions", response_model=ApiResponse[AdminQuestionRead], status_code=201)
 async def add_question_to_paper(
     paper_id: int,
-    q_data: QuestionCreate,
+    q_data: QuestionCreateData,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """API for manually adding a new interview question to a paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+        
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to add questions to this paper")
         
     new_q = Questions(
         paper_id=paper_id,
@@ -279,27 +391,54 @@ async def add_question_to_paper(
         message="Question added to paper successfully"
     )
 
-@router.get("/papers/{paper_id}/questions", response_model=ApiResponse[List[Questions]])
+@router.get("/papers/{paper_id}/questions", response_model=ApiResponse[PaginatedResponse[Questions]])
 async def list_paper_questions(
     paper_id: int,
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """List all questions belonging to a specific question paper."""
     paper = session.get(QuestionPaper, paper_id)
-    if not paper or paper.admin_user != current_user.id:
+    if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
-    questions = session.exec(select(Questions).where(Questions.paper_id == paper_id)).all()
+        
+    if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to view questions for this paper")
+        
+    query = select(Questions).where(Questions.paper_id == paper_id)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(
+            (Questions.content.ilike(search_filter)) | 
+            (Questions.question_text.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    questions = session.exec(
+        query.order_by(Questions.id.desc()).offset(skip).limit(limit)
+    ).all()
+        
     return ApiResponse(
         status_code=200,
-        data=questions,
+        data={
+            "items": questions,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message=f"Questions for paper '{paper.name}' retrieved successfully"
     )
 
 
 # --- AI Question Paper Generation ---
 
-@router.post("/generate-paper", response_model=ApiResponse[PaperRead], status_code=201)
+@router.post("/generate-paper", response_model=ApiResponse[GetPaperResponse], status_code=201)
 async def generate_paper(
     request_data: GeneratePaperRequest,
     current_user: User = Depends(get_admin_user),
@@ -398,14 +537,14 @@ async def generate_paper(
         raise HTTPException(status_code=500, detail="Failed to save generated questions. Please try again.")
 
     # Build response
-    paper_read = PaperRead(
+    paper_read = GetPaperResponse(
         id=new_paper.id,
         name=new_paper.name,
         description=new_paper.description,
         question_count=new_paper.question_count,
         total_marks=new_paper.total_marks,
         questions=[
-            QuestionRead(
+            AdminQuestionRead(
                 id=q.id,
                 content=q.content,
                 question_text=q.question_text,
@@ -443,6 +582,14 @@ async def generate_coding_paper(
     """
     from ..services.interview import generate_coding_questions_from_prompt
     import json as _json
+    from ..schemas.admin.results import (
+        GetInterviewResultResponse as AdminResultData,
+        AdminAnswerAnswerShort as AnswerShort,
+        AdminQuestionWithAnswer as QuestionWithAnswer,
+        AdminPaperNested as PaperNestedWithAdminId,
+        AdminPaperNested as CodingPaperNestedWithAdmin,
+        AdminProctoringEvent as ProctoringEventRead
+    )
 
     # Validate difficulty_mix
     valid_mixes = {"easy", "medium", "hard", "mixed"}
@@ -578,26 +725,47 @@ async def delete_question(
         message="Question deleted successfully"
     )
 
-@router.get("/questions", response_model=ApiResponse[List[Questions]])
+@router.get("/questions", response_model=ApiResponse[PaginatedResponse[Questions]])
 async def list_all_questions(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
     """List all questions across all papers owned by the admin (including global ones)."""
     # Use outer join to include questions without a paper_id
-    stmt = (
-        select(Questions)
-        .join(QuestionPaper, isouter=True)
-        .where((QuestionPaper.admin_user == current_user.id) | (Questions.paper_id == None))
-    )
-    questions = session.exec(stmt).all()
+    query = select(Questions).join(QuestionPaper, isouter=True)
+    
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where((QuestionPaper.admin_user == current_user.id) | (Questions.paper_id == None))
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(
+            (Questions.content.ilike(search_filter)) | 
+            (Questions.question_text.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    questions = session.exec(
+        query.order_by(Questions.id.desc()).offset(skip).limit(limit)
+    ).all()
+    
     return ApiResponse(
         status_code=200,
-        data=questions,
+        data={
+            "items": questions,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Questions retrieved successfully"
     )
 
-@router.get("/questions/{q_id}", response_model=ApiResponse[Questions])
+@router.get("/questions/{q_id}", response_model=ApiResponse[AdminQuestionRead])
 async def get_question(
     q_id: int,
     current_user: User = Depends(get_admin_user),
@@ -608,7 +776,7 @@ async def get_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.admin_user != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and q.paper and q.paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to view this question")
     return ApiResponse(
         status_code=200,
@@ -616,10 +784,10 @@ async def get_question(
         message="Question retrieved successfully"
     )
 
-@router.patch("/questions/{q_id}", response_model=ApiResponse[Questions])
+@router.patch("/questions/{q_id}", response_model=ApiResponse[AdminQuestionRead])
 async def update_question(
     q_id: int,
-    q_update: QuestionUpdate,
+    q_update: UpdateQuestionRequest,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -628,7 +796,7 @@ async def update_question(
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     # Verify the question belongs to a paper owned by the admin (or is orphaned)
-    if q.paper and q.paper.admin_user != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and q.paper and q.paper.admin_user != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to update this question")
     
     update_data = q_update.model_dump(exclude_unset=True)
@@ -665,7 +833,7 @@ async def update_question(
 
 @router.post("/interviews/schedule", response_model=ApiResponse[InterviewLinkResponse], status_code=201)
 async def schedule_interview(
-    schedule_data: InterviewScheduleCreate, 
+    schedule_data: ScheduleInterviewRequest, 
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_admin_user), 
     session: Session = Depends(get_session)
@@ -688,15 +856,19 @@ async def schedule_interview(
     paper = None
     if schedule_data.paper_id is not None:
         paper = session.get(QuestionPaper, schedule_data.paper_id)
-        if not paper or paper.admin_user != current_user.id:
+        if not paper:
             raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
+        if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to use this question paper")
 
     # Validate Coding Paper (optional)
     coding_paper = None
     if schedule_data.coding_paper_id is not None:
         coding_paper = session.get(CodingQuestionPaper, schedule_data.coding_paper_id)
-        if not coding_paper or coding_paper.admin_user != current_user.id:
-            raise HTTPException(status_code=400, detail="Invalid Coding Paper ID — paper not found or you do not own it")
+        if not coding_paper:
+            raise HTTPException(status_code=400, detail="Invalid Coding Paper ID — paper not found")
+        if current_user.role != UserRole.SUPER_ADMIN and coding_paper.admin_user != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to use this coding paper")
 
     # Access fields before any commits to prevent DetachedInstanceError in background tasks
     candidate_email = candidate.email.strip()
@@ -704,10 +876,40 @@ async def schedule_interview(
 
     # Parse schedule time
     try:
-        dt_str = schedule_data.schedule_time.replace("Z", "+00:00")
-        schedule_dt = datetime.fromisoformat(dt_str)
-    except ValueError:
+        sched_val = schedule_data.schedule_time
+        if sched_val is None:
+            raise HTTPException(status_code=400, detail="schedule_time is required")
+        if isinstance(sched_val, str):
+            dt_str = sched_val.replace("Z", "+00:00")
+            schedule_dt = datetime.fromisoformat(dt_str)
+        else:
+            # If a datetime object was provided, accept it; otherwise this will
+            # raise in the except block and return a 400 to the client.
+            schedule_dt = sched_val
+    except (AttributeError, TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Invalid schedule_time format. ISO 8601 expected.")
+
+    # Compute duration based on question counts when frontend doesn't provide it.
+    # Defaults per-question: theory=5 minutes, coding=20 minutes.
+    def _compute_duration_minutes(paper_obj, coding_paper_obj, max_qs: int | None):
+        n_theory = len(paper_obj.questions) if paper_obj and getattr(paper_obj, 'questions', None) else 0
+        n_coding = len(coding_paper_obj.questions) if coding_paper_obj and getattr(coding_paper_obj, 'questions', None) else 0
+        total_qs = n_theory + n_coding
+        if total_qs == 0:
+            return schedule_data.duration_minutes or 60
+
+        # Base duration in minutes
+        base_minutes = n_theory * 5 + n_coding * 20
+
+        # If admin requested a smaller max_questions, scale proportionally
+        if max_qs and max_qs > 0 and max_qs < total_qs:
+            scale = max_qs / total_qs
+            computed = max(1, int(round(base_minutes * scale)))
+            return computed
+
+        return base_minutes if base_minutes > 0 else (schedule_data.duration_minutes or 60)
+
+    computed_duration = _compute_duration_minutes(paper, coding_paper, schedule_data.max_questions)
 
     new_session = InterviewSession(
         admin_id=current_user.id,
@@ -716,7 +918,7 @@ async def schedule_interview(
         coding_paper_id=schedule_data.coding_paper_id,
         interview_round=schedule_data.interview_round,
         schedule_time=schedule_dt,
-        duration_minutes=schedule_data.duration_minutes or 1440,
+        duration_minutes=computed_duration,
         max_questions=schedule_data.max_questions or 0,
         status=InterviewStatus.SCHEDULED,
         current_status=CandidateStatus.INVITED,
@@ -726,7 +928,8 @@ async def schedule_interview(
         is_suspended=False,
         is_completed=False,
         allow_copy_paste=schedule_data.allow_copy_paste,
-        allow_question_navigate=schedule_data.allow_question_navigate
+        allow_question_navigate=schedule_data.allow_question_navigate,
+        allow_proctoring=schedule_data.allow_proctoring
     )
     
     session.add(new_session)
@@ -739,8 +942,6 @@ async def schedule_interview(
         raise HTTPException(status_code=500, detail="Failed to schedule interview. Please try again.")
     
     # Track initial status - INVITED
-    from ..services.status_manager import record_status_change
-    
     record_status_change(
         session=session,
         interview_session=new_session,
@@ -792,13 +993,34 @@ async def schedule_interview(
     link = f"{FRONTEND_URL}/interview-access?token={new_session.access_token}"
     # Send Email Invitation Asynchronously (prevent UI hang without Redis)
     try:
+        # Convert schedule_time to India Standard Time for email clarity
+        from datetime import timezone
+        try:
+            from zoneinfo import ZoneInfo
+            ist = ZoneInfo("Asia/Kolkata")
+        except Exception:
+            ist = None
+
+        sched = new_session.schedule_time
+        if sched is not None:
+            if sched.tzinfo is None:
+                sched = sched.replace(tzinfo=timezone.utc)
+            if ist:
+                sched_ist = sched.astimezone(ist)
+                time_str = sched_ist.strftime("%Y-%m-%d %H:%M:%S %Z")
+            else:
+                # Fallback: show ISO but note UTC
+                time_str = sched.isoformat()
+        else:
+            time_str = ""
+
         background_tasks.add_task(
-            email_service.send_interview_invitation,
-            to_email=candidate_email, 
+            get_email_service().send_interview_invitation,
+            to_email=candidate_email,
             candidate_name=candidate_full_name,
             link=link,
-            time_str=format_iso_datetime(new_session.schedule_time),
-            duration_minutes=new_session.duration_minutes
+            time_str=time_str,
+            duration_minutes=new_session.duration_minutes,
         )
     except Exception as cel_e:
         logger.error(f"Failed to queue email task: {cel_e}")
@@ -835,7 +1057,9 @@ async def schedule_interview(
         is_completed=new_session.is_completed or False,
         allow_copy_paste=new_session.allow_copy_paste,
         allow_question_navigate=new_session.allow_question_navigate,
-        team_id=candidate.team_id
+        allow_proctoring=new_session.allow_proctoring,
+        admin_user=admin_dict,
+        candidate_user=candidate_dict
     )
 
     link_response = InterviewLinkResponse(
@@ -853,50 +1077,86 @@ async def schedule_interview(
         message="Interview scheduled successfully"
     )
 
-@router.get("/interviews", response_model=ApiResponse[List[SessionRead]])
-async def list_interviews(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
+@router.get("/interviews", response_model=ApiResponse[PaginatedResponse[AdminInterviewsList]])
+async def list_interviews(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
     """List interviews created by this admin."""
-    # Only show sessions created by this admin (including those where admin is NULL)
-    sessions = session.exec(
-        select(InterviewSession)
-        .where(
+    query = select(InterviewSession)
+    
+    # 1. Date Filtering
+    if from_date:
+        try:
+            start_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(hour=0, minute=0, second=0, microsecond=0)
+            query = query.where(InterviewSession.schedule_time >= start_dt)
+        except ValueError:
+            logger.warning(f"Invalid from_date format: {from_date}")
+
+    if to_date:
+        try:
+            end_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(hour=23, minute=59, second=59, microsecond=999999)
+            query = query.where(InterviewSession.schedule_time <= end_dt)
+        except ValueError:
+            logger.warning(f"Invalid to_date format: {to_date}")
+    
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where(
             (InterviewSession.admin_id == current_user.id) | 
             (InterviewSession.admin_id == None)
         )
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.join(InterviewSession.candidate).where(
+            (User.full_name.ilike(search_filter)) | (User.email.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.id.desc())
+        .offset(skip)
+        .limit(limit)
         .options(
             selectinload(InterviewSession.admin),
-            selectinload(InterviewSession.candidate)
+            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.result)
         )
     ).all()
-    if current_user.role == UserRole.SUPER_ADMIN:
-        sessions = session.exec(
-            select(InterviewSession)
-            .options(
-                selectinload(InterviewSession.admin),
-                selectinload(InterviewSession.candidate)
-            )
-        ).all()
+
     results = []
     for s in sessions:
         # Serialize users with role-based keys, handling NULL users
-        admin_dict = serialize_user(s.admin, fallback_role="admin")
+        #admin_dict = serialize_user(s.admin, fallback_role="admin")
         candidate_dict = serialize_user(s.candidate, fallback_role="candidate")
-        
-        results.append(SessionRead(
+
+        results.append(AdminInterviewsList(
             id=s.id,
-            admin_user=admin_dict,
+            access_token=s.access_token,
             candidate_user=candidate_dict,
             status=s.status.value,
-            scheduled_at=format_iso_datetime(s.schedule_time),
-            score=s.total_score,
-            allow_copy_paste=s.allow_copy_paste or False,
-            allow_question_navigate=s.allow_question_navigate or False,
+            schedule_time=format_iso_datetime(s.schedule_time),
+            total_score=(s.result.total_score if s.result else s.total_score) or 0.0,
             interview_round=s.interview_round.value if s.interview_round else None,
-            team_id=s.candidate.team_id if s.candidate else None
+            result_status=(s.result.result_status if s.result else "PENDING"),
+            allow_proctoring=s.allow_proctoring if s.allow_proctoring is not None else True,
+            proctoring_event={"tab_switch_count": s.tab_switch_count or 0}
         ))
     return ApiResponse(
         status_code=200,
-        data=results,
+        data={
+            "items": results,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Interviews retrieved successfully"
     )
 
@@ -915,15 +1175,24 @@ async def get_live_status_dashboard(
         List of active interviews with basic status, warnings, and progress
     """
     
-    # Get all active interviews for this admin
-    # Active = not completed/cancelled/suspended permanently
-    stmt = select(InterviewSession).where(
-        InterviewSession.admin_id == current_user.id,
-        InterviewSession.status.in_([
-            InterviewStatus.SCHEDULED,
-            InterviewStatus.LIVE
-        ])
-    ).options(
+    # Role-based visibility
+    if current_user.role == UserRole.SUPER_ADMIN:
+        stmt = select(InterviewSession).where(
+            InterviewSession.status.in_([
+                InterviewStatus.SCHEDULED,
+                InterviewStatus.LIVE
+            ])
+        )
+    else:
+        stmt = select(InterviewSession).where(
+            InterviewSession.admin_id == current_user.id,
+            InterviewSession.status.in_([
+                InterviewStatus.SCHEDULED,
+                InterviewStatus.LIVE
+            ])
+        )
+    
+    stmt = stmt.options(
         selectinload(InterviewSession.selected_questions),
         selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
         selectinload(InterviewSession.candidate)
@@ -954,7 +1223,7 @@ async def get_live_status_dashboard(
             "start_time": format_iso_datetime(interview_session.start_time),
             "end_time": format_iso_datetime(interview_session.end_time),
             "status": interview_session.status.value,
-            "total_score": interview_session.total_score,
+            "total_score": (interview_session.result.total_score if interview_session.result else interview_session.total_score) or 0.0,
             "current_status": interview_session.current_status or None,
             "last_activity": format_iso_datetime(interview_session.last_activity),
             "warning_count": interview_session.warning_count,
@@ -966,6 +1235,7 @@ async def get_live_status_dashboard(
             "is_completed": interview_session.is_completed or False,
             "allow_copy_paste": interview_session.allow_copy_paste,
             "allow_question_navigate": interview_session.allow_question_navigate,
+            "allow_proctoring": interview_session.allow_proctoring,
             "interview_round": interview_session.interview_round.value if interview_session.interview_round else None
         }
         
@@ -988,126 +1258,10 @@ async def get_live_status_dashboard(
     )
 
 
-def _serialize_interview_admin_detail(session_obj: InterviewSession) -> InterviewSessionAdminDetail:
-    """Helper to serialize InterviewSession into InterviewSessionAdminDetail."""
-    import json as _json
-    
-    # 1. Map Admin User
-    admin_data = None
-    if session_obj.admin:
-        admin_data = UserAdminDetail(
-            id=session_obj.admin.id,
-            email=session_obj.admin.email,
-            full_name=session_obj.admin.full_name,
-            role=str(session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else session_obj.admin.role),
-            profile_image=None,
-            team=TeamReadBasic(
-                id=session_obj.admin.team.id,
-                name=session_obj.admin.team.name,
-                description=session_obj.admin.team.description,
-                created_at=session_obj.admin.team.created_at.isoformat() if session_obj.admin.team.created_at else ""
-            ) if session_obj.admin.team else None
-        )
+# The local _serialize_interview_admin_detail function has been replaced 
+# by the dedicated service in app/services/admin_serialization.py
 
-    # 2. Map Candidate User
-    candidate_data = None
-    if session_obj.candidate:
-        candidate_data = UserAdminDetail(
-            id=session_obj.candidate.id,
-            email=session_obj.candidate.email,
-            full_name=session_obj.candidate.full_name,
-            role=str(session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else session_obj.candidate.role),
-            profile_image=None,
-            team=TeamReadBasic(
-                id=session_obj.candidate.team.id,
-                name=session_obj.candidate.team.name,
-                description=session_obj.candidate.team.description,
-                created_at=session_obj.candidate.team.created_at.isoformat() if session_obj.candidate.team.created_at else ""
-            ) if session_obj.candidate.team else None
-        )
-
-    # 3. Map Standard Question Paper
-    paper_data = None
-    if session_obj.paper:
-        questions_list = [
-            QuestionAdminDetail(
-                id=q.id,
-                paper_id=q.paper_id,
-                content=q.content or "",
-                question_text=q.question_text or "",
-                topic=q.topic or "",
-                difficulty=str(q.difficulty),
-                marks=q.marks or 0,
-                response_type=str(q.response_type)
-            ) for q in getattr(session_obj.paper, "questions", [])
-        ]
-        
-        paper_data = QuestionPaperAdminDetail(
-            id=session_obj.paper.id,
-            name=session_obj.paper.name,
-            description=session_obj.paper.description or "",
-            adminUser=session_obj.paper.admin.full_name if session_obj.paper.admin else None,
-            question_count=session_obj.paper.question_count or len(questions_list),
-            total_marks=session_obj.paper.total_marks or sum(q.marks for q in questions_list),
-            created_at=session_obj.paper.created_at,
-            questions=questions_list
-        )
-
-    # 4. Map Coding Question Paper
-    coding_paper_data = None
-    if session_obj.coding_paper:
-        coding_questions_list = [
-            CodingQuestionAdminDetail(
-                id=cq.id,
-                paper_id=cq.paper_id,
-                title=cq.title or "",
-                problem_statement=cq.problem_statement or "",
-                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
-                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
-                starter_code=cq.starter_code or "",
-                topic=cq.topic or "",
-                difficulty=str(cq.difficulty),
-                marks=cq.marks or 0
-            ) for cq in getattr(session_obj.coding_paper, "questions", [])
-        ]
-        
-        coding_paper_data = CodingPaperAdminDetail(
-            id=session_obj.coding_paper.id,
-            name=session_obj.coding_paper.name,
-            description=session_obj.coding_paper.description or "",
-            adminUser=session_obj.coding_paper.admin.full_name if session_obj.coding_paper.admin else None,
-            question_count=session_obj.coding_paper.question_count or len(coding_questions_list),
-            total_marks=session_obj.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
-            created_at=session_obj.coding_paper.created_at,
-            questions=coding_questions_list
-        )
-
-    return InterviewSessionAdminDetail(
-        id=session_obj.id,
-        access_token=session_obj.access_token,
-        admin_user=admin_data,
-        candidate_user=candidate_data,
-        paper=paper_data,
-        coding_paper=coding_paper_data,
-        interview_round=str(session_obj.interview_round.value if hasattr(session_obj.interview_round, 'value') else session_obj.interview_round) if session_obj.interview_round else None,
-        schedule_time=session_obj.schedule_time,
-        duration_minutes=session_obj.duration_minutes,
-        max_questions=session_obj.max_questions,
-        start_time=session_obj.start_time,
-        end_time=session_obj.end_time,
-        status=str(session_obj.status.value if hasattr(session_obj.status, 'value') else session_obj.status),
-        total_score=session_obj.total_score,
-        last_activity=session_obj.last_activity,
-        warning_count=session_obj.warning_count or 0,
-        max_warnings=session_obj.max_warnings or 3,
-        is_suspended=session_obj.is_suspended or False,
-        suspension_reason=session_obj.suspension_reason,
-        suspended_at=session_obj.suspended_at,
-        enrollment_audio_path=session_obj.enrollment_audio_path,
-        is_completed=session_obj.is_completed or False
-    )
-
-@router.get("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionAdminDetail])
+@router.get("/interviews/{interview_id}", response_model=ApiResponse[GetInterviewResultResponse])
 async def get_interview(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1149,10 +1303,10 @@ async def get_interview(
         logger.error(f"Serialization error in get_interview: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An error occurred while preparing the interview details.")
 
-@router.patch("/interviews/{interview_id}", response_model=ApiResponse[InterviewSessionAdminDetail])
+@router.patch("/interviews/{interview_id}", response_model=ApiResponse[GetInterviewResultResponse])
 async def update_interview(
     interview_id: int,
-    update_data: InterviewUpdate,
+    update_data: UpdateInterviewRequest,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -1164,7 +1318,7 @@ async def update_interview(
         raise HTTPException(status_code=404, detail="Interview session not found")
     
     # Authorization: verify the session belongs to the requesting admin
-    if interview_session.admin_id != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and interview_session.admin_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="Not authorized to modify this interview session"
@@ -1183,8 +1337,10 @@ async def update_interview(
     # Validate paper_id if provided
     if "paper_id" in update_dict:
         paper = session.get(QuestionPaper, update_dict["paper_id"])
-        if not paper or paper.admin_user != current_user.id:
+        if not paper:
             raise HTTPException(status_code=400, detail="Invalid Question Paper ID")
+        if current_user.role != UserRole.SUPER_ADMIN and paper.admin_user != current_user.id:
+            raise HTTPException(status_code=403, detail="Not authorized to assign this paper")
     
     # Validate and convert schedule_time if provided
     if "schedule_time" in update_dict:
@@ -1248,6 +1404,35 @@ async def update_interview(
                 sort_order=idx
             )
             session.add(session_question)
+
+    # Recompute duration_minutes when paper/coding_paper/max_questions change
+    # Use updated values if provided in the request, else fall back to existing session values
+    recompute_needed = any(k in update_dict for k in ("paper_id", "coding_paper_id", "max_questions"))
+    if recompute_needed:
+        new_paper_id = update_dict.get("paper_id", interview_session.paper_id)
+        new_coding_paper_id = update_dict.get("coding_paper_id", interview_session.coding_paper_id)
+        new_max = update_dict.get("max_questions", interview_session.max_questions)
+
+        paper_obj = session.get(QuestionPaper, new_paper_id) if new_paper_id else None
+        coding_paper_obj = session.get(CodingQuestionPaper, new_coding_paper_id) if new_coding_paper_id else None
+
+        n_theory = len(paper_obj.questions) if paper_obj and getattr(paper_obj, 'questions', None) else 0
+        n_coding = len(coding_paper_obj.questions) if coding_paper_obj and getattr(coding_paper_obj, 'questions', None) else 0
+        total_qs = n_theory + n_coding
+
+        if total_qs == 0:
+            # If no questions are present, preserve explicit duration if provided, else keep existing or default to 60
+            computed_duration = update_dict.get("duration_minutes", interview_session.duration_minutes or 60)
+        else:
+            base_minutes = n_theory * 5 + n_coding * 20
+            if new_max and new_max > 0 and new_max < total_qs:
+                scale = new_max / total_qs
+                computed_duration = max(1, int(round(base_minutes * scale)))
+            else:
+                computed_duration = base_minutes if base_minutes > 0 else (update_dict.get("duration_minutes") or interview_session.duration_minutes or 60)
+
+        # Ensure updated value is applied
+        update_dict["duration_minutes"] = computed_duration
     
     # Update the session
     for key, value in update_dict.items():
@@ -1275,8 +1460,8 @@ async def update_interview(
 @router.delete("/interviews/{interview_id}", response_model=ApiResponse[dict])
 async def delete_interview(
     interview_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """Hard delete an interview session and all related data (responses, proctoring events, etc.)."""
     # Retrieve the interview session with relationships loaded
@@ -1296,7 +1481,7 @@ async def delete_interview(
         raise HTTPException(status_code=404, detail="Interview session not found")
     
     # Authorization: verify the session belongs to the requesting admin (handle NULL admin_id)
-    if interview_session.admin_id and interview_session.admin_id != current_user.id:
+    if current_user.role != UserRole.SUPER_ADMIN and interview_session.admin_id and interview_session.admin_id != current_user.id:
         raise HTTPException(
             status_code=403, 
             detail="Not authorized to delete this interview session"
@@ -1375,121 +1560,72 @@ async def list_candidates(
 
 # --- Results & Proctoring ---
 
-@router.get("/users/results", response_model=ApiResponse[List[InterviewResultBrief]])
-async def get_all_results(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    """API for the admin dashboard: Returns all candidate details and their interview results/audit logs."""
+@router.get("/users/results", response_model=ApiResponse[PaginatedResponse[GetAdminResultsListResponse]])
+async def get_all_results(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
+    """API for the admin dashboard: Returns a flat list of candidate interview sessions and their results."""
     
-    # Only show sessions created by this admin
+    from ..models.db_models import InterviewResult
+    query = select(InterviewSession).join(InterviewResult)
+    
+    if current_user.role != UserRole.SUPER_ADMIN:
+        query = query.where(InterviewSession.admin_id == current_user.id)
+        
+    if search:
+        search_filter = f"%{search}%"
+        query = query.join(InterviewSession.candidate).where(
+            (User.full_name.ilike(search_filter)) | (User.email.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+        
     sessions = session.exec(
-        select(InterviewSession)
-        .where(InterviewSession.admin_id == current_user.id)
+        query.order_by(InterviewSession.id.desc())
+        .offset(skip).limit(limit)
         .options(
             selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
-            selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
             selectinload(InterviewSession.admin),
-            selectinload(InterviewSession.paper),
-            selectinload(InterviewSession.coding_paper)
+            selectinload(InterviewSession.result)
         )
     ).all()
     
     results = []
     for s in sessions:
-        if not s.result: continue 
-        
-        # Build nested objects
-        # 1. Admin
-        admin_obj = None
-        if s.admin:
-            from .teams import _serialize_team_basic
-            admin_obj = UserNested(
-                id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
-                role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-                profile_image=s.admin.profile_image,
-                team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
-            )
-        # admin was deleted, no fallback needed
-             
-        # 2. Candidate
-        candidate_obj = None
-        if s.candidate:
-            candidate_obj = serialize_user(s.candidate)
-            
-        # 3. Paper
-        paper_obj = None
-        if s.paper:
-            p_total = s.paper.total_marks if s.paper.total_marks else sum(q.marks or 0 for q in s.paper.questions)
-            paper_obj = PaperNestedWithoutAdmin(
-                id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
-                question_count=s.paper.question_count or len(s.paper.questions), 
-                total_marks=p_total,
-                created_at=s.paper.created_at
-            )
-            
-        # 3.1 Coding Paper
-        coding_paper_obj = None
-        if s.coding_paper:
-            cp_total = s.coding_paper.total_marks if s.coding_paper.total_marks else sum(q.marks or 0 for q in s.coding_paper.questions)
-            coding_paper_obj = CodingPaperNestedWithoutAdmin(
-                id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
-                question_count=s.coding_paper.question_count or len(s.coding_paper.questions), 
-                total_marks=cp_total,
-                created_at=s.coding_paper.created_at
-            )
-            
-        # 4. Session Nested
-        session_nested = InterviewSessionNested(
+        res_status = "PENDING"
+        total_score = 0.0
+        if s.result:
+            res_status = s.result.result_status or "PENDING"
+            total_score = s.result.total_score or 0.0
+
+        results.append(GetAdminResultsListResponse(
             id=s.id,
-            access_token=s.access_token,
-            invite_link=f"{FRONTEND_URL}/interview/{s.access_token}",
-            admin_user=admin_obj,
-            candidate_user=candidate_obj,
-            question_paper=paper_obj,
-            coding_paper=coding_paper_obj,
-            schedule_time=s.schedule_time,
-            duration_minutes=s.duration_minutes or 1440,
-            max_questions=s.max_questions,
-            start_time=s.start_time,
-            end_time=s.end_time,
+            admin_user=serialize_user(s.admin),
+            candidate_user=serialize_user(s.candidate),
             status=s.status.value if hasattr(s.status, 'value') else str(s.status),
-            total_score=s.total_score,
-            current_status=s.current_status,
-            last_activity=s.last_activity,
-            warning_count=s.warning_count or 0,
-            max_warnings=s.max_warnings or 3,
-            is_suspended=s.is_suspended or False,
-            suspension_reason=s.suspension_reason,
-            suspended_at=s.suspended_at,
-            enrollment_audio_path=f"/api/admin/interviews/enrollment-audio/{s.id}" if s.enrollment_audio_path else None,
-            allow_copy_paste=s.allow_copy_paste or False,
-            allow_question_navigate=s.allow_question_navigate or False,
-            is_completed=s.is_completed or False,
-            result_status=s.result.result_status if s.result else "PENDING"
-        )
-            
-        # 5. Top Level Result
-        max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
-        results.append(InterviewResultBrief(
-            id=s.result.id,
-            interview=session_nested,
-            result_status=s.result.result_status or "PENDING",
-            total_score=s.result.total_score or 0.0,
-            max_marks=float(max_marks),
-            created_at=s.result.created_at
+            result_status=res_status,
+            end_time=s.end_time,
+            total_score=total_score
         ))
 
     return ApiResponse(
         status_code=200,
-        data=results,
-        message="All results retrieved successfully"
+        data={
+            "items": [result.model_dump(by_alias=True) for result in results],
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
+        message="All interview results retrieved successfully"
     )
 
-from ..schemas.interview_responses import (
-    AdminResultData, InterviewSessionData, AnswersDataAdmin, QuestionData, LoginUserNested, 
-    QuestionPaperData, CodingAnswersData, CodingQuestionBasic, QuestionWithAnswer, CodingQuestionWithAnswer
-)
 
-@router.get("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
+@router.get("/results/{interview_id}", response_model=ApiResponse[dict])
 async def get_result(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -1502,11 +1638,12 @@ async def get_result(
         select(InterviewSession)
         .where(InterviewSession.id == interview_id)
         .options(
-            selectinload(InterviewSession.candidate),
+            selectinload(InterviewSession.candidate).selectinload(User.team),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.answers).selectinload(Answers.coding_question),
             selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers).selectinload(CodingAnswers.coding_question),
-            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.admin).selectinload(User.team),
+            selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions)
         )
     ).first()
@@ -1526,8 +1663,17 @@ async def get_result(
          raise HTTPException(status_code=404, detail="Result not found for this interview")
 
     # Build nested objects according to new AdminResultData schema
-    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
     import json as _json
+    from ..schemas.admin.results import (
+        GetInterviewResultResponse as AdminResultData,
+        AdminAnswerAnswerShort as AnswerShort,
+        AdminQuestionWithAnswer as QuestionWithAnswer,
+        CodingQuestionWithAnswer,
+        AdminPaperNested as PaperNestedWithAdminId,
+        AdminPaperNested as CodingPaperNestedWithAdmin,
+        AdminProctoringEvent as ProctoringEventRead,
+        InterviewSessionNested as InterviewSessionData
+    )
 
     # Helper maps for answers lookup
     std_answers_map = {ans.question_id: ans for ans in s.result.answers if ans.question_id}
@@ -1536,18 +1682,21 @@ async def get_result(
     # 1. Admin
     admin_obj = None
     if s.admin:
-        from .teams import _serialize_team_basic
         admin_obj = UserNested(
             id=s.admin.id, email=s.admin.email, full_name=s.admin.full_name, 
             role=s.admin.role.value if hasattr(s.admin.role, 'value') else str(s.admin.role),
-            access_token=s.admin.access_token,
-            team=_serialize_team_basic(s.admin.team, session) if s.admin.team else None
+            access_token=s.admin.access_token or "",
+            team={"id": s.admin.team.id, "name": s.admin.team.name} if s.admin.team else None
         )
          
     # 2. Candidate
     candidate_obj = None
     if s.candidate:
-        candidate_obj = serialize_user(s.candidate)
+        candidate_obj = UserNested(
+            id=s.candidate.id, email=s.candidate.email, full_name=s.candidate.full_name,
+            role=s.candidate.role.value if hasattr(s.candidate.role, 'value') else str(s.candidate.role),
+            team={"id": s.candidate.team.id, "name": s.candidate.team.name} if hasattr(s.candidate, "team") and s.candidate.team else None
+        )
         
     # 3. Paper (Standard) with Nested Answers
     paper_obj = None
@@ -1563,33 +1712,35 @@ async def get_result(
                     candidate_answer=ans.candidate_answer or "",
                     feedback=ans.feedback or "",
                     score=ans.score or 0.0,
-                    audio_path=ans.audio_path or "",
+                    audio_path=ans.audio_path or "", 
                     transcribed_text=ans.transcribed_text or "",
                     timestamp=ans.timestamp or datetime.now(timezone.utc)
                 )
-            
+
             # Parsing coding_content if it's a proxy question in standard paper
             coding_content = None
             if q.response_type == "code" and q.content:
                 try:
                     coding_content = _json.loads(q.content)
-                except: pass
+                except:
+                    pass
 
             questions_with_answers.append(QuestionWithAnswer(
                 id=q.id, paper_id=q.paper_id, content=q.content or "",
                 question_text=q.question_text or q.content or "",
                 topic=q.topic or "General", answer=ans_short,
-                difficulty=str(q.difficulty), marks=q.marks,
+                difficulty=str(q.difficulty), marks=q.marks or 0,
                 response_type=str(q.response_type), coding_content=coding_content
             ))
-            
+
         p_total = s.paper.total_marks if s.paper.total_marks else sum(q.marks or 0 for q in s.paper.questions)
         paper_obj = PaperNestedWithoutAdmin(
-            id=s.paper.id, name=s.paper.name, description=s.paper.description or "", 
+            id=s.paper.id, name=s.paper.name, description=s.paper.description or "",  
             question_count=len(questions_with_answers),
             questions=questions_with_answers,
             total_marks=p_total,
-            created_at=s.paper.created_at
+            created_at=s.paper.created_at,
+            team_id=s.paper.admin.team_id if s.paper.admin else None
         )
         
     # 3.1 Coding Paper with Nested Answers
@@ -1601,21 +1752,36 @@ async def get_result(
             ans_short = None
             if ans:
                 ans_short = AnswerShort(
-                    id=ans.id,
-                    interview_result_id=ans.interview_result_id,
+                    id=ans.id, interview_result_id=ans.interview_result_id,
                     candidate_answer=ans.candidate_answer or "",
-                    feedback=ans.feedback or "",
-                    score=ans.score or 0.0,
+                    feedback=ans.feedback or "", score=ans.score or 0.0,
                     audio_path=ans.audio_path or "",
                     transcribed_text=ans.transcribed_text or "",
                     timestamp=ans.timestamp or datetime.now(timezone.utc)
                 )
 
-            # Manual JSON field parsing since our schema list fields are strict
             examples = q.examples
             if isinstance(examples, str):
                 try: examples = _json.loads(examples)
                 except: examples = []
+
+            normalized_examples = []
+            if isinstance(examples, list):
+                for ex in examples:
+                    if isinstance(ex, dict):
+                        normalized_examples.append({
+                            "input": str(ex.get("input", "")),
+                            "output": str(ex.get("output", "")),
+                            "explanation": str(ex["explanation"]) if ex.get("explanation") is not None else None,
+                        })
+                    else:
+                        normalized_examples.append({
+                            "input": "",
+                            "output": str(ex),
+                            "explanation": None,
+                        })
+            else:
+                normalized_examples = []
             
             constraints = q.constraints
             if isinstance(constraints, str):
@@ -1625,62 +1791,70 @@ async def get_result(
             coding_questions_with_answers.append(CodingQuestionWithAnswer(
                 id=q.id, paper_id=q.paper_id, title=q.title or "Coding Task",
                 problem_statement=q.problem_statement or "",
-                examples=examples or [], constraints=constraints or [],
+                examples=normalized_examples, constraints=constraints or [],
                 starter_code=q.starter_code or "", answer=ans_short,
                 topic=q.topic or "Algorithms", difficulty=q.difficulty or "Medium",
                 marks=q.marks or 0
             ))
 
         cp_total = s.coding_paper.total_marks if s.coding_paper.total_marks else sum(q.marks or 0 for q in s.coding_paper.questions)
-        coding_paper_obj = CodingPaperNestedWithoutAdmin(
+        coding_paper_obj = CodingPaperNestedWithAdmin(
             id=s.coding_paper.id, name=s.coding_paper.name, description=s.coding_paper.description or "",
+            admin_user=None,
             question_count=len(coding_questions_with_answers),
             total_marks=cp_total,
             created_at=s.coding_paper.created_at,
-            questions=coding_questions_with_answers
+            questions=coding_questions_with_answers,
+            team_id=s.coding_paper.admin.team_id if s.coding_paper.admin else None
         )
         
-    # 4. Session Nested
-    session_nested = InterviewSessionData(
-        id=s.id, access_token=s.access_token,
+    # 4. Final Response Assembler
+    response_count = (len(s.result.answers) if s.result else 0) + (len(s.result.coding_answers) if s.result else 0)
+    max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
+    
+    proctoring = ProctoringEventRead(
+        warning_count=s.warning_count or 0,
+        tab_switch_count=s.tab_switch_count or 0,
+        max_warnings=s.max_warnings or 3,
+        is_suspended=s.is_suspended or False,
+        suspension_reason=s.suspension_reason,
+        suspended_at=s.suspended_at,
+        allow_copy_paste=s.allow_copy_paste or False,
+        allow_question_navigate=s.allow_question_navigate or False,
+        allow_proctoring=s.allow_proctoring or False
+    )
+
+    result_detail = AdminResultData(
+        id=s.id, access_token=s.access_token, invite_link=None,
         admin_user=admin_obj, candidate_user=candidate_obj, 
         paper=paper_obj, coding_paper=coding_paper_obj,
         schedule_time=s.schedule_time, duration_minutes=s.duration_minutes,
         max_questions=s.max_questions, start_time=s.start_time, end_time=s.end_time,
-        status=s.status.value if hasattr(s.status, 'value') else str(s.status),
-        total_score=s.total_score,
-        current_status=s.current_status.value if hasattr(s.current_status, 'value') else str(s.current_status),
-        last_activity=s.last_activity, warning_count=s.warning_count or 0,
-        max_warnings=s.max_warnings or 3, is_suspended=s.is_suspended or False,
-        suspension_reason=s.suspension_reason, suspended_at=s.suspended_at,
-        enrollment_audio_path=s.enrollment_audio_path,
-        is_completed=s.is_completed or False,
-        allow_copy_paste=s.allow_copy_paste or False,
-        allow_question_navigate=s.allow_question_navigate or False,
-        result_status=s.result.result_status if s.result else "PENDING"
-    )
-    
-    # 5. Final Result Assembler
-    max_marks = (paper_obj.total_marks if paper_obj else 0.0) + (coding_paper_obj.total_marks if coding_paper_obj else 0.0)
-    result_detail = AdminResultData(
-        id=s.result.id,
-        interview=session_nested,
-        total_score=s.result.total_score or 0.0,
+        status=s.status.value if hasattr(s.status, 'value') else str(s.status).lower(),
+        interview_round="Round 1", # Default value, can be updated later if needed
+        response_count=response_count,
+        last_activity=s.last_activity,
+        result_status=s.result.result_status if s.result else "PENDING",
         max_marks=float(max_marks),
-        result_status=s.result.result_status or "PENDING",
-        created_at=s.result.created_at or datetime.now(timezone.utc)
+        total_score=float(s.result.total_score if s.result else 0.0),
+        enrollment_audio_path=s.enrollment_audio_path,
+        enrollment_audio_url=s.enrollment_audio_path, # Direct Cloudinary URL
+        is_completed=s.is_completed or False,
+        proctoring_event=proctoring
     )
+
+    data_dict = result_detail.model_dump(exclude_none=True, by_alias=True)
 
     return ApiResponse(
         status_code=200,
-        data=result_detail,
+        data=data_dict,
         message="Result details retrieved successfully"
     )
 
-@router.patch("/results/{interview_id}", response_model=ApiResponse[AdminResultData])
+@router.patch("/results/{interview_id}", response_model=ApiResponse[dict])
 async def update_result(
     interview_id: int,
-    update_data: ResultUpdate,
+    update_data: UpdateResultRequest,
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -1777,6 +1951,62 @@ async def update_result(
     updated_result.message = "Result updated successfully"
     return updated_result
 
+@router.post("/results/{interview_id}/send-email", response_model=ApiResponse[dict])
+async def send_manual_result_email(
+    interview_id: int,
+    current_user: User = Depends(get_admin_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Manually send the result email to the candidate.
+    Only works if the results have been processed (PASS/FAIL).
+    """
+    interview_session = session.exec(
+        select(InterviewSession)
+        .where(InterviewSession.id == interview_id)
+        .options(
+            selectinload(InterviewSession.result),
+            selectinload(InterviewSession.paper),
+            selectinload(InterviewSession.coding_paper)
+        )
+    ).first()
+    
+    if not interview_session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    
+    if not interview_session.result:
+        raise HTTPException(status_code=400, detail="Results not yet generated for this session.")
+        
+    if interview_session.result.result_status not in ["PASS", "FAIL"]:
+         raise HTTPException(
+             status_code=400, 
+             detail=f"Results are still in '{interview_session.result.result_status}' state. Please wait for evaluation to finish."
+         )
+
+    # Prepare data for the utility
+    result_obj = interview_session.result
+    theory_answers = session.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+    coding_answers = session.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)).all()
+    
+    all_scores = [r.score for r in theory_answers if r.score is not None]
+    all_scores += [r.score for r in coding_answers if r.score is not None]
+    
+    computed_score = calculate_total_score(all_scores)
+    total_marks = calculate_total_marks(interview_session)
+    
+    # Trigger email
+    send_result_email_util(
+        db=session,
+        session=interview_session,
+        result_obj=result_obj,
+        computed_score=computed_score,
+        total_marks=total_marks,
+        theory_count=len(theory_answers),
+        coding_count=len(coding_answers)
+    )
+    
+    return ApiResponse(status_code=200, data={}, message="Result email sent successfully to the candidate.")
+
 @router.delete("/results/{interview_id}", response_model=ApiResponse[dict])
 async def delete_result(
     interview_id: int,
@@ -1864,16 +2094,23 @@ async def get_response_audio(
         raise HTTPException(status_code=404, detail="Audio response not found")
         
     # Answers -> InterviewResult -> InterviewSession
-    if not response.interview_result or not response.interview_result.session or \
-       (response.interview_result.session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN):
+    # Authorization: Only admin who created the interview OR super admin
+    # Relaxed: Allow if admin_id is None (unassigned)
+    is_owner = response.interview_result.session.admin_id == current_user.id
+    is_unassigned = response.interview_result.session.admin_id is None
+    
+    if not (is_owner or is_unassigned or current_user.role == UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
+        
+    if response.audio_path.startswith(("http://", "https://")):
+        return RedirectResponse(url=response.audio_path)
         
     if not os.path.exists(response.audio_path):
         raise HTTPException(status_code=404, detail="Audio file missing on server")
         
     return FileResponse(
         response.audio_path,
-        media_type="audio/wav",
+        media_type="audio/wav", # Adjust if needed, but wav is standard for our recording uploads
         content_disposition_type="inline"
     )
 
@@ -1889,9 +2126,16 @@ async def get_enrollment_audio(
         raise HTTPException(status_code=404, detail="Enrollment audio not found")
         
     # Authorization: Only admin who created the interview OR super admin
-    if interview_session.admin_id != current_user.id and current_user.role != UserRole.SUPER_ADMIN:
+    # Relaxed: Allow if admin_id is None (unassigned)
+    is_owner = interview_session.admin_id == current_user.id
+    is_unassigned = interview_session.admin_id is None
+
+    if not (is_owner or is_unassigned or current_user.role == UserRole.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Not authorized to access this audio")
         
+    if interview_session.enrollment_audio_path.startswith(("http://", "https://")):
+        return RedirectResponse(url=interview_session.enrollment_audio_path)
+
     if not os.path.exists(interview_session.enrollment_audio_path):
         raise HTTPException(status_code=404, detail="Enrollment audio file missing on server")
         
@@ -1918,6 +2162,20 @@ async def create_user(
     session: Session = Depends(get_session)
 ):
     """Create a new user with resume, profile picture, and face embeddings."""
+    
+    # Role-based creation logic
+    if current_user.role == UserRole.ADMIN:
+        if role != UserRole.CANDIDATE:
+            raise HTTPException(
+                status_code=403, 
+                detail="Admins can only create candidates. For creating admins or super admins, please contact a super admin."
+            )
+    elif current_user.role == UserRole.SUPER_ADMIN:
+        # Super Admin can create any role
+        pass
+    else:
+        # Just in case some other role hits this
+        raise HTTPException(status_code=403, detail="Operation not permitted")
     
     # 1. Existing user check
     existing_user = session.exec(select(User).where(User.email == email)).first()
@@ -1950,48 +2208,49 @@ async def create_user(
             new_user.profile_image_bytes = image_bytes
             
             # A. Generate Face Embeddings (Hybrid Strategy)
-            try:
-                from deepface import DeepFace
-                import json
-                import tempfile
-                import os
-
-                embeddings_map = {}
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(image_bytes)
-                    tmp_path = tmp.name
-                
+            if not IS_ORCHESTRATOR:
                 try:
-                    # ArcFace
-                    try:
-                        arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                        if arc_objs:
-                            embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-                    except Exception as e:
-                        logger.warning(f"ArcFace failed during user creation: {e}")
+                    from deepface import DeepFace
+                    import json
+                    import tempfile
+                    import os
 
-                    # SFace
+                    embeddings_map = {}
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                        tmp.write(image_bytes)
+                        tmp_path = tmp.name
+                    
                     try:
-                        sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                        if sface_objs:
-                            embeddings_map["SFace"] = sface_objs[0]["embedding"]
-                    except Exception as e:
-                        logger.warning(f"SFace failed during user creation: {e}")
+                        # ArcFace
+                        try:
+                            arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                            if arc_objs:
+                                embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+                        except Exception as e:
+                            logger.warning(f"ArcFace failed during user creation: {e}")
 
-                    if embeddings_map:
-                        new_user.face_embedding = json.dumps(embeddings_map)
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-            except Exception as e:
-                logger.error(f"Embedding generation failed: {e}")
+                        # SFace
+                        try:
+                            sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                            if sface_objs:
+                                embeddings_map["SFace"] = sface_objs[0]["embedding"]
+                        except Exception as e:
+                            logger.warning(f"SFace failed during user creation: {e}")
+
+                        if embeddings_map:
+                            new_user.face_embedding = json.dumps(embeddings_map)
+                    finally:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                except Exception as e:
+                    logger.error(f"Embedding generation failed: {e}")
 
             # B. Upload to Cloudinary
             try:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
-                        cloudinary_service.upload_image, 
+                        get_cloudinary_service().upload_image, 
                         image_bytes, 
                         folder="profile_pictures" 
                     )
@@ -2009,8 +2268,8 @@ async def create_user(
         
         try:
             await resume.seek(0)
-            # Ensure your cloudinary_service call is also correct
-            resume_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            # Upload to Cloudinary
+            resume_url = get_cloudinary_service().upload_resume(resume.file, folder="resumes")
             if resume_url:
                 new_user.resume_path = resume_url
                 updates_made = True
@@ -2034,23 +2293,46 @@ async def create_user(
         from .teams import _serialize_team_basic
         team_data = _serialize_team_basic(new_user.team, session)
 
-    return create_response(ApiResponse(
+    return Response(
+        content=ApiResponse(
+            status_code=201,
+            data=UserRead(
+                id=new_user.id,
+                email=new_user.email,
+                full_name=new_user.full_name,
+                role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
+                resume_url=new_user.resume_path,
+                profile_image=new_user.profile_image, 
+                team=team_data
+            ),
+            message="User created with profile image and biometric embeddings."
+        ).model_dump_json(),
         status_code=201,
-        data=UserRead(
-            id=new_user.id,
-            email=new_user.email,
-            full_name=new_user.full_name,
-            role=new_user.role.value if hasattr(new_user.role, "value") else str(new_user.role),
-            resume_url=new_user.resume_path,
-            profile_image_url=new_user.profile_image, 
-            team=team_data
-        ),
-        message="User created with profile image and biometric embeddings."
-    ))
+        media_type="application/json"
+    )
 
-@router.get("/users", response_model=ApiResponse[List[UserRead]])
-async def list_users(current_user: User = Depends(get_admin_user), session: Session = Depends(get_session)):
-    users_orm = session.exec(select(User)).all()
+@router.get("/users", response_model=ApiResponse[PaginatedResponse[UserRead]])
+async def list_users(
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None,
+    current_user: User = Depends(get_admin_user), 
+    session: Session = Depends(get_session)
+):
+    query = select(User)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(
+            (User.full_name.ilike(search_filter)) | (User.email.ilike(search_filter))
+        )
+        
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    users_orm = session.exec(
+        query.order_by(User.id.desc()).offset(skip).limit(limit)
+    ).all()
     from .teams import _serialize_team_basic
     
     users_data = []
@@ -2062,17 +2344,22 @@ async def list_users(current_user: User = Depends(get_admin_user), session: Sess
             full_name=u.full_name, 
             role=u.role.value if hasattr(u.role, "value") else str(u.role),
             resume_url=u.resume_path if u.resume_path else None,
-            profile_image_url=u.profile_image if u.profile_image_bytes or u.profile_image else None,
+            profile_image=u.profile_image,
             team=team_data
         ))
         
     return ApiResponse(
         status_code=200,
-        data=users_data,
+        data={
+            "items": users_data,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Users retrieved successfully"
     )
 
-@router.get("/users/{user_id}", response_model=ApiResponse[UserDetailRead])
+@router.get("/users/{user_id}", response_model=ApiResponse[GetUserDetailResponse])
 async def get_user(
     user_id: int,
     current_user: User = Depends(get_admin_user),
@@ -2099,7 +2386,7 @@ async def get_user(
 
     return ApiResponse(
         status_code=200,
-        data=UserDetailRead(
+        data=GetUserDetailResponse(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
@@ -2109,13 +2396,13 @@ async def get_user(
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
             resume_url=user.resume_path if user.resume_path else None,
-            profile_image_url=user.profile_image if user.profile_image_bytes or user.profile_image else None,
+            profile_image=user.profile_image,
             team=team_data
-        ),
+        ).model_dump(),
         message="User details retrieved successfully"
     )
 
-@router.patch("/users/{user_id}", response_model=ApiResponse[UserDetailRead])
+@router.patch("/users/{user_id}", response_model=ApiResponse[GetUserDetailResponse])
 async def update_user(
     user_id: int,
     email: Optional[str] = Form(None),
@@ -2179,7 +2466,7 @@ async def update_user(
         
         try:
             await resume.seek(0)
-            cloudinary_url = cloudinary_service.upload_resume(resume.file, folder="resumes")
+            cloudinary_url = get_cloudinary_service().upload_resume(resume.file, folder="resumes")
             print(cloudinary_url)
 
             if cloudinary_url:
@@ -2213,7 +2500,7 @@ async def update_user(
 
     return create_response(ApiResponse(
         status_code=200,
-        data=UserDetailRead(
+        data=GetUserDetailResponse(
             id=user.id,
             email=user.email,
             full_name=user.full_name,
@@ -2223,7 +2510,7 @@ async def update_user(
             created_interviews_count=len(created_interviews),
             participated_interviews_count=len(participated_interviews),
             resume_url=user.resume_path if user.resume_path else None,
-            profile_image_url=user.profile_image if user.profile_image_bytes or user.profile_image else None,
+            profile_image=user.profile_image,
             team=team_data
         ),
         message="User updated successfully"
@@ -2318,6 +2605,12 @@ async def delete_user(
         select(QuestionPaper).where(QuestionPaper.admin_user == user_id)
     ).all())
     
+    coding_papers_count = len(session.exec(
+        select(CodingQuestionPaper).where(CodingQuestionPaper.admin_user == user_id)
+    ).all())
+    
+    total_papers_count = papers_count + coding_papers_count
+    
     # Store info for response
     user_email = user.email
     user_name = user.full_name
@@ -2328,6 +2621,13 @@ async def delete_user(
     ).all()
     for paper in papers:
         session.delete(paper)
+
+    # Also delete coding question papers
+    coding_papers = session.exec(
+        select(CodingQuestionPaper).where(CodingQuestionPaper.admin_user == user_id)
+    ).all()
+    for cp in coding_papers:
+        session.delete(cp)
 
     # Hard delete: user is permanently removed
     # DB ON DELETE CASCADE handles InterviewSession → Result → Answers, etc.
@@ -2346,29 +2646,82 @@ async def delete_user(
             "email": user_email,
             "full_name": user_name,
             "interviews_deleted": interviews_as_admin + interviews_as_candidate,
-            "papers_deleted": papers_count
+            "papers_deleted": total_papers_count
         },
         message="User and all associated data deleted successfully."
     )
 
-@router.post("/shutdown", response_model=ApiResponse[dict])
-def shutdown(current_user: User = Depends(get_admin_user)):
-    """Graceful shutdown trigger."""
-    if current_user.role != UserRole.SUPER_ADMIN: raise HTTPException(status_code=403)
+@router.post("/system/expire-interviews", response_model=ApiResponse[dict])
+async def expire_interviews_manually(
+    x_cron_secret: Optional[str] = Header(None, alias="X-CRON-SECRET"),
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    session: Session = Depends(get_session)
+):
+    """
+    Manually trigger interview expiration check.
+    This endpoint can be called by external cron services for platforms that don't support background processes.
     
-    # Graceful shutdown for Uvicorn
-    import signal
-    os.kill(os.getpid(), signal.SIGTERM) # SIGTERM allows cleaning up
+    For HF Spaces and Render free tier, set up a cron job to call this endpoint periodically.
+    Example cron: */5 * * * * curl -X POST https://your-app.com/api/admin/system/expire-interviews -H "X-CRON-SECRET: $CRON_SECRET"
+    """
+    authorized = False
+
+    if x_cron_secret and CRON_SECRET and x_cron_secret == CRON_SECRET:
+        authorized = True
+
+    if not authorized and current_user:
+        if current_user.role == UserRole.SUPER_ADMIN:
+            authorized = True
+
+    if not authorized:
+        raise HTTPException(status_code=403, detail="Unauthorized: invalid cron secret or admin token")
+    
+    from ..models.db_models import InterviewStatus
+    from ..services.status_manager import complete_interview_session
+    from ..tasks.interview_tasks import process_session_results_task
+    now = datetime.now(timezone.utc)
+    expired_count = 0
+    
+    # Find all active interviews that still need expiry checks
+    candidate_sessions = session.exec(
+        select(InterviewSession).where(
+            InterviewSession.status.in_([InterviewStatus.SCHEDULED, InterviewStatus.LIVE])
+        )
+    ).all()
+    
+    for interview_session in candidate_sessions:
+        access_decision = evaluate_interview_access(interview_session, now=now)
+        
+        if access_decision.entry_window_expired:
+            interview_session.status = InterviewStatus.EXPIRED
+            interview_session.current_status = "Link Expired"
+            session.add(interview_session)
+            expired_count += 1
+        
+        elif access_decision.duration_expired:
+            if interview_session.status == InterviewStatus.LIVE:
+                complete_interview_session(
+                    session=session,
+                    interview_session=interview_session,
+                    reason="duration_timeout",
+                    current_status_label="Completed (Time Limit)",
+                )
+                from ..core.tasks import run_background_task
+                run_background_task(process_session_results_task, interview_session.id)
+                expired_count += 1
+    
+    session.commit()
+    
     return ApiResponse(
         status_code=200,
-        data={},
-        message="Server shutting down..."
+        data={"expired_count": expired_count},
+        message=f"Expiration check completed. {expired_count} interviews updated."
     )
 
 # --- Candidate Status Tracking ---
 
 
-@router.get("/interviews/{interview_id}/status", response_model=ApiResponse[CandidateStatusResponse])
+@router.get("/interviews/{interview_id}/status", response_model=ApiResponse[GetCandidateStatusResponse])
 async def get_candidate_status(
     interview_id: int,
     current_user: User = Depends(get_admin_user),
@@ -2414,66 +2767,7 @@ async def get_candidate_status(
     
     return ApiResponse(
         status_code=200,
-        data=CandidateStatusResponse(**status_data),
+        data=GetCandidateStatusResponse(**status_data),
         message="Candidate status retrieved successfully"
     )
-
-@router.get("/test-email")
-async def test_email(
-    background_tasks: BackgroundTasks,
-    email: Optional[str] = None,
-    current_user: User = Depends(get_admin_user)
-):
-    """Simple endpoint to test email configuration without scheduling an interview."""
-    target_email = email or current_user.email
-    subject = "AI Interview Platform - Diagnostic Test (Async)"
-    link = f"{APP_BASE_URL}/admin/dashboard"
-    
-    logger.info(f"Queuing async test email for {target_email}")
-    background_tasks.add_task(
-        email_service.send_interview_invitation,
-        to_email=target_email,
-        candidate_name=current_user.full_name,
-        link=link,
-        time_str="Just Now (Diagnostic Async)",
-        duration_minutes=0
-    )
-    
-    return ApiResponse(
-        status_code=200,
-        data={"sent_to": target_email, "mode": "async"},
-        message="Test email queued. Check server logs for delivery status."
-    )
-
-@router.get("/test-email-sync")
-async def test_email_sync(
-    email: Optional[str] = None,
-    current_user: User = Depends(get_admin_user)
-):
-    """Synchronous version of test-email to see errors immediately in Swagger."""
-    target_email = email or current_user.email
-    link = f"{APP_BASE_URL}/admin/dashboard"
-    
-    logger.info(f"Sending SYNC test email for {target_email}")
-    success, message = email_service.send_interview_invitation(
-        to_email=target_email,
-        candidate_name=current_user.full_name,
-        link=link,
-        time_str="Just Now (Diagnostic Sync)",
-        duration_minutes=0
-    )
-    
-    if success:
-        return ApiResponse(
-            status_code=200,
-            data={"sent_to": target_email, "mode": "sync", "details": message},
-            message="Test email sent successfully (Synchronous)."
-        )
-    else:
-        return ApiResponse(
-            status_code=500,
-            data={"sent_to": target_email, "mode": "sync", "error": message},
-            message="Failed to send email. Check error details.",
-            success=False
-        )
 

@@ -5,7 +5,7 @@
 # =============================================================================
 set -o pipefail
 
-BASE="${BASE:-http://localhost:8000/api}"
+BASE="${BASE:-http://127.0.0.1:7861/api}"
 PASS=0
 FAIL=0
 FAILED_LIST=""
@@ -196,7 +196,7 @@ check "POST /admin/papers (create)" "201" "$CODE" "$BODY"
 PAPER_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
 
 if [ -n "$PAPER_ID" ]; then
-    RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/admin/generate-paper" \
+    RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/admin/generate-paper" \
       -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
       -d "{\"ai_prompt\":\"Python backend developer with FastAPI experience\",\"years_of_experience\":3,\"num_questions\":2,\"team_id\":$TEAM_ID}")
     split_response "$RESP"
@@ -263,8 +263,8 @@ echo "━━━ 4. USERS CRUD ━━━"
 
 UNIQUE_CRUD_EMAIL="e2e_crud_user_$(date +%s)@test.com"
 RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/admin/users" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
-  -d "{\"email\":\"$UNIQUE_CRUD_EMAIL\",\"password\":\"test123\",\"full_name\":\"CRUD Test User\",\"role\":\"CANDIDATE\"}")
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "email=$UNIQUE_CRUD_EMAIL" -F "password=test123" -F "full_name=CRUD Test User" -F "role=CANDIDATE")
 split_response "$RESP"
 check "POST /admin/users (create)" "200 201" "$CODE" "$BODY"
 CRUD_USER_ID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || echo "")
@@ -350,7 +350,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         # Upload selfie
         RESP=$(curl -s --max-time 15 -w "\n%{http_code}" -X POST "$BASE/interview/upload-selfie" \
           -H "Authorization: Bearer $CAND_TOKEN" \
-          -F "interview_id=$INT_ID" \
+          -F "candidate_id=$CAND_ID" \
           -F "file=@/tmp/api_test/selfie.jpg;type=image/jpeg")
         split_response "$RESP"
         check "POST /interview/upload-selfie" "200" "$CODE" "$BODY"
@@ -366,7 +366,7 @@ if [ -n "$PAPER_ID" ] && [ -n "$CAND_ID" ]; then
         RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -o /dev/null "$BASE/admin/interviews/enrollment-audio/$INT_ID" \
           -H "Authorization: Bearer $ADMIN_TOKEN")
         CODE=$(echo "$RESP" | tail -1)
-        check "GET /admin/interviews/enrollment-audio/$INT_ID" "200 404" "$CODE" ""
+        check "GET /admin/interviews/enrollment-audio/$INT_ID" "200 307 404" "$CODE" ""
 
         # Get next question
         RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -H "Authorization: Bearer $CAND_TOKEN" "$BASE/interview/next-question/$INT_ID")
@@ -430,16 +430,16 @@ RESP=$(curl -s --max-time 60 -w "\n%{http_code}" "$BASE/admin/users/results" -H 
 split_response "$RESP"
 check "GET /admin/users/results (list)" "200" "$CODE" "$BODY"
 
-# Get the interview that has results
-RESULT_INT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print(d[0]['interview']['id'] if d else '')" 2>/dev/null || echo "")
+# Get the interview that has results (New flat structure: d[0]['id'])
+RESULT_INT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; print(d[0]['id'] if d and isinstance(d, list) else '')" 2>/dev/null || echo "")
 
 if [ -n "$RESULT_INT" ]; then
     RESP=$(curl -s --max-time 60 -w "\n%{http_code}" "$BASE/admin/results/$RESULT_INT" -H "Authorization: Bearer $ADMIN_TOKEN")
     split_response "$RESP"
     check "GET /admin/results/$RESULT_INT (detail)" "200" "$CODE" "$BODY"
 
-    # Get response ID from answers
-    RESP_ID=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; ans=d.get('answers',[]); print(ans[0]['id'] if ans else '')" 2>/dev/null || echo "")
+    # Get individual response ID from questions
+    RESP_ID=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin)['data']; questions=d.get('paper',{}).get('questions',[]); answers=[q['answer'] for q in questions if q.get('answer')]; print(answers[0]['id'] if answers else '')" 2>/dev/null || echo "")
 
     if [ -n "$RESP_ID" ]; then
         RESP=$(curl -s --max-time 60 -w "\n%{http_code}" "$BASE/admin/interviews/response/$RESP_ID" -H "Authorization: Bearer $ADMIN_TOKEN")
@@ -498,7 +498,7 @@ echo ""
 echo "━━━ 8. STANDALONE TOOLS ━━━"
 
 # Evaluate answer
-RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/evaluate-answer" \
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/evaluate-answer" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"question\":\"What is Python?\",\"answer\":\"Python is a high-level programming language.\"}")
@@ -506,16 +506,25 @@ split_response "$RESP"
 check "POST /interview/evaluate-answer" "200 500" "$CODE" "$BODY"
 
 # TTS
-RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -o /dev/null "$BASE/interview/tts?text=Hello+world")
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -o /dev/null "$BASE/interview/tts?text=Hello+world")
 CODE=$(echo "$RESP" | tail -1)
 check "GET /interview/tts" "200" "$CODE" ""
 
 # Speech to text
-RESP=$(curl -s --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/speech-to-text" \
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/speech-to-text" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -F "audio=@/tmp/api_test/audio.wav;type=audio/wav")
 split_response "$RESP"
 check "POST /interview/tools/speech-to-text" "200" "$CODE" "$BODY"
+
+# STT Evaluate
+RESP=$(curl -s -L --max-time 300 -w "\n%{http_code}" -X POST "$BASE/interview/tools/sttEvaluate" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -F "audio=@/tmp/api_test/audio.wav;type=audio/wav" \
+  -F "question_text=What is Python?" \
+  -F "expected_answer=Python is a programming language")
+split_response "$RESP"
+check "POST /interview/tools/sttEvaluate" "200 500" "$CODE" "$BODY"
 
 # Question audio (for existing question)
 if [ -n "$Q_ID" ]; then
@@ -546,21 +555,27 @@ check "GET /admin/test-email-sync" "200 500" "$CODE" "$BODY"
 
 # WebSocket test (connect and immediately close)
 echo "  --- WebSocket tests ---"
+PORT=$(echo "$BASE" | sed -E "s/.*:([0-9]+).*/\1/")
+if [ -z "$PORT" ]; then PORT=8000; fi
+
 WS_RESULT=$(python3 -c "
 import asyncio, websockets, json, sys
 async def test_ws():
     try:
         token = sys.argv[1]
+        port = sys.argv[2]
         async with websockets.connect(
-            f'ws://localhost:8000/api/admin/dashboard/ws?token={token}',
+            f'ws://localhost:{port}/api/admin/dashboard/ws?token={token}',
             close_timeout=3
         ) as ws:
             msg = await asyncio.wait_for(ws.recv(), timeout=3)
             print('OK:' + str(msg)[:50])
     except Exception as e:
         print('ERR:' + str(e)[:80])
-asyncio.run(test_ws())
-" "$ADMIN_TOKEN" 2>&1)
+async def main():
+    await test_ws()
+asyncio.run(main())
+" "$ADMIN_TOKEN" "$PORT" 2>&1)
 if echo "$WS_RESULT" | grep -q "^OK:"; then
     echo "  ✅ WS /admin/dashboard/ws ($WS_RESULT)"
     PASS=$((PASS+1))
@@ -568,7 +583,7 @@ elif echo "$WS_RESULT" | grep -q "no module\|ModuleNotFoundError"; then
     echo "  ⚠️  WS /admin/dashboard/ws (websockets module not installed, testing via curl)"
     RESP=$(curl -s --max-time 5 -w "\n%{http_code}" -o /dev/null \
       -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
-      "http://localhost:8000/api/admin/dashboard/ws?token=$ADMIN_TOKEN")
+      "http://localhost:${PORT}/api/admin/dashboard/ws?token=$ADMIN_TOKEN")
     CODE=$(echo "$RESP" | tail -1)
     check "WS /admin/dashboard/ws (upgrade)" "101 200" "$CODE" ""
 else
@@ -578,16 +593,19 @@ else
 fi
 
 WS_RESULT2=$(python3 -c "
-import asyncio, websockets
+import asyncio, websockets, sys
 async def test_ws():
     try:
-        async with websockets.connect('ws://localhost:8000/api/status/ws?interview_id=1', close_timeout=3) as ws:
+        port = sys.argv[1]
+        async with websockets.connect(f'ws://localhost:{port}/api/status/ws?interview_id=1', close_timeout=3) as ws:
             msg = await asyncio.wait_for(ws.recv(), timeout=3)
             print('OK:' + str(msg)[:50])
     except Exception as e:
         print('ERR:' + str(e)[:80])
-asyncio.run(test_ws())
-" 2>&1)
+async def main():
+    await test_ws()
+asyncio.run(main())
+" "$PORT" 2>&1)
 if echo "$WS_RESULT2" | grep -q "^OK:"; then
     echo "  ✅ WS /status/ws ($WS_RESULT2)"
     PASS=$((PASS+1))
@@ -604,14 +622,32 @@ else
 fi
 
 # ================================================================
-# 10. VIDEO / WebRTC
+# 10. VIDEO / WebRTC / Fallbacks
 # ================================================================
 echo ""
-echo "━━━ 10. VIDEO / WebRTC ━━━"
+echo "━━━ 10. VIDEO / WebRTC / Fallbacks ━━━"
 
-RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -o /dev/null "$BASE/video/video_feed")
+# TEST: Binary WebSocket Video Handshake
+PORT=$(echo "$BASE" | sed -E "s/.*:([0-9]+).*/\1/")
+if [ -z "$PORT" ]; then PORT=7860; fi
+RESP=$(curl -s --max-time 5 -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" -w "\n%{http_code}" -o /dev/null "$BASE/video/stream/1")
 CODE=$(echo "$RESP" | tail -1)
-check "GET /video/video_feed" "200 422 500 404" "$CODE" ""
+check "WS /video/stream/1 (Binary Fallback Handshake)" "101 200" "$CODE" ""
+
+# TEST: Rate Limiting Enforcement (Burst check on Proctoring Status API)
+echo "  Testing Throttling (Burst)..."
+LIMIT_CHECK=0
+for i in {1..5}; do
+  RESP=$(curl -s --max-time 5 -w "\n%{http_code}" -o /dev/null "$BASE/video/status?interview_id=1")
+  CODE=$(echo "$RESP" | tail -1)
+  if [ "$CODE" = "429" ]; then LIMIT_CHECK=1; break; fi
+done
+if [ $LIMIT_CHECK -eq 1 ]; then
+    echo "  ✅ Rate Limiting (429 verified in burst)"
+    PASS=$((PASS+1))
+else
+    echo "  ℹ️  Rate Limiting (No 429 in 5-req burst - current limit 120/min)"
+fi
 
 RESP=$(curl -s --max-time 60 -w "\n%{http_code}" -X POST "$BASE/video/offer" \
   -H "Content-Type: application/json" \

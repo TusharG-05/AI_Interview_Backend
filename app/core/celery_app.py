@@ -1,12 +1,14 @@
 from celery import Celery
 import os
 from dotenv import load_dotenv
+from celery.schedules import crontab
 
 load_dotenv()
 
 # Get broker URL from environment or default to local Redis
-CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
 
 celery_app = Celery(
     "interview_platform",
@@ -27,6 +29,21 @@ celery_app.conf.update(
     broker_connection_timeout=3.0, # Fail fast if Redis is unreachable (API blocking)
     broker_connection_retry_on_startup=False,
 )
+
+# Celery Beat schedule for periodic tasks (only for environments that support background processes)
+if not os.getenv("RENDER") and not os.getenv("SPACE_ID"):
+    celery_app.conf.beat_schedule = {
+        'expire-interviews-every-minute': {
+            'task': 'app.tasks.interview_tasks.expire_interviews_task',
+            'schedule': 60.0,  # Every 60 seconds
+        },
+    }
+    print("Celery Beat schedule configured for local environment.")
+else:
+    print("Cloud environment detected. Celery Beat disabled. Use /api/admin/system/expire-interviews endpoint with external cron.")
+
+if __name__ == "__main__":
+    celery_app.start()
 
 if __name__ == "__main__":
     celery_app.start()

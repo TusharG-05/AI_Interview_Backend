@@ -1,5 +1,6 @@
 import pytest
 import os
+import asyncio
 from unittest.mock import MagicMock, patch
 import numpy as np
 from app.services.audio import AudioService
@@ -49,7 +50,7 @@ def test_audio_service_skips_local_on_cloud(mock_getenv, dummy_wav):
     service = AudioService()
     result = asyncio_run(service.speech_to_text(dummy_wav))
     
-    assert "[STT Error: Cloud Environment detected. Skipping heavy local STT fallback.]" == result
+    assert "[STT Error: Cloud Environment detected. Skipping local STT fallback.]" == result
 
 @patch("app.services.face.os.getenv")
 def test_face_recognizer_builds_sface_even_on_cloud(mock_getenv):
@@ -57,14 +58,15 @@ def test_face_recognizer_builds_sface_even_on_cloud(mock_getenv):
         "SPACE_ID": "test_space"
     }.get(k, default)
     
-    with patch("deepface.DeepFace.build_model") as mock_build:
+    with patch("app.services.face.IS_ORCHESTRATOR", False), \
+         patch("deepface.DeepFace.build_model") as mock_build:
         recognizer = FaceRecognizer()
         mock_build.assert_called_once_with("SFace")
 
 @patch("app.services.interview.os.getenv")
 @patch("app.services.interview.InferenceClient")
-@patch("app.services.interview.groq_client", None)
-def test_llm_fallback_to_hf(mock_hf_client, mock_getenv):
+@patch("app.services.interview.get_interview_groq", return_value=None)
+def test_llm_fallback_to_hf(mock_groq, mock_hf_client, mock_getenv):
     mock_getenv.side_effect = lambda k, default=None: {
         "USE_MODAL": "false",
         "HF_TOKEN": "valid_token"

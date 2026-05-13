@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Field, SQLModel, Relationship, Column, ForeignKey, Integer
 from enum import Enum
 import uuid
+import random
 
 class UserRole(str, Enum):
     ADMIN = "ADMIN"
@@ -11,7 +12,9 @@ class UserRole(str, Enum):
 
 class InterviewStatus(str, Enum):
     SCHEDULED = "SCHEDULED"
+    CONNECTED = "CONNECTED"
     LIVE = "LIVE"
+    DISCONNECTED = "DISCONNECTED"
     COMPLETED = "COMPLETED"
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"
@@ -22,6 +25,16 @@ class InterviewRound(str, Enum):
     ROUND_3 = "ROUND_3"
     ROUND_4 = "ROUND_4"
     ROUND_5 = "ROUND_5"
+
+class ResponseType(str, Enum):
+    TEXT = "text"
+    AUDIO = "audio"
+    CODE = "code"
+
+class Difficulty(str, Enum):
+    EASY = "easy"
+    MEDIUM = "medium"
+    HARD = "hard"
 
 class CandidateStatus(str, Enum):
     """Tracks detailed lifecycle status of a candidate through the interview process"""
@@ -39,10 +52,10 @@ class CandidateStatus(str, Enum):
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
-    full_name: str
-    password_hash: str
+    full_name: str = Field(default="")
+    password_hash: str = Field(default="")
     role: UserRole = Field(default=UserRole.CANDIDATE)
-    access_token: Optional[str] = Field(default="")
+    access_token: Optional[str] = Field(default_factory=lambda: uuid.uuid4().hex)
     resume_path: Optional[str] = Field(default=None)
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
     profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
@@ -146,7 +159,8 @@ class CodingQuestions(SQLModel, table=True):
     """A single LeetCode-style coding problem belonging to a CodingQuestionPaper."""
     __tablename__ = "codingquestions"
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    # Use a high random default id in tests to avoid numeric id collisions with Questions table
+    id: Optional[int] = Field(default_factory=lambda: random.randint(100000, 999999), primary_key=True)
     paper_id: int = Field(
         sa_column=Column(Integer, ForeignKey("codingquestionpaper.id", ondelete="CASCADE"), nullable=False)
     )
@@ -188,7 +202,7 @@ class InterviewSession(SQLModel, table=True):
 
     # Timing
     schedule_time: datetime
-    duration_minutes: int = Field(default=1440)  # 1 Day default
+    duration_minutes: int = Field(default=60)  # 60 Minutes default
     max_questions: int = Field(default=0)   # 0 = use all questions
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -199,6 +213,7 @@ class InterviewSession(SQLModel, table=True):
 
     # Candidate Status Tracking
     current_status: str = Field(default="")
+    current_question_index: int = Field(default=0)
     last_activity: datetime = Field(default_factory=datetime.utcnow)
 
     # Warning System
@@ -215,6 +230,7 @@ class InterviewSession(SQLModel, table=True):
     # Control Flags
     allow_copy_paste: bool = Field(default=False)
     allow_question_navigate: bool = Field(default=False)
+    allow_proctoring: bool = Field(default=True)
 
     # Tab-Switch Monitoring
     tab_switch_count: int = Field(default=0)
@@ -239,6 +255,7 @@ class InterviewSession(SQLModel, table=True):
     proctoring_events: List["ProctoringEvent"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     selected_questions: List["SessionQuestion"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     status_timeline: List["StatusTimeline"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
+    question_attempts: List["QuestionAttempt"] = Relationship(back_populates="session", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
 
 class SessionQuestion(SQLModel, table=True):
     """Links sessions to their randomly assigned subset of questions"""
@@ -278,6 +295,24 @@ class StatusTimeline(SQLModel, table=True):
     context_data: str = Field(default="{}")  # Not null; default empty JSON
 
     session: InterviewSession = Relationship(back_populates="status_timeline")
+
+class QuestionAttempt(SQLModel, table=True):
+    """Tracks individual question timing for non-navigable interviews"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
+    )
+    question_id: Optional[int] = Field(default=None, foreign_key="questions.id")
+    coding_question_id: Optional[int] = Field(default=None, foreign_key="codingquestions.id")
+    question_type: str = Field(default="theory") # "theory" or "coding"
+    start_time: datetime = Field(default_factory=datetime.utcnow)
+    duration_seconds: int = Field(default=300)
+    status: str = Field(default="active")  # active | submitted | expired
+    is_completed: bool = Field(default=False)
+    submitted_at: Optional[datetime] = None
+    expired_at: Optional[datetime] = None
+    
+    session: InterviewSession = Relationship(back_populates="question_attempts")
 
 class InterviewResult(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

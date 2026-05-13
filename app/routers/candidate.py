@@ -2,16 +2,18 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
+from sqlalchemy import func
 from ..core.database import get_db as get_session
 import random
 from ..models.db_models import User, InterviewSession, InterviewResult, Answers, SessionQuestion, QuestionPaper, Questions, InterviewStatus, CandidateStatus
 from ..services.status_manager import record_status_change
-from ..schemas.api_response import ApiResponse
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
 
 router = APIRouter(prefix="/candidate", tags=["Candidate"])
 
-from ..schemas.requests import UserUpdate
-from ..schemas.responses import HistoryItem
+from ..schemas.admin.users import UserUpdate
+from ..schemas.candidate.history import HistoryItem, ListUpcomingInterviewsResponse, UpcomingInterviewItem
+from ..core.config import IS_ORCHESTRATOR
 from ..auth.dependencies import get_current_user
 from ..core.logger import get_logger
 logger = get_logger(__name__)
@@ -20,16 +22,23 @@ from ..utils import format_iso_datetime
 
 
 
-@router.get("/history", response_model=ApiResponse[List[HistoryItem]])
+@router.get("/history", response_model=ApiResponse[PaginatedResponse[HistoryItem]])
 async def my_history(
+    skip: int = 0,
+    limit: int = 20,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    statement = select(InterviewSession).where(
+    query = select(InterviewSession).where(
         InterviewSession.candidate_id == current_user.id
-    ).order_by(InterviewSession.schedule_time.desc())
+    )
     
-    sessions = session.exec(statement).all()
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.schedule_time.desc()).offset(skip).limit(limit)
+    ).all()
     
     history = []
     for s in sessions:
@@ -49,24 +58,37 @@ async def my_history(
             current_status=s.current_status,
             allow_copy_paste=s.allow_copy_paste or False,
         ))
+        
     return ApiResponse(
         status_code=200,
-        data=history,
+        data={
+            "items": history,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Interview history retrieved successfully"
     )
 
-@router.get("/interviews", response_model=ApiResponse[List[HistoryItem]])
+@router.get("/interviews", response_model=ApiResponse[PaginatedResponse[HistoryItem]])
 async def my_interviews(
+    skip: int = 0,
+    limit: int = 20,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     """Fetch scheduled and upcoming interviews for the candidate."""
-    statement = select(InterviewSession).where(
+    query = select(InterviewSession).where(
         InterviewSession.candidate_id == current_user.id,
         InterviewSession.status == InterviewStatus.SCHEDULED
-    ).order_by(InterviewSession.schedule_time.asc())
+    )
     
-    sessions = session.exec(statement).all()
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    sessions = session.exec(
+        query.order_by(InterviewSession.schedule_time.asc()).offset(skip).limit(limit)
+    ).all()
     
     interviews = []
     for s in sessions:
@@ -76,7 +98,7 @@ async def my_interviews(
             paper_name=s.paper.name if s.paper else "General",
             date=format_iso_datetime(s.schedule_time) if s.schedule_time else "Scheduled",
             status=s.status.value,
-            score=None,
+            total_score=s.total_score,
             duration_minutes=s.duration_minutes,
             max_questions=s.max_questions,
             start_time=format_iso_datetime(s.start_time) if s.start_time else None,
@@ -86,9 +108,15 @@ async def my_interviews(
             current_status=s.current_status,
             allow_copy_paste=s.allow_copy_paste or False,
         ))
+        
     return ApiResponse(
         status_code=200,
-        data=interviews,
+        data={
+            "items": interviews,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Upcoming interviews retrieved successfully"
     )
 
@@ -132,11 +160,13 @@ async def upload_selfie(
     
         # 3. Generate Dual Embeddings (Hybrid Strategy)
     try:
-        from deepface import DeepFace
-        from ..services.face import USE_MODAL, get_modal_embedding
+        from ..services.face import get_modal_embedding
+        from ..core.config import USE_MODAL
         import json
         import tempfile
         import os
+        
+        # 0. Check if we should skip local processing
 
         embeddings_map = {}
         
@@ -154,8 +184,9 @@ async def upload_selfie(
             except Exception as e:
                 logger.warning(f"Modal ArcFace enrollment failed: {e}")
 
-        # Fallback to local ArcFace if Modal failed/disabled
-        if "ArcFace" not in embeddings_map:
+        # Fallback to local ArcFace if Modal failed/disabled (Skip in Orchestrator)
+        if "ArcFace" not in embeddings_map and not IS_ORCHESTRATOR:
+            from deepface import DeepFace
             try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                     tmp.write(image_bytes)
@@ -171,21 +202,23 @@ async def upload_selfie(
             except Exception as e:
                 logger.warning(f"Local ArcFace fallback failed: {e}")
 
-        # 2. Generate SFace (Always local as lightweight backup)
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                tmp.write(image_bytes)
-                tmp_path = tmp.name
+        # 2. Generate SFace (Always local as lightweight backup, skip in Orchestrator)
+        if not IS_ORCHESTRATOR:
             try:
-                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                if sface_objs:
-                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
-                    logger.info("SFace embedding generated locally")
-            finally:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-        except Exception as e:
-            logger.warning(f"SFace embedding failed: {e}")
+                from deepface import DeepFace
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(image_bytes)
+                    tmp_path = tmp.name
+                try:
+                    sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                    if sface_objs:
+                        embeddings_map["SFace"] = sface_objs[0]["embedding"]
+                        logger.info("SFace embedding generated locally")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+            except Exception as e:
+                logger.warning(f"SFace embedding failed: {e}")
 
         if embeddings_map:
             current_user.face_embedding = json.dumps(embeddings_map)

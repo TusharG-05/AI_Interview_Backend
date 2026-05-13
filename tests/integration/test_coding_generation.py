@@ -105,21 +105,20 @@ def test_coding_paper_auto_creation_and_aggregation(client, session, auth_header
     res_data = response.json()["data"]
     assert res_data["total_score"] == 10.0
     
-    # Check session nesting
-    session_data = res_data["interview"]
-    assert "paper" in session_data
-    assert "coding_paper" in session_data
+    # Check session data (now flattened)
+    assert "paper" in res_data
+    assert "coding_paper" in res_data
     
     # Verify nesting in Paper (Standard)
-    assert len(session_data["paper"]["questions"]) == 1
-    std_q = session_data["paper"]["questions"][0]
+    assert len(res_data["paper"]["questions"]) == 1
+    std_q = res_data["paper"]["questions"][0]
     assert std_q["content"] == "What is Python?"
     assert std_q["answer"]["score"] == 5.0
     
     # Verify nesting in Coding Paper
-    assert len(session_data["coding_paper"]["questions"]) == 2
+    assert len(res_data["coding_paper"]["questions"]) == 2
     # The first question should have an answer, the second should not (based on test setup)
-    coding_q_with_ans = next(q for q in session_data["coding_paper"]["questions"] if q["answer"] is not None)
+    coding_q_with_ans = next(q for q in res_data["coding_paper"]["questions"] if q["answer"] is not None)
     assert coding_q_with_ans["problem_statement"] == "Sum it"
     assert coding_q_with_ans["title"] == "Sum Array"
     assert coding_q_with_ans["answer"]["score"] == 5.0

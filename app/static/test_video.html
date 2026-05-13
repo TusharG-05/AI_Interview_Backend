@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Proctoring Live Monitor (V2)</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --danger: #ef4444;
+            --success: #10b981;
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #f8fafc;
+        }
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background: var(--bg); 
+            color: var(--text);
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 40px;
+            margin: 0;
+        }
+        .container { max-width: 1000px; width: 100%; }
+        h1 { font-weight: 800; letter-spacing: -1px; margin-bottom: 30px; text-align: center; background: linear-gradient(to right, #818cf8, #c084fc); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .card {
+            background: var(--card);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .video-box { position: relative; overflow: hidden; border-radius: 12px; background: #000; aspect-ratio: 4/3; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        .video-label { position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.6); padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; z-index: 10; }
+
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .stat-item { background: rgba(255,255,255,0.03); padding: 15px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.05); }
+        .stat-label { font-size: 12px; color: #94a3b8; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-value { font-size: 18px; font-weight: 700; color: #64748b; } /* Default to gray until data arrives */
+
+        #violation-alert {
+            grid-column: span 2;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+            font-weight: 800;
+            font-size: 20px;
+            background: rgba(100, 116, 139, 0.1);
+            color: #64748b;
+            border: 2px solid #64748b;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+        }
+        #violation-alert.scanning {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            border-color: var(--success);
+        }
+        #violation-alert.active {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border-color: var(--danger);
+            animation: shake 0.5s ease-in-out;
+        }
+
+        .controls { display: flex; gap: 10px; align-items: center; justify-content: center; margin-bottom: 30px; }
+        input { background: var(--card); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 10px 15px; border-radius: 8px; width: 80px; }
+        button { background: var(--primary); color: white; border: none; padding: 10px 25px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .logs { 
+            background: #000; 
+            color: #10b981; 
+            font-family: 'Fira Code', monospace; 
+            font-size: 12px; 
+            padding: 15px; 
+            border-radius: 12px; 
+            height: 150px; 
+            overflow-y: auto;
+            border: 1px solid rgba(255,255,255,0.1);
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>AI Proctoring Live Monitor (V2)</h1>
+
+        <div class="controls">
+            <label>Interview ID:</label>
+            <input type="number" id="interviewId" value="1">
+            <button id="startButton">Start Live Session</button>
+        </div>
+
+        <div class="dashboard">
+            <!-- VIOLATION BANNER -->
+            <div id="violation-alert">Waiting for AI Feed...</div>
+
+            <!-- VIDEO FEEDS -->
+            <div class="card">
+                <div class="video-box">
+                    <div class="video-label">LIVE FEED (AI ANALYZED)</div>
+                    <video id="remoteVideo" autoplay playsinline></video>
+                </div>
+            </div>
+
+            <!-- LIVE STATS -->
+            <div class="card">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Faces Detected</div>
+                        <div id="val-faces" class="stat-value">--</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Authentication</div>
+                        <div id="val-auth" class="stat-value">--</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Gaze Status</div>
+                        <div id="val-gaze" class="stat-value">--</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Data Channel</div>
+                        <div id="val-dc" class="stat-value">Closed</div>
+                    </div>
+                </div>
+                <div style="margin-top: 20px;">
+                    <div class="stat-label">Local Camera Source (Handshake Source)</div>
+                    <div class="video-box" style="aspect-ratio: 16/9; margin-top: 10px; height: 100px;">
+                        <video id="localVideo" autoplay playsinline muted></video>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="logs" id="logs">
+            <div>[System] Initializing...</div>
+        </div>
+    </div>
+
+    <script>
+        const localVideo = document.getElementById('localVideo');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const startButton = document.getElementById('startButton');
+        const logsDiv = document.getElementById('logs');
+        
+        // Stats Elements
+        const elFaces = document.getElementById('val-faces');
+        const elAuth = document.getElementById('val-auth');
+        const elGaze = document.getElementById('val-gaze');
+        const elDC = document.getElementById('val-dc');
+        const elAlert = document.getElementById('violation-alert');
+
+        let pc = null;
+        let dc = null;
+
+        function log(msg, color = "#10b981") {
+            const div = document.createElement('div');
+            div.style.color = color;
+            div.textContent = `[${new Date().toLocaleTimeString()}] > ${msg}`;
+            logsDiv.appendChild(div);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        async function start() {
+            startButton.disabled = true;
+            elDC.textContent = "Connecting...";
+            log("Step 1: Requesting Media Devices...");
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                localVideo.srcObject = stream;
+                log("Step 2: Local Camera Active.");
+
+                const config = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+                pc = new RTCPeerConnection(config);
+
+                // Monitor connection state
+                pc.onconnectionstatechange = () => {
+                    log(`Connection State Change: ${pc.connectionState}`, "#c084fc");
+                };
+
+                stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+                pc.ontrack = (event) => {
+                    log("Step 5: Server Video Stream Received (Echo).", "#6366f1");
+                    remoteVideo.srcObject = event.streams[0];
+                };
+
+                // The server will create the DataChannel. We must be ready to receive it.
+                pc.ondatachannel = (event) => {
+                    dc = event.channel;
+                    log(`Step 6: DataChannel Received (${dc.label})`, "#fbbf24");
+                    
+                    dc.onopen = () => {
+                        log("DataChannel is now OPEN.", "#10b981");
+                        elDC.textContent = "Open";
+                        elDC.style.color = "var(--success)";
+                        // Send a ping to the server to ensure the pipe is flowing
+                        dc.send(JSON.stringify({type: "ping"}));
+                    };
+
+                    dc.onclose = () => {
+                        log("DataChannel is CLOSED.", "#ef4444");
+                        elDC.textContent = "Closed";
+                    };
+
+                    dc.onmessage = (e) => {
+                        try {
+                            const msg = JSON.parse(e.data);
+                            if (msg.type === "proctoring_update") {
+                                updateUI(msg.data);
+                            }
+                        } catch (err) {
+                            log("Non-JSON message received: " + e.data, "#94a3b8");
+                        }
+                    };
+                };
+
+                log("Step 3: Creating WebRTC Offer...");
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                log("Step 4: Sending Offer to API...");
+                const response = await fetch('/api/video/offer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type,
+                        interview_id: parseInt(document.getElementById('interviewId').value)
+                    })
+                });
+
+                const result = await response.json();
+                if (result.status_code === 200) {
+                    log("Step 5: Server Answer Received. Completing Handshake...");
+                    await pc.setRemoteDescription(new RTCSessionDescription(result.data));
+                } else {
+                    throw new Error(result.message || "Server Error");
+                }
+
+            } catch (err) {
+                log(`CRITICAL ERROR: ${err.message}`, "#ef4444");
+                elDC.textContent = "Failed";
+                startButton.disabled = false;
+            }
+        }
+
+        function updateUI(data) {
+            // Wake up the stats UI
+            document.querySelectorAll('.stat-value').forEach(el => el.style.color = "var(--text)");
+
+            elFaces.textContent = data.faces;
+            elAuth.textContent = data.auth ? "Verified ✓" : "Unauthorized ✗";
+            elAuth.style.color = data.auth ? "var(--success)" : "var(--danger)";
+            elGaze.textContent = data.gaze;
+
+            if (data.warning && data.warning !== "") {
+                elAlert.textContent = `⚠️ VIOLATION: ${data.warning}`;
+                elAlert.className = "active";
+            } else {
+                elAlert.textContent = "✅ NO VIOLATIONS DETECTED";
+                elAlert.className = "scanning";
+            }
+        }
+
+        startButton.onclick = start;
+    </script>
+</body>
+</html>

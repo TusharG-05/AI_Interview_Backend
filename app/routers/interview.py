@@ -1,52 +1,525 @@
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Any
+import json as _json
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, BackgroundTasks, Request, Body
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response, RedirectResponse
 from sqlmodel import Session, select
 from ..core.database import get_db as get_session
-from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CandidateStatus, UserRole
-from ..schemas.requests import AnswerRequest
-from ..schemas.interview_result import QuestionPaperNested
+from ..models.db_models import User, Questions, QuestionPaper, InterviewSession, InterviewResult, Answers, SessionQuestion, InterviewStatus, ProctoringEvent, CodingQuestions, CodingAnswers, CandidateStatus, UserRole, QuestionAttempt
+from ..schemas.interview.questions import AnswerRequest
+
 from ..services import interview as interview_service
 from ..services.audio import AudioService
-from ..schemas.interview_responses import (
-    InterviewSessionData, 
-    InterviewAccessResponse, 
-    TabSwitchRequest,
-    UserNested, 
-    PaperNested, PaperNestedWithoutAdmin,
-    QuestionNested, 
-    CodingPaperNested, CodingPaperNestedWithoutAdmin,
-    CodingQuestionNested,
-    CodingQuestionBasic,
-    AnswersData,
-    QuestionData,
-    CodingAnswersData,
-    PaperNested,
-    CodingPaperNested,
-    QuestionPaperData,
-    QuestionWithAnswer,
-    CodingQuestionWithAnswer,
-)
-from ..schemas.user_schemas import serialize_user
-from ..schemas.api_response import ApiResponse
+from ..services.cloudinary_service import CloudinaryService
+from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.user import UserNested, LoginUserNested
+from ..schemas.interview.access import AccessInterviewResponse as InterviewAccessResponse, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, QuestionWithAnswer, CodingQuestionWithAnswer, AnswerShort, StartSessionRequest
+from ..schemas.interview.questions import NextQuestionResponse, CodingQuestionBasic, QuestionStartRequest
+from ..schemas.interview.status import TabSwitchRequest, PingResponse, KeepAliveRequest
+
 from ..auth.dependencies import get_current_user
+from ..core.config import IS_ORCHESTRATOR, LINK_VALIDITY_MINUTES
 from pydantic import BaseModel
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+import random
+from ..core.cache import cache_client
+from ..services.email import EmailService
+from ..schemas.auth.login import OtpRequest, OtpVerifyRequest
+from ..auth.security import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from ..services.interview_access import (
+    LINK_VALIDITY_MINUTES,
+    evaluate_interview_access,
+    has_started,
+    get_timer_sync_data,
+    to_utc,
+)
+
+def set_auth_cookie(response: Response, token: str):
+    """Sets the access_token cookie with secure flags."""
+    from ..core.config import ENV
+    response.set_cookie(
+        key="access_token",
+        value=f"Bearer {token}",
+        httponly=True,
+        secure=ENV == "production",  # True in prod, False in dev (allows localhost)
+        samesite="lax",              # Required for cross-site requests (if frontend/backend are on diff domains)
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+
+# Initialize services for OTP
+email_service = EmailService()
 
 from pydub import AudioSegment
 import logging
+from ..core.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/interview", tags=["Interview"])
+
+@router.post("/otp-send", response_model=ApiResponse[dict])
+async def request_otp(otp_data: OtpRequest, session: Session = Depends(get_session)):
+    """
+    Generate and send a 6-digit OTP to the candidate's email.
+    Verifies that the candidate is assigned to the provided interview link.
+    """
+    # 1. Verify user exists and is a candidate
+    user = session.exec(select(User).where(User.email == otp_data.email.lower())).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found with this email.")
+    
+    if user.role != UserRole.CANDIDATE:
+        raise HTTPException(
+            status_code=400, 
+            detail="Email-based OTP login is currently restricted to candidates."
+        )
+
+    # 2. Verify interview session token matches the candidate
+    interview = session.exec(
+        select(InterviewSession).where(
+            InterviewSession.access_token == otp_data.access_token,
+            InterviewSession.candidate_id == user.id
+        )
+    ).first()
+    
+    if not interview:
+        raise HTTPException(
+            status_code=401, 
+            detail="Invalid interview link. Please ensure you are using the correct link from your invitation."
+        )
+
+    otp_access_decision = evaluate_interview_access(interview)
+    if not otp_access_decision.allowed:
+        if otp_access_decision.reason == "cancelled":
+            raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+        if otp_access_decision.reason == "completed":
+            raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        if otp_access_decision.entry_window_expired:
+            if interview.status != InterviewStatus.EXPIRED:
+                interview.status = InterviewStatus.EXPIRED
+                session.add(interview)
+                session.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {interview.duration_minutes} minutes of the scheduled time.",
+            )
+        raise HTTPException(status_code=403, detail="Interview link is not active.")
+
+    # 3. Generate a secure 6-digit OTP
+    otp = f"{random.randint(100000, 999999)}"
+    
+    # 4. Store in Cache (Redis/In-Memory) with a 10-minute expiry
+    redis_key = f"otp:{user.email.lower()}:{otp_data.access_token}"
+    try:
+        await cache_client.set(redis_key, otp, ex=600)
+        logger.info(f"OTP generated and stored for {user.email}")
+    except Exception as e:
+        logger.error(f"Failed to store OTP in cache: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error (Cache failure).")
+    
+    # 5. Send Email via EmailService
+    success = email_service.send_otp_email(user.email, otp)
+    if not success:
+        logger.error(f"Failed to send OTP email to {user.email}")
+        raise HTTPException(status_code=500, detail="Failed to deliver verification email. Please try again later.")
+        
+    return ApiResponse(
+        status_code=200, 
+        data={}, 
+        message="A verification code has been sent to your email. It will expire in 10 minutes."
+    )
+
+def ensure_web_url(path_or_url: Optional[str]) -> str:
+    """Converts a local file path to a web-accessible URL if needed."""
+    if not path_or_url:
+        return ""
+    if path_or_url.startswith("http"):
+        return path_or_url
+    if path_or_url.startswith("app/assets"):
+        # Convert app/assets/audio/failover/x.wav -> /assets/audio/failover/x.wav
+        return "/" + path_or_url.replace("app/", "")
+    return path_or_url
+
+@router.post("/verify-otp", response_model=ApiResponse[dict])
+async def verify_otp(response: Response, verify_data: OtpVerifyRequest, session: Session = Depends(get_session)):
+    """
+    Verify the OTP code and issue a JWT access token for the candidate.
+    """
+    # 1. Check Cache for the stored OTP
+    redis_key = f"otp:{verify_data.email.lower()}:{verify_data.access_token}"
+    try:
+        stored_otp = await cache_client.get(redis_key)
+    except Exception as e:
+        logger.error(f"Failed to retrieve OTP from cache: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error (Cache failure).")
+    
+    if not stored_otp:
+        raise HTTPException(
+            status_code=401, 
+            detail="Verification code has expired or was never requested."
+        )
+    
+    if stored_otp != verify_data.otp:
+        # In a production app, we might count failed attempts here
+        raise HTTPException(
+            status_code=401, 
+            detail="Invalid verification code. Please check your email and try again."
+        )
+
+    # 2. Extract User and finish login
+    user = session.exec(select(User).where(User.email == verify_data.email.lower())).first()
+    if not user:
+         raise HTTPException(status_code=404, detail="User accounts out of sync. Please contact support.")
+
+    interview = session.exec(
+        select(InterviewSession).where(
+            InterviewSession.access_token == verify_data.access_token,
+            InterviewSession.candidate_id == user.id,
+        )
+    ).first()
+    if not interview:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid interview link. Please ensure you are using the correct link from your invitation.",
+        )
+
+    otp_verify_decision = evaluate_interview_access(interview)
+    if not otp_verify_decision.allowed:
+        if otp_verify_decision.reason == "cancelled":
+            raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+        if otp_verify_decision.reason == "completed":
+            raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        if otp_verify_decision.entry_window_expired or otp_verify_decision.reason == "explicitly_expired":
+            if interview.status != InterviewStatus.EXPIRED:
+                interview.status = InterviewStatus.EXPIRED
+                session.add(interview)
+                session.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {interview.duration_minutes} minutes of the scheduled time.",
+            )
+        if otp_verify_decision.duration_expired:
+            raise HTTPException(status_code=403, detail="This interview session has expired.")
+        raise HTTPException(status_code=403, detail="Interview link is not active.")
+
+    # 3. Clean up OTP from cache
+    await cache_client.delete(redis_key)
+
+    # 4. Generate JWT Token
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_access_token(
+        data={"sub": user.email}, expires_delta=access_token_expires
+    )
+    
+    # 5. Set Auth Cookie (Secure HttpOnly)
+    set_auth_cookie(response, token)
+    
+    from .teams import _serialize_team_basic
+    team_data = _serialize_team_basic(user.team, session) if user.team else None
+
+    token_data = {
+        "access_token": token, 
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": str(user.role.value) if hasattr(user.role, "value") else str(user.role),
+        "profile_image": user.profile_image,
+        "team": team_data
+    }
+
+    return ApiResponse(
+        status_code=200,
+        data=token_data,
+        message="Login successful. Redirecting to your interview..."
+    )
+
 from ..utils import format_iso_datetime, calculate_total_score
 from ..tasks.interview_tasks import process_session_results_task
-logger = logging.getLogger(__name__)
-audio_service = AudioService()
+from ..services.status_manager import record_status_change, update_last_activity, add_violation
+_audio_service = None
+_cloudinary_service = None
+
+def get_audio_service():
+    global _audio_service
+    if _audio_service is None:
+        from ..services.audio import AudioService
+        _audio_service = AudioService()
+    return _audio_service
+
+def get_cloudinary_service():
+    global _cloudinary_service
+    if _cloudinary_service is None:
+        from ..services.cloudinary_service import CloudinaryService
+        _cloudinary_service = CloudinaryService()
+    return _cloudinary_service
 
 from ..services.status_manager import add_violation, record_status_change
 from ..models.db_models import CandidateStatus
 
+
+
+def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAccessResponse:
+    """Helper to serialize InterviewSession into InterviewAccessResponse."""
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, PaperNestedWithoutAdmin, CodingPaperNestedWithoutAdmin, ProctoringEvent
+    from ..schemas.shared.user import LoginUserNested
+    import json as _json
+    
+    def _parse_json_safe(val: Any, default: Any) -> Any:
+        if not val: return default
+        if not isinstance(val, str): return val
+        try:
+            return _json.loads(val)
+        except Exception:
+            return default
+
+    # Map Admin
+    admin_data = None
+    if session.admin:
+        admin_data = LoginUserNested(
+            id=session.admin.id,
+            email=session.admin.email,
+            full_name=session.admin.full_name,
+            role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
+            access_token=session.admin.access_token or "",
+            team={"id": session.admin.team.id, "name": session.admin.team.name} if session.admin.team else None
+        )
+
+    # Map Candidate
+    candidate_data = None
+    if session.candidate:
+        candidate_data = LoginUserNested(
+            id=session.candidate.id,
+            email=session.candidate.email,
+            full_name=session.candidate.full_name,
+            role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
+            access_token=session.candidate.access_token or "",
+            team={"id": session.candidate.team.id, "name": session.candidate.team.name} if session.candidate.team else None
+        )
+
+    # Pre-fetch existing answers
+    answers_map = {}
+    coding_answers_map = {}
+    if session.result:
+        for ans in session.result.answers:
+            if ans.timestamp is None:
+                continue
+            answers_map[ans.question_id] = AnswerShort(
+                id=ans.id,
+                interview_result_id=ans.interview_result_id,
+                candidate_answer=ans.candidate_answer or "",
+                feedback=ans.feedback or "",
+                score=ans.score or 0.0,
+                audio_path=ans.audio_path or "",
+                transcribed_text=ans.transcribed_text or "",
+                timestamp=ans.timestamp
+            )
+        for cans in session.result.coding_answers:
+            if cans.timestamp is None:
+                continue
+            coding_answers_map[cans.coding_question_id] = AnswerShort(
+                id=cans.id,
+                interview_result_id=cans.interview_result_id,
+                candidate_answer=cans.candidate_answer or "",
+                feedback=cans.feedback or "",
+                score=cans.score or 0.0,
+                audio_path=cans.audio_path or "",
+                transcribed_text=cans.transcribed_text or "",
+                timestamp=cans.timestamp
+            )
+
+    # Map Standard Question Paper
+    paper_data = None
+    if session.paper:
+        questions_list = [
+            QuestionWithAnswer(
+                id=q.id,
+                paper_id=q.paper_id,
+                content=q.content or "",
+                question_text=q.question_text or q.content or "",
+                topic=q.topic or "General",
+                answer=answers_map.get(q.id),
+                difficulty=str(q.difficulty.value if hasattr(q.difficulty, 'value') else q.difficulty),
+                marks=q.marks or 1,
+                response_type=str(q.response_type.value if hasattr(q.response_type, 'value') else q.response_type)
+            ) for q in session.paper.questions
+        ]
+        paper_data = PaperNestedWithoutAdmin(
+            id=session.paper.id,
+            name=session.paper.name,
+            description=session.paper.description or "",
+            # admin_user=session.paper.admin_user if session.paper.admin else None,
+            question_count=session.paper.question_count or len(questions_list),
+            total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
+            created_at=session.paper.created_at,
+            questions=questions_list
+        )
+
+    # Map Coding Question Paper
+    coding_paper_data = None
+    if session.coding_paper:
+        try:
+            # 1. Map Questions
+            coding_questions_list = [
+                CodingQuestionWithAnswer(
+                    id=cq.id,
+                    paper_id=cq.paper_id,
+                    title=cq.title or "",
+                    problem_statement=cq.problem_statement or "",
+                    examples=_parse_json_safe(cq.examples, []),
+                    constraints=_parse_json_safe(cq.constraints, []),
+                    starter_code=cq.starter_code or "",
+                    answer=coding_answers_map.get(cq.id),
+                    topic=cq.topic or "Algorithms",
+                    difficulty=str(cq.difficulty.value if hasattr(cq.difficulty, 'value') else cq.difficulty),
+                    marks=cq.marks or 0
+                ) for cq in session.coding_paper.questions
+            ]
+            
+            # 2. Map Paper Details
+            coding_paper_data = CodingPaperNestedWithoutAdmin(
+                id=session.coding_paper.id,
+                name=session.coding_paper.name,
+                description=session.coding_paper.description or "",
+                question_count=session.coding_paper.question_count or len(coding_questions_list),
+                total_marks=int(session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list)),
+                created_at=session.coding_paper.created_at,
+                team_id=session.coding_paper.admin.team.id if session.coding_paper.admin and session.coding_paper.admin.team else None,
+                questions=coding_questions_list
+            )
+        except Exception as e:
+            logger.error(f"Error serializing coding paper for session {session.id}: {e}", exc_info=True)
+            coding_paper_data = None
+
+    # Create proctoring event
+    proctoring_event = ProctoringEvent(
+        id=session.id,
+        warning_count=session.warning_count or 0,
+        max_warnings=session.max_warnings or 3,
+        is_suspended=session.is_suspended or False,
+        suspension_reason=session.suspension_reason,
+        suspended_at=session.suspended_at,
+        allow_copy_paste=session.allow_copy_paste or False,
+        allow_question_navigate=session.allow_question_navigate or False,
+        allow_proctoring=getattr(session, "allow_proctoring", True)
+    )
+
+    now = datetime.now(timezone.utc)
+    status_str = session.status.value.lower() if hasattr(session.status, 'value') else str(session.status).lower()
+    
+    # Calculate response count and max marks
+    response_count = (len(session.result.answers) if session.result else 0) + (len(session.result.coding_answers) if session.result else 0)
+    max_marks = (paper_data.total_marks if paper_data else 0) + (coding_paper_data.total_marks if coding_paper_data else 0)
+
+    # --- Timer Logic Implementation ---
+    curr_interview_timer = None
+    curr_question_timer = None
+    
+    # 1. Total Interview Timer (Remaining)
+    duration_secs = (session.duration_minutes or 60) * 60
+    if session.status == InterviewStatus.LIVE and session.start_time:
+        start_t = session.start_time
+        if start_t.tzinfo is None:
+            start_t = start_t.replace(tzinfo=timezone.utc)
+        elapsed_secs = (now - start_t).total_seconds()
+        curr_interview_timer = max(0, int(duration_secs - elapsed_secs))
+    else:
+        curr_interview_timer = int(duration_secs)
+
+    # 2. Per-Question Timer (if navigation disabled)
+    if not session.allow_question_navigate:
+        # Check if we have an active attempt for the current session state
+        recent_attempt = next(
+            (a for a in sorted(session.question_attempts, key=lambda x: x.start_time, reverse=True) if not a.is_completed),
+            None
+        )
+        
+        if recent_attempt:
+            # Use explicit attempt data
+            q_start_t = recent_attempt.start_time
+            if q_start_t.tzinfo is None:
+                q_start_t = q_start_t.replace(tzinfo=timezone.utc)
+            
+            elapsed_on_q = (now - q_start_t).total_seconds()
+            curr_question_timer = max(0, int(recent_attempt.duration_seconds - elapsed_on_q))
+        else:
+            # Fallback to the original proportional logic
+            n_theory = len(session.paper.questions) if session.paper else 0
+            n_coding = len(session.coding_paper.questions) if session.coding_paper else 0
+            
+            if n_theory + n_coding > 0:
+                t_theory_secs = duration_secs / (n_theory + (4 * n_coding))
+                t_coding_secs = 4 * t_theory_secs
+                n_theory_done = len(session.result.answers) if session.result else 0
+                
+                all_timestamps = []
+                if session.result:
+                    all_timestamps.extend([a.timestamp for a in session.result.answers if a.timestamp])
+                    all_timestamps.extend([ca.timestamp for ca in session.result.coding_answers if ca.timestamp])
+                
+                if all_timestamps:
+                    last_sub_time = max(all_timestamps)
+                    if last_sub_time.tzinfo is None:
+                        last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                    current_q_type = "theory" if n_theory_done < n_theory else "coding"
+                else:
+                    last_sub_time = session.start_time or now
+                    if last_sub_time.tzinfo is None:
+                        last_sub_time = last_sub_time.replace(tzinfo=timezone.utc)
+                    current_q_type = "theory" if n_theory > 0 else "coding"
+
+                q_duration_secs = t_theory_secs if current_q_type == "theory" else t_coding_secs
+                elapsed_on_q = (now - last_sub_time).total_seconds()
+                curr_question_timer = max(0, int(q_duration_secs - elapsed_on_q))
+
+        # --- DYNAMIC GLOBAL TIMER FOR SEQUENTIAL MODE ---
+        # Recalculate global remaining time as the sum of all remaining budgets.
+        # This "refunds" time spent disconnected between questions.
+        n_theory = len(session.paper.questions) if session.paper else 0
+        n_coding = len(session.coding_paper.questions) if session.coding_paper else 0
+        idx = session.current_question_index or 0
+        
+        # Future budgets (excluding current question)
+        future_theory = max(0, n_theory - (idx + 1))
+        future_coding = max(0, n_coding - max(0, (idx + 1) - n_theory))
+        
+        # Total = Current + Future
+        dynamic_global_secs = (curr_question_timer or 0) + (future_theory * 300) + (future_coding * 1200)
+        curr_interview_timer = int(dynamic_global_secs)
+
+    return InterviewAccessResponse(
+        id=session.id,
+        access_token=session.access_token,
+        admin_user=admin_data,
+        candidate_user=candidate_data,
+        paper=paper_data,
+        coding_paper=coding_paper_data,
+        schedule_time=session.schedule_time,
+        duration_minutes=session.duration_minutes or 1440,
+        max_questions=session.max_questions,
+        start_time=session.start_time,
+        end_time=session.end_time,
+        status=status_str,
+        interview_round=str(session.interview_round.value if hasattr(session.interview_round, 'value') else session.interview_round) if session.interview_round else None,
+        response_count=response_count,
+        last_activity=session.last_activity or now,
+        result_status=(
+            (session.result.result_status.value if hasattr(session.result.result_status, 'value') else str(session.result.result_status))
+            if session.result and session.result.result_status else 'PENDING'
+        ),
+        max_marks=max_marks,
+        total_score=session.total_score or 0.0,
+        current_status=str(session.current_status.value if hasattr(session.current_status, 'value') else session.current_status),
+        enrollment_audio_path=session.enrollment_audio_path,
+        is_completed=session.is_completed or False,
+        tab_switch_count=session.tab_switch_count or 0,
+        tab_warning_active=session.tab_warning_active or False,
+        allow_proctoring=getattr(session, "allow_proctoring", True),
+        curr_interview_timer=curr_interview_timer,
+        curr_question_timer=curr_question_timer,
+        current_question_index=session.current_question_index or 0,
+        proctoring_event=proctoring_event
+    )
 
 def _evaluate_and_update_score(
     db: Session,
@@ -69,6 +542,26 @@ def _evaluate_and_update_score(
             logger.warning(
                 f"Answer {answer.id}: no text to evaluate, skipping LLM call."
             )
+            answer.score = 0.0
+            answer.feedback = "No answer provided or audio was silent."
+            db.add(answer)
+            db.flush()
+            
+            # Still update total score so the dashboard stays in sync
+            from ..utils import calculate_total_score
+            all_answers = db.exec(select(Answers).where(Answers.interview_result_id == result_obj.id)).all()
+            from ..models.db_models import CodingAnswers
+            all_coding_answers = db.exec(select(CodingAnswers).where(CodingAnswers.interview_result_id == result_obj.id)).all()
+            
+            all_scores = [a.score for a in all_answers if a.score is not None]
+            all_scores.extend([ca.score for ca in all_coding_answers if ca.score is not None])
+            
+            new_total = calculate_total_score(all_scores)
+            result_obj.total_score = new_total
+            session_obj.total_score = new_total
+            db.add(result_obj)
+            db.add(session_obj)
+            db.commit()
             return
 
         text_to_evaluate = answer.candidate_answer or answer.transcribed_text
@@ -133,6 +626,9 @@ def _evaluate_and_update_score(
         logger.info(
             f"Interview {session_obj.id}: total_score updated to {new_total}"
         )
+        
+        # Broadcast full update to admins for real-time scoring
+        # session_obj.total_score = total_score (Already handled)
 
     except Exception as exc:
         # Roll back only the evaluation updates; the answer row itself was already
@@ -149,12 +645,25 @@ def _evaluate_and_update_score(
         # Do NOT re-raise — a failed evaluation must never block answer saving.
 
 
+def ensure_session_started(db: Session, session_obj: InterviewSession) -> None:
+    """
+    Promote a scheduled session to LIVE when candidate actively interacts with interview APIs.
+    This protects against frontend/network misses of the explicit start-session call.
+    """
+    if session_obj.status in [InterviewStatus.SCHEDULED, InterviewStatus.CONNECTED, InterviewStatus.DISCONNECTED]:
+        now = datetime.now(timezone.utc)
+        session_obj.status = InterviewStatus.LIVE
+        if session_obj.start_time is None:
+            session_obj.start_time = now
+        db.add(session_obj)
+        db.commit()
+        db.refresh(session_obj)
+
+
 from ..services.status_manager import add_violation
 
 class TTSRange(BaseModel):
     text: str
-
-
 
 
 @router.get("/access/{token}", response_model=ApiResponse[InterviewAccessResponse])
@@ -168,166 +677,98 @@ async def access_interview(
     Returns a cleaned, frontend-friendly response structure.
     """
     from sqlalchemy.orm import selectinload
-    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus
-    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer, LoginUserNested
+    from ..models.db_models import QuestionPaper, CodingQuestionPaper, InterviewStatus, InterviewResult
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer, CodingQuestionWithAnswer
+    from ..schemas.shared.user import LoginUserNested
 
     # Query with all relationships preloaded to avoid N+1 issues
     session = session_db.exec(
         select(InterviewSession)
         .where(InterviewSession.access_token == token)
         .options(
-            selectinload(InterviewSession.candidate),
-            selectinload(InterviewSession.admin),
+            selectinload(InterviewSession.candidate).selectinload(User.team),
+            selectinload(InterviewSession.admin).selectinload(User.team),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.questions),
             selectinload(InterviewSession.paper).selectinload(QuestionPaper.admin),
             selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.questions),
-            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin)
+            selectinload(InterviewSession.coding_paper).selectinload(CodingQuestionPaper.admin),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.answers),
+            selectinload(InterviewSession.result).selectinload(InterviewResult.coding_answers),
+            selectinload(InterviewSession.question_attempts),
         )
     ).first()
     
     if not session:
         raise HTTPException(status_code=404, detail="Invalid Interview Link")
+
+    if session.is_suspended:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"This interview has been suspended. Reason: {session.suspension_reason}" if session.suspension_reason else "This interview has been suspended."
+        )
         
-    admin_data = None
-    if session.admin:
-        from .teams import _serialize_team_basic
-        admin_data = LoginUserNested(
-            id=session.admin.id,
-            email=session.admin.email,
-            full_name=session.admin.full_name,
-            role=session.admin.role.value if hasattr(session.admin.role, 'value') else str(session.admin.role),
-            access_token=session.admin.access_token or "",
-            team=_serialize_team_basic(session.admin.team, session_db) if session.admin.team else None
-        )
-
-    # Map Candidate
-    candidate_data = None
-    if session.candidate:
-        from .teams import _serialize_team_basic
-        candidate_data = LoginUserNested(
-            id=session.candidate.id,
-            email=session.candidate.email,
-            full_name=session.candidate.full_name,
-            role=session.candidate.role.value if hasattr(session.candidate.role, 'value') else str(session.candidate.role),
-            access_token=session.candidate.access_token or "",
-            team=_serialize_team_basic(session.candidate.team, session_db) if session.candidate.team else None
-        )
-
-    import json as _json
-
-    # Pre-fetch existing answers if results exist
-    answers_map = {}
-    coding_answers_map = {}
-    if session.result:
-        for ans in session.result.answers:
-            answers_map[ans.question_id] = AnswerShort(
-                id=ans.id,
-                interview_result_id=ans.interview_result_id,
-                candidate_answer=ans.candidate_answer or "",
-                feedback=ans.feedback or "",
-                score=ans.score or 0.0,
-                audio_path=ans.audio_path or "",
-                transcribed_text=ans.transcribed_text or "",
-                timestamp=ans.timestamp
-            )
-        for cans in session.result.coding_answers:
-            coding_answers_map[cans.coding_question_id] = AnswerShort(
-                id=cans.id,
-                interview_result_id=cans.interview_result_id,
-                candidate_answer=cans.candidate_answer or "",
-                feedback=cans.feedback or "",
-                score=cans.score or 0.0,
-                audio_path=cans.audio_path or "",
-                transcribed_text=cans.transcribed_text or "",
-                timestamp=cans.timestamp
-            )
-
-    # Map Standard Question Paper
-    paper_data = None
-    if session.paper:
-        questions_list = [
-            QuestionWithAnswer(
-                id=q.id,
-                paper_id=q.paper_id,
-                content=q.content or "",
-                question_text=q.question_text or q.content or "",
-                topic=q.topic or "General",
-                answer=answers_map.get(q.id),
-                difficulty=q.difficulty or "Medium",
-                marks=q.marks or 1,
-                response_type=q.response_type or "audio"
-            ) for q in session.paper.questions
-        ]
-        
-        paper_data = PaperNestedWithoutAdmin(
-            id=session.paper.id,
-            name=session.paper.name,
-            description=session.paper.description or "",
-            question_count=session.paper.question_count or len(questions_list),
-            total_marks=session.paper.total_marks or sum(q.marks for q in questions_list),
-            created_at=session.paper.created_at,
-            questions=questions_list
-        )
-
-    # Map Coding Question Paper
-    coding_paper_data = None
-    if session.coding_paper:
-        coding_questions_list = [
-            CodingQuestionWithAnswer(
-                id=cq.id,
-                paper_id=cq.paper_id,
-                title=cq.title or "",
-                problem_statement=cq.problem_statement or "",
-                examples=_json.loads(cq.examples) if isinstance(cq.examples, str) else (cq.examples or []),
-                constraints=_json.loads(cq.constraints) if isinstance(cq.constraints, str) else (cq.constraints or []),
-                starter_code=cq.starter_code or "",
-                answer=coding_answers_map.get(cq.id),
-                topic=cq.topic or "Algorithms",
-                difficulty=cq.difficulty or "Medium",
-                marks=cq.marks or 0
-            ) for cq in session.coding_paper.questions
-        ]
-        
-        coding_paper_data = CodingPaperNestedWithoutAdmin(
-            id=session.coding_paper.id,
-            name=session.coding_paper.name,
-            description=session.coding_paper.description or "",
-            question_count=session.coding_paper.question_count or len(coding_questions_list),
-            total_marks=session.coding_paper.total_marks or sum(cq.marks for cq in coding_questions_list),
-            created_at=session.coding_paper.created_at,
-            questions=coding_questions_list
-        )
-
     now = datetime.now(timezone.utc)
-    
-    # 1. Consolidated Validation Check (User Request)
-    schedule_time = session.schedule_time
-    if schedule_time.tzinfo is None:
-        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
 
-    # Check for Cancelled status first (separate case)
     if session.status == InterviewStatus.CANCELLED:
         raise HTTPException(status_code=403, detail="Interview is cancelled")
 
-    # Catch Expired (Calculated or Status) or Completed (Flag or Status)
-    is_expired = now > expiration_time or session.status == InterviewStatus.EXPIRED
     is_finished = session.is_completed or session.status == InterviewStatus.COMPLETED
+    if is_finished:
+        raise HTTPException(status_code=403, detail="This interview has already been completed.")
 
-    if is_expired or is_finished:
-        # If it just expired now, update status in DB for record keeping
-        if is_expired and session.status != InterviewStatus.EXPIRED:
-            session.status = InterviewStatus.EXPIRED
+    access_decision = evaluate_interview_access(session, now=now)
+    if not access_decision.allowed:
+        if access_decision.entry_window_expired:
+            if session.status != InterviewStatus.EXPIRED:
+                session.status = InterviewStatus.EXPIRED
+                session_db.add(session)
+                session_db.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {session.duration_minutes} minutes of the scheduled time.",
+            )
+
+        if access_decision.duration_expired:
+            if session.status == InterviewStatus.LIVE:
+                from ..services.status_manager import complete_interview_session
+                from ..core.tasks import run_background_task
+                from ..tasks.interview_tasks import process_session_results_task
+                complete_interview_session(
+                    session=session_db,
+                    interview_session=session,
+                    reason="duration_timeout",
+                    current_status_label="Completed (Time Limit)",
+                )
+                run_background_task(process_session_results_task, session.id)
+            raise HTTPException(status_code=403, detail="This interview session has expired.")
+
+        if access_decision.reason == "explicitly_expired" and has_started(session):
+            # Recover from stale EXPIRED state for an already-started session.
+            session.status = InterviewStatus.LIVE
             session_db.add(session)
             session_db.commit()
-            
-        raise HTTPException(status_code=403, detail="Interview is completed.")
-         
-    # Check for tab-switch timeout
-    enforce_tab_timeout(session_db, session)
+            session_db.refresh(session)
+        elif access_decision.reason == "explicitly_expired":
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Candidates must join within {session.duration_minutes} minutes of the scheduled time.",
+            )
+        elif access_decision.reason == "cancelled":
+            raise HTTPException(status_code=403, detail="Interview is cancelled")
+        elif access_decision.reason == "completed":
+            raise HTTPException(status_code=403, detail="This interview has already been completed.")
+        else:
+            raise HTTPException(status_code=403, detail="Interview link is not active.")
 
-    # 4. Track link access status change
-    from ..services.status_manager import record_status_change
+         
+    enforce_tab_timeout(session_db, session)
+    
+    if session.is_suspended:
+        raise HTTPException(
+            status_code=403, 
+            detail=f"This interview has been suspended. Reason: {session.suspension_reason}" if session.suspension_reason else "This interview has been suspended."
+        )
+
     if session.current_status == CandidateStatus.INVITED:
         record_status_change(
             session=session_db,
@@ -335,55 +776,18 @@ async def access_interview(
             new_status=CandidateStatus.LINK_ACCESSED
         )
     
-    # 5. Determine status strings (Preserve Case for exact match if needed, but using .lower() as originally requested might be what "Renaming fields" includes?)
-    # User said: "Renaming fields is allowed. Example: admin_id -> admin... However the object structures inside them must remain identical."
-    # And specifically: "Status: scheduled | live | completed | expired | cancelled" in the first prompt.
-    # Actually, the user's second prompt said: "A previous refactor modified the response structure... and introduced breaking changes... restore... keeping RENAMED fields".
-    # This implies I should keep the field names I just changed (admin, candidate, etc.) but restore the internal object structure.
-    # The status values themselves (scheduled vs SCHEDULED) are data, but usually frontend maps these.
-    # I'll stick to the requested lowercase statuses from the FIRST prompt unless told otherwise, but I'll ensure they are present.
-    
-    status_str = session.status.value.lower() if hasattr(session.status, 'value') else str(session.status).lower()
-    current_status_str = session.current_status.value.lower() if hasattr(session.current_status, 'value') else str(session.current_status).lower()
-    
-    message = "Access Granted"
+    return_msg = "Access Granted"
+    schedule_time = session.schedule_time
+    if schedule_time.tzinfo is None:
+        schedule_time = schedule_time.replace(tzinfo=timezone.utc)
+
     if now < schedule_time:
-        current_status_str = "wait" 
-        message = "Interview not yet started. Please wait."
-
-    response_data = InterviewAccessResponse(
-        id=session.id,
-        access_token=session.access_token,
-        admin_user=serialize_user(session.admin) if session.admin else None,  # ← Always UserNested
-        candidate_user=candidate_data,
-        paper=paper_data,
-        coding_paper=coding_paper_data,
-        schedule_time=session.schedule_time,
-        duration_minutes=session.duration_minutes,
-        max_questions=session.max_questions,
-        start_time=session.start_time,
-        end_time=session.end_time,
-        status=status_str,
-        total_score=session.total_score,
-        current_status=current_status_str,
-        last_activity=session.last_activity or now,
-        warning_count=session.warning_count or 0,
-        max_warnings=session.max_warnings or 3,
-        is_suspended=session.is_suspended or False,
-        suspension_reason=session.suspension_reason,
-        suspended_at=session.suspended_at,
-        enrollment_audio_path=session.enrollment_audio_path,
-        is_completed=session.is_completed or False,
-        tab_warning_active=session.tab_warning_active or False,
-        allow_copy_paste=session.allow_copy_paste or False,
-        allow_question_navigate=session.allow_question_navigate or False,
-        result_status="PENDING" # Default for access endpoint as per original schema
-    )
-
+        return_msg = "Interview not yet started. Please wait."
+    # Return detailed session state to satisfy frontend requirements
     return ApiResponse(
         status_code=200,
-        data=response_data,
-        message=message
+        data=_serialize_interview_access_detail(session),
+        message=return_msg
     )
 
 
@@ -410,29 +814,41 @@ async def get_schedule_time(
     ).first()
     
     if not session:
-        return ApiResponse(
+        return Response(
+            content=_json.dumps(ApiResponse(
+                status_code=404,
+                data=None,
+                message="Invalid interview token"
+            ).model_dump()),
             status_code=404,
-            data=None,
-            message="Invalid interview token"
+            media_type="application/json"
         )
 
-    # 1. Setup Time and Message Logic
     now = datetime.now(timezone.utc)
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:
         schedule_time = schedule_time.replace(tzinfo=timezone.utc)
-    
-    expiration_time = schedule_time + timedelta(minutes=session.duration_minutes)
+
+    access_decision = evaluate_interview_access(session, now=now)
 
     # Determine display message
     display_message = "Interview schedule time retrieved successfully."
 
     if session.status == InterviewStatus.CANCELLED:
-        display_message = "This interview has been cancelled."
+        raise HTTPException(status_code=403, detail="This interview has been cancelled.")
     elif session.is_completed or session.status == InterviewStatus.COMPLETED:
-        display_message = "This interview has already been completed."
-    elif now > expiration_time or session.status == InterviewStatus.EXPIRED:
-        display_message = "This interview link has expired."
+        return ApiResponse(
+            status_code=200,
+            data=None,
+            message="This interview has already been completed."
+        )
+    elif not access_decision.allowed and (
+        access_decision.entry_window_expired
+        or access_decision.reason == "explicitly_expired"
+        or access_decision.duration_expired
+    ):
+        raise HTTPException(status_code=403, detail=f"This interview link has expired (Entry window: {session.duration_minutes} mins).")
+
     elif session.status == InterviewStatus.LIVE:
         display_message = "This interview is currently in progress (attempted)."
     elif now < schedule_time:
@@ -446,14 +862,62 @@ async def get_schedule_time(
         p_dict = session.paper.model_dump()
         p_dict['questions'] = []
         p_dict['admin_user'] = None
-        paper_data = PaperNested.model_validate(p_dict).model_dump()
+        paper_data = PaperNestedWithoutAdmin.model_validate(p_dict).model_dump()
 
     coding_paper_data = None
     if session.coding_paper:
         cp_dict = session.coding_paper.model_dump()
         cp_dict['coding_questions'] = []
         cp_dict['admin_user'] = None
-        coding_paper_data = CodingPaperNested.model_validate(cp_dict).model_dump()
+        coding_paper_data = CodingPaperNestedWithoutAdmin.model_validate(cp_dict).model_dump()
+
+    # For cancelled/completed/expired interviews, still return the paper data
+    if session.status == InterviewStatus.CANCELLED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+                "allow_proctoring": session.allow_proctoring,
+            },
+            message="This interview has been cancelled."
+        )
+    elif session.is_completed or session.status == InterviewStatus.COMPLETED:
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+                "allow_proctoring": session.allow_proctoring,
+            },
+            message="This interview has already been completed."
+        )
+    elif not access_decision.allowed and (
+        access_decision.entry_window_expired
+        or access_decision.reason == "explicitly_expired"
+        or access_decision.duration_expired
+    ):
+        return ApiResponse(
+            status_code=200,
+            data={
+                "paper": paper_data,
+                "coding_paper": coding_paper_data,
+                "schedule_time": schedule_time_iso,
+                "duration_minutes": session.duration_minutes,
+                "max_questions": session.max_questions,
+                "allow_question_navigate": session.allow_question_navigate,
+                "allow_proctoring": session.allow_proctoring,
+            },
+            message="This interview link has expired."
+        )
 
     return ApiResponse(
         status_code=200,
@@ -462,6 +926,7 @@ async def get_schedule_time(
             "duration_minutes": session.duration_minutes,
             "max_questions": session.max_questions,
             "allow_question_navigate": session.allow_question_navigate,
+            "allow_proctoring": session.allow_proctoring,
             "paper": paper_data,
             "coding_paper": coding_paper_data,
         },
@@ -471,7 +936,7 @@ async def get_schedule_time(
 @router.post("/start-session/{interview_id}", response_model=ApiResponse[dict])
 async def start_session_logic(
     interview_id: int,
-    enrollment_audio: UploadFile = File(None),
+    req: Optional[StartSessionRequest] = None,
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -482,6 +947,34 @@ async def start_session_logic(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404)
     
+    from ..models.db_models import InterviewStatus
+    
+    now = datetime.now(timezone.utc)
+    access_decision = evaluate_interview_access(session, now=now)
+
+    if session.status == InterviewStatus.CANCELLED:
+        raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+    
+    if session.is_completed or session.status == InterviewStatus.COMPLETED:
+        raise HTTPException(status_code=403, detail="This interview has already been completed.")
+
+    if not access_decision.allowed:
+        if access_decision.entry_window_expired or access_decision.reason == "explicitly_expired":
+            if session.status != InterviewStatus.EXPIRED:
+                session.status = InterviewStatus.EXPIRED
+                session_db.add(session)
+                session_db.commit()
+            raise HTTPException(
+                status_code=403,
+                detail=f"This interview link has expired. Interviews must be started within {session.duration_minutes} minutes of the scheduled time.",
+            )
+
+        if access_decision.duration_expired:
+            raise HTTPException(status_code=403, detail="This interview session has expired.")
+
+        raise HTTPException(status_code=403, detail="Interview link is not active.")
+
+    
     # Check if suspended
     if session.is_suspended:
         raise HTTPException(
@@ -489,18 +982,22 @@ async def start_session_logic(
             detail=f"Interview terminated: {session.suspension_reason}"
         )
     
-    # Track enrollment start
-    if enrollment_audio and session.current_status != CandidateStatus.ENROLLMENT_STARTED:
-        record_status_change(
-            session=session_db,
-            interview_session=session,
-            new_status=CandidateStatus.ENROLLMENT_STARTED
-        )
+    # Track enrollment start (Commented out as per request - no enrollment needed)
+    # if session.current_status != CandidateStatus.ENROLLMENT_STARTED:
+    #     record_status_change(
+    #         session=session_db,
+    #         interview_session=session,
+    #         new_status=CandidateStatus.ENROLLMENT_STARTED
+    #     )
     
     # Update Status
-    if session.status == InterviewStatus.SCHEDULED:
+    if session.status in [InterviewStatus.SCHEDULED, InterviewStatus.CONNECTED, InterviewStatus.DISCONNECTED]:
         session.status = InterviewStatus.LIVE
-        session.start_time = datetime.now(timezone.utc)
+        if session.start_time is None:
+            session.start_time = datetime.now(timezone.utc)
+        
+        # Note: Broadcast removed here and moved to WebSocket 'start_interview' event
+        # as requested to be triggered from frontend through candidate websocket.
         
     # Always mark as active once the session is started
     if session.current_status not in [CandidateStatus.INTERVIEW_ACTIVE, CandidateStatus.INTERVIEW_COMPLETED]:
@@ -511,43 +1008,84 @@ async def start_session_logic(
         )
     
     warning = None
-    try:
-        if enrollment_audio:
-            os.makedirs("app/assets/audio/enrollment", exist_ok=True)
-            enrollment_path = f"app/assets/audio/enrollment/enroll_{session.id}.wav"
-            content = await enrollment_audio.read()
-            audio_service.save_audio_blob(content, enrollment_path)
+    # Voice enrollment is no longer required as per request
+    # #    try:
+    #     if enrollment_audio:
+    #         audio_service = get_audio_service()
+    #         try:
+    #             content = await enrollment_audio.read()
+                
+    #             # Upload to Cloudinary (Stateless)
+    #             cloudinary_url = audio_service.upload_audio_blob(content, folder="interview_enrollments")
+    #             if cloudinary_url:
+    #                 session.enrollment_audio_path = cloudinary_url
+    #             else:
+    #                 logger.error(f"Failed to upload enrollment audio for session {interview_id}")
+    #                 warning = "Enrollment audio could not be saved to cloud storage."
+                
+    #             # Simple silence check (Using a temp file locally since energy calculation needs it)
+    #             import tempfile
+    #             with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+    #                 tmp.write(content)
+    #                 tmp_path = tmp.name
+                
+    #             try:
+    #                 if audio_service.calculate_energy(tmp_path) < 50:
+    #                     logger.warning(f"Session {interview_id}: Enrollment audio too silent.")
+    #             finally:
+    #                 if os.path.exists(tmp_path): os.remove(tmp_path)
+
+    #         except Exception as e:
+    #             logger.error(f"Failed to process enrollment audio: {e}")
+    #             warning = "Failed to process enrollment audio."
+
             
-            # Silence/Quality Check
-            try:
-                if audio_service.calculate_energy(enrollment_path) < 50:
-                     warning = "Enrolled audio is very quiet. Speaker verification might be inaccurate."
-            except Exception as e:
-                logger.warning(f"Energy check failed: {e}")
+    #         # Track enrollment completion
+    #         record_status_change(
+    #             session=session_db,
+    #             interview_session=session,
+    #             new_status=CandidateStatus.ENROLLMENT_COMPLETED
+    #         )
             
-            # Cleanup only after processing
-            audio_service.cleanup_audio(enrollment_path)
-            
-            session.enrollment_audio_path = enrollment_path
-            
-            # Track enrollment completion
-            record_status_change(
-                session=session_db,
-                interview_session=session,
-                new_status=CandidateStatus.ENROLLMENT_COMPLETED
-            )
-            
-        session_db.add(session)
-        session_db.commit()
-    except Exception as e:
-        session_db.rollback()
-        logger.error(f"Failed to start interview for session {session.id if 'session' in locals() else 'unknown'}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to start interview session. Please contact support.")
+    #     session_db.add(session)
+    #     session_db.commit()
+    # except Exception as e:
+    #     session_db.rollback()
+    #     logger.error(f"Failed to start interview for session {session.id if 'session' in locals() else 'unknown'}: {e}", exc_info=True)
+    #     raise HTTPException(status_code=500, detail="Failed to start interview session. Please contact support.")
         
+    # # Calculate initial time remaining for the response
+    # duration_secs = (session.duration_minutes or 60) * 60
+    # time_remaining = duration_secs
+    # if session.start_time:
+    #     start_t = session.start_time
+    #     if start_t.tzinfo is None:
+    #         start_t = start_t.replace(tzinfo=timezone.utc)
+    #     elapsed_secs = (datetime.now(timezone.utc) - start_t).total_seconds()
+    #     time_remaining = max(0, int(duration_secs - elapsed_secs))
+
+
+    session_db.add(session)
+    session_db.commit()
+
+    # Use centralized service for timer and state sync
+    question_id = req.question_id if req else None
+    coding_question_id = req.coding_question_id if req else None
+    sync_data = get_timer_sync_data(session_db, session, question_id, coding_question_id)
+    
+    # Merge with base response
+    response_data = {
+        "interview_id": session.id,
+        "status": session.status.value if hasattr(session.status, 'value') else str(session.status),
+        "warning": warning,
+        "allow_question_navigate": session.allow_question_navigate
+    }
+    response_data.update(sync_data)
+
     return ApiResponse(
         status_code=200,
-        data={"interview_id": session.id, "status": "LIVE", "warning": warning},
-        message="Interview session started successfully"
+        data=response_data,
+        message="Session synchronized successfully"
     )
 
 @router.post("/upload-selfie", response_model=ApiResponse[dict])
@@ -589,23 +1127,61 @@ async def upload_selfie_session(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Received empty file")
     
-    # 4. Check for stored embeddings
+    # 4. Check for stored embeddings (Auto-enroll if missing)
     if not candidate.face_embedding:
-        raise HTTPException(
-            status_code=400, 
-            detail="No enrollment selfie found for this candidate. Please ensure candidate uploaded selfie during registration."
-        )
+        _logger.info(f"Auto-enrolling candidate {candidate_id} since no reference embedding found.")
+        # Save to temp for DeepFace
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(image_bytes)
+            tmp_path = tmp.name
+        
+        try:
+            embeddings_map = {}
+            # SFace (Priority)
+            try:
+                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
+                if sface_objs:
+                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
+            except Exception as e:
+                _logger.warning(f"SFace enrollment failed: {e}")
+
+            # ArcFace
+            try:
+                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                if arc_objs:
+                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
+            except Exception as e:
+                _logger.warning(f"ArcFace enrollment failed: {e}")
+
+            if not embeddings_map:
+                raise HTTPException(status_code=400, detail="Failed to generate face embeddings for enrollment. Please ensure a clear face is visible.")
+            
+            candidate.face_embedding = json.dumps(embeddings_map)
+            # Use original filename or dummy for profile_image if needed
+            candidate.profile_image = f"enrolled_{candidate.id}.jpg"
+            session_db.add(candidate)
+            session_db.commit()
+            
+            return ApiResponse(
+                status_code=200,
+                data={"verified": True, "score": 1.0, "message": "Face enrolled successfully."},
+                message="Face enrolled as reference."
+            )
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
     
-        # 5. Generate embeddings from uploaded selfie
+    # 5. Generate embeddings from uploaded selfie
     try:
-        from deepface import DeepFace
-        from ..services.face import USE_MODAL, get_modal_embedding
+        from ..services.face import get_modal_embedding
+        from ..core.config import USE_MODAL
         
         arcface_embedding = None
         sface_embedding = None
+        is_orchestrator = os.getenv("ENV_MODE") == "orchestrator"
         
-        # 1. Try ArcFace via Modal.com (GPU) if enabled
-        if USE_MODAL:
+        # 1. Try Modal (GPU) if enabled or if in Orchestrator mode (where local is disabled)
+        if USE_MODAL or is_orchestrator:
             try:
                 modal_cls = get_modal_embedding()
                 if modal_cls:
@@ -617,27 +1193,27 @@ async def upload_selfie_session(
             except Exception as e:
                 _logger.warning(f"Modal ArcFace call failed: {e}")
         
-        # 2. Local Fallback for ArcFace and SFace
-        if arcface_embedding is None or True: # Always generate SFace locally, and ArcFace if Modal failed
+        # 2. Local Fallback (Skip in Orchestrator mode to avoid importing DeepFace)
+        if arcface_embedding is None and not IS_ORCHESTRATOR:
+            from deepface import DeepFace
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                 tmp.write(image_bytes)
                 tmp_path = tmp.name
             
             try:
                 # Generate ArcFace if not already got from Modal
-                if arcface_embedding is None:
-                    try:
-                        arc_objs = DeepFace.represent(
-                            img_path=tmp_path,
-                            model_name="ArcFace",
-                            detector_backend="mediapipe",
-                            enforce_detection=True
-                        )
-                        if arc_objs:
-                            arcface_embedding = arc_objs[0]["embedding"]
-                            _logger.info("ArcFace embedding generated locally")
-                    except Exception as e:
-                        _logger.warning(f"Local ArcFace embedding failed: {e}")
+                try:
+                    arc_objs = DeepFace.represent(
+                        img_path=tmp_path,
+                        model_name="ArcFace",
+                        detector_backend="mediapipe",
+                        enforce_detection=True
+                    )
+                    if arc_objs:
+                        arcface_embedding = arc_objs[0]["embedding"]
+                        _logger.info("ArcFace embedding generated locally")
+                except Exception as e:
+                    _logger.warning(f"Local ArcFace embedding failed: {e}")
                 
                 # Always generate SFace locally as lightweight backup
                 try:
@@ -658,10 +1234,12 @@ async def upload_selfie_session(
         
         # Check if any embeddings were generated
         if arcface_embedding is None and sface_embedding is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Failed to generate face embeddings. Please ensure a clear face is visible in the image."
-            )
+            detail_msg = "Failed to generate face embeddings."
+            if is_orchestrator and not USE_MODAL:
+                detail_msg += " (Note: Orchestrator mode requires USE_MODAL=true for face recognition)"
+            else:
+                detail_msg += " Please ensure a clear face is visible in the image."
+            raise HTTPException(status_code=400, detail=detail_msg)
         
         # 6. Parse stored embeddings
         stored_embeddings = json.loads(candidate.face_embedding)
@@ -679,25 +1257,46 @@ async def upload_selfie_session(
         
         # Compare ArcFace embeddings (primary - high accuracy)
         if arcface_embedding and stored_arcface:
-            arcface_sim = float(np.dot(arcface_embedding, stored_arcface) / (
-                np.linalg.norm(arcface_embedding) * np.linalg.norm(stored_arcface)
-            ))
-            verification_results.append(arcface_sim >= ARCFACE_THRESHOLD)
-            _logger.info(f"ArcFace similarity: {arcface_sim:.4f}, Passed: {arcface_sim >= ARCFACE_THRESHOLD}")
+            try:
+                if len(arcface_embedding) > 0 and len(stored_arcface) > 0:
+                    arcface_sim = float(np.dot(arcface_embedding, stored_arcface) / (
+                        np.linalg.norm(arcface_embedding) * np.linalg.norm(stored_arcface)
+                    ))
+                    verification_results.append(arcface_sim >= ARCFACE_THRESHOLD)
+                    _logger.info(f"ArcFace similarity: {arcface_sim:.4f}, Passed: {arcface_sim >= ARCFACE_THRESHOLD}")
+                else:
+                    _logger.warning("Empty embeddings detected, skipping ArcFace comparison")
+            except ValueError as e:
+                _logger.warning(f"ArcFace comparison failed: {e}")
+                verification_results.append(False)
         
         # Compare SFace embeddings (fallback - lightweight)
         if sface_embedding and stored_sface:
-            sface_sim = float(np.dot(sface_embedding, stored_sface) / (
-                np.linalg.norm(sface_embedding) * np.linalg.norm(stored_sface)
-            ))
-            verification_results.append(sface_sim >= SFACE_THRESHOLD)
-            _logger.info(f"SFace similarity: {sface_sim:.4f}, Passed: {sface_sim >= SFACE_THRESHOLD}")
+            try:
+                if len(sface_embedding) > 0 and len(stored_sface) > 0:
+                    sface_sim = float(np.dot(sface_embedding, stored_sface) / (
+                        np.linalg.norm(sface_embedding) * np.linalg.norm(stored_sface)
+                    ))
+                    verification_results.append(sface_sim >= SFACE_THRESHOLD)
+                    _logger.info(f"SFace similarity: {sface_sim:.4f}, Passed: {sface_sim >= SFACE_THRESHOLD}")
+                else:
+                    _logger.warning("Empty embeddings detected, skipping SFace comparison")
+            except ValueError as e:
+                _logger.warning(f"SFace comparison failed: {e}")
+                verification_results.append(False)
         
         # Check if any comparison were possible
         if not verification_results:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not compute similarity - embedding mismatch."
+            # If no embeddings available, allow the upload but warn
+            _logger.warning("No face embeddings available for verification, allowing upload")
+            return ApiResponse(
+                status_code=200,
+                data={
+                    "candidate_id": candidate_id,
+                    "verification_status": "no_embeddings",
+                    "message": "Selfie uploaded successfully (no face verification available)"
+                },
+                message="Selfie uploaded successfully"
             )
         
         # 8. Final Verification: Both must pass if available
@@ -750,9 +1349,85 @@ async def upload_selfie_session(
             detail=f"Face verification processing failed: {str(e)}"
         )
 
+@router.post("/question/next", response_model=ApiResponse[dict])
+async def move_to_next_question(
+    req: QuestionStartRequest,
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Mark current question as completed/submitted and advance to next.
+    
+    Validates:
+    - Navigation not allowed (Case 2 enforcement)
+    - Cannot go backward (strict sequential order)
+    - Updates attempt status (submitted or expired)
+    
+    Returns: new question index, total questions, completion status
+    """
+    session_obj = session_db.get(InterviewSession, req.sessionId)
+    if not session_obj:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Validate: Must be non-navigable interview
+    if session_obj.allow_question_navigate:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot advance questions in navigation-allowed mode"
+        )
+    
+    # Calculate total questions
+    total_questions = len(session_obj.paper.questions or []) + len(session_obj.coding_paper.questions or [])
+    
+    # Validate: Cannot go backward
+    current_index = session_obj.current_question_index
+    new_index = current_index + 1
+    
+    if new_index > total_questions:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot advance beyond final question"
+        )
+    
+    # Mark current attempt as completed
+    stmt = select(QuestionAttempt).where(
+        QuestionAttempt.session_id == req.sessionId,
+        QuestionAttempt.question_id == req.questionId
+    )
+    attempt = session_db.exec(stmt).first()
+    if attempt:
+        now = datetime.now(timezone.utc)
+        attempt.is_completed = True
+        # Preserve existing status (submitted/expired) or mark submitted
+        if attempt.status == "active":
+            attempt.status = "submitted"
+            attempt.submitted_at = now
+        session_db.add(attempt)
+        
+    # Increment the session index
+    session_obj.current_question_index = new_index
+    session_db.add(session_obj)
+    session_db.commit()
+    
+    # Prepare response
+    interview_completed = new_index >= total_questions
+    
+    return ApiResponse(
+        status_code=200,
+        data={
+            "current_question_index": new_index,
+            "total_questions": total_questions,
+            "has_next": new_index < total_questions,
+            "interview_completed": interview_completed
+        },
+        message="Advanced to next question"
+    )
+
+
 @router.get("/next-question/{interview_id}", response_model=ApiResponse[dict])
 async def get_next_question(interview_id: int, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     from ..services.status_manager import record_status_change, update_last_activity
+    from sqlalchemy.orm import selectinload
     
     # Get session and check suspension
     session_obj = session_db.get(InterviewSession, interview_id)
@@ -764,9 +1439,12 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             status_code=403,
             detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
+
+    ensure_session_started(session_db, session_obj)
     
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session_obj)
+    enforce_interview_duration(session_db, session_obj)
     
     # Track interview active status (on first question fetch)
     if session_obj.current_status == CandidateStatus.ENROLLMENT_COMPLETED:
@@ -779,14 +1457,22 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     # Update last activity
     update_last_activity(session_db, session_obj)
     
-    # 1. Get answered questions
-    # Need to find InterviewResult first or join
-    # answered_ids = [r.question_id for r in session_db.exec(select(Answers).join(InterviewResult).where(InterviewResult.interview_id == interview_id)).all()]
-    # simplified:
+    # 1. Get all answered questions (Standard and Coding)
     answered_ids = []
-    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+    answered_coding_ids = []
+    
+    result = session_db.exec(
+        select(InterviewResult)
+        .where(InterviewResult.interview_id == interview_id)
+        .options(selectinload(InterviewResult.answers), selectinload(InterviewResult.coding_answers))
+    ).first()
+    
     if result:
-        answered_ids = [a.question_id for a in result.answers]
+        if result.answers:
+            answered_ids = [a.question_id for a in result.answers if a.question_id]
+        if result.coding_answers:
+            answered_coding_ids = [ca.coding_question_id for ca in result.coding_answers if ca.coding_question_id]
+
     
     # 2. Check if this session has assigned questions (Campaign mode)
     has_assignments = session_db.exec(
@@ -837,36 +1523,25 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             ).all()
 
             # Answered coding questions: check BOTH proxy Answers rows AND the CodingAnswers table directly.
-            # submit-answer-code stores to CodingAnswers (not Answers), so we must check both.
-            answered_proxy_ids = set(answered_ids)  # already collected from Answers table above
-
-            # 1. Proxy-based: proxy rows tagged with question_text = f"__coding__{cq.id}"
-            answered_coding_cq_ids = set()
+            answered_proxy_ids = set(answered_ids)
+            
+            # 1. Extract coding IDs from proxy Answers
             for qid in answered_proxy_ids:
                 proxy = session_db.get(Questions, qid)
                 if proxy and proxy.question_text and proxy.question_text.startswith("__coding__"):
                     try:
-                        answered_coding_cq_ids.add(int(proxy.question_text.split("__coding__")[1]))
+                        answered_coding_ids.append(int(proxy.question_text.split("__coding__")[1]))
                     except (ValueError, IndexError):
                         pass
 
-            # 2. Direct: check CodingAnswers table for this interview result
-            from ..models.db_models import CodingAnswers, InterviewResult
-            interview_result = session_db.exec(
-                select(InterviewResult).where(InterviewResult.interview_id == interview_id)
-            ).first()
-            if interview_result:
-                direct_coding_answers = session_db.exec(
-                    select(CodingAnswers).where(CodingAnswers.interview_result_id == interview_result.id)
-                ).all()
-                for ca in direct_coding_answers:
-                    answered_coding_cq_ids.add(ca.coding_question_id)
-
-            # Pick the next un-answered coding question
+            # 2. Pick the next un-answered coding question
+            # Using a set for efficient lookup
+            final_answered_coding_set = set(answered_coding_ids)
             next_cq = next(
-                (cq for cq in all_coding_qs if cq.id not in answered_coding_cq_ids),
+                (cq for cq in all_coding_qs if cq.id not in final_answered_coding_set),
                 None
             )
+
 
             if next_cq is None:
                 return ApiResponse(
@@ -909,11 +1584,9 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                     session_db.rollback()
                     raise HTTPException(status_code=500, detail="An error occurred while loading the coding question.")
 
-            # Generate TTS for the coding question title
-            os.makedirs("app/assets/audio/questions", exist_ok=True)
-            audio_path = f"app/assets/audio/questions/q_{proxy_q.id}.mp3"
-            if not os.path.exists(audio_path):
-                await audio_service.text_to_speech(next_cq.title, audio_path)
+            # Generate TTS for the coding question title (returns Cloudinary URL)
+            audio_url = await get_audio_service().text_to_speech(next_cq.title, folder="interview_questions")
+
 
             question_index = len(answered_ids) + 1
             total_coding = len(all_coding_qs)
@@ -932,7 +1605,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
                     "coding_question_id": next_cq.id,  # The REAL CodingQuestions ID — use this for submit-answer-code
                     "coding_question": next_cq,
                     "text": next_cq.title,
-                    "audio_url": f"/interview/audio/question/{proxy_q.id}",
+                    "audio_url": ensure_web_url(audio_url),
                     "response_type": "code",
                     "question_index": question_index,
                     "total_questions": total_questions + total_coding,
@@ -953,10 +1626,8 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
             message="All questions completed"
         )
     
-    os.makedirs("app/assets/audio/questions", exist_ok=True)
-    audio_path = f"app/assets/audio/questions/q_{question.id}.mp3"
-    if not os.path.exists(audio_path):
-        await audio_service.text_to_speech(question.question_text or question.content, audio_path)
+    # Generate TTS for the question (returns Cloudinary URL)
+    audio_url = await get_audio_service().text_to_speech(question.question_text or question.content, folder="interview_questions")
     
     # Calculate progress
     total_questions = 0
@@ -973,7 +1644,7 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     response_data: dict = {
         "question_id": question.id,
         "text": question.question_text or question.content,
-        "audio_url": f"/interview/audio/question/{question.id}",
+        "audio_url": ensure_web_url(audio_url),
         "response_type": question.response_type,
         "question_index": question_index,
         "total_questions": total_questions,
@@ -1010,10 +1681,31 @@ async def get_next_question(interview_id: int, session_db: Session = Depends(get
     )
 
 @router.get("/audio/question/{q_id}")
-async def stream_question_audio(q_id: int, current_user: User = Depends(get_current_user)):
-    audio_path = f"app/assets/audio/questions/q_{q_id}.mp3"
-    if not os.path.exists(audio_path): raise HTTPException(status_code=404)
-    return FileResponse(audio_path, media_type="audio/mpeg")
+async def stream_question_audio(q_id: int, session_db: Session = Depends(get_session)):
+    """Restored: Questions audio served via redirection to Cloudinary URLs."""
+    # 1. Fetch Question
+    question = session_db.get(Questions, q_id)
+    text = None
+    if question:
+        text = question.question_text or question.content
+    else:
+        # Fallback: Check if it's a coding question ID
+        coding_q = session_db.get(CodingQuestions, q_id)
+        if coding_q:
+            text = coding_q.title
+            
+    if not text:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    # 2. Generate/Get TTS URL
+    audio_service = get_audio_service()
+    audio_url = await audio_service.text_to_speech(text, folder="interview_questions")
+    
+    if not audio_url:
+        raise HTTPException(status_code=500, detail="Failed to generate question audio")
+    
+    # 3. Redirect to Cloudinary (Frontend handles the redirect in <audio> or <img> tags)
+    return RedirectResponse(url=ensure_web_url(audio_url))
 
 @router.post("/submit-answer-audio", response_model=ApiResponse[dict])
 async def submit_answer_audio(
@@ -1037,14 +1729,20 @@ async def submit_answer_audio(
             status_code=403,
             detail=f"Interview terminated: {session_obj.suspension_reason}"
         )
+
+    ensure_session_started(session_db, session_obj)
     
-    # Check for tab-switch timeout
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session_obj)
+    enforce_interview_duration(session_db, session_obj)
     
-    os.makedirs("app/assets/audio/responses", exist_ok=True)
-    audio_path = f"app/assets/audio/responses/resp_{interview_id}_{question_id}_{uuid.uuid4().hex[:8]}.wav"
     content = await audio.read()
-    audio_service.save_audio_blob(content, audio_path)
+    cloudinary_url = get_audio_service().upload_audio_blob(content, folder="interview_responses")
+    
+    if not cloudinary_url:
+        logger.error(f"Failed to upload response audio for session {interview_id}")
+        # We allow it to continue with a blank path if critical, or fail
+        raise HTTPException(status_code=500, detail="Failed to save audio answer to cloud storage.")
     
     # Get or Create InterviewResult (Thread-safe-ish check)
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
@@ -1070,7 +1768,7 @@ async def submit_answer_audio(
     ).first()
 
     if answer:
-        answer.audio_path = audio_path
+        answer.audio_path = cloudinary_url
         if feedback is not None:
             answer.feedback = feedback
         if score is not None:
@@ -1080,7 +1778,7 @@ async def submit_answer_audio(
         answer = Answers(
             interview_result_id=result.id, 
             question_id=question_id, 
-            audio_path=audio_path,
+            audio_path=cloudinary_url,
             feedback=feedback or "",
             score=score if score is not None else 0.0
         )
@@ -1094,19 +1792,20 @@ async def submit_answer_audio(
     session_db.refresh(answer)
 
     # ── Real-time: Transcribe + Evaluate ─────────────────────────────────────
-    # Transcribe audio immediately so evaluation can run right away.
-    # STT and LLM errors are caught inside the helpers; answer is already saved.
+    # Transcribe audio immediately using the Cloudinary URL.
     transcribed_text = ""
+    audio_service = get_audio_service()
     try:
-        # REF: Using await instead of new_event_loop().run_until_complete()
-        # triggering nested loops in Uvicorn is unstable and prone to 000 crashes.
-        transcribed_text = await audio_service.speech_to_text(audio_path)
-        
+        # Pass the Cloudinary URL directly to speech_to_text (it handles downloading if needed)
+        transcribed_text = await audio_service.speech_to_text(cloudinary_url)
+
         # Speaker verification (best-effort)
         if session_obj.enrollment_audio_path:
             try:
+                # Both enrollment and test are now Cloudinary URLs
                 match, _ = await audio_service.verify_speaker(
-                    session_obj.enrollment_audio_path, audio_path
+                    session_obj.enrollment_audio_path, 
+                    cloudinary_url
                 )
                 if not match:
                     transcribed_text = f"[VOICE MISMATCH] {transcribed_text}"
@@ -1134,19 +1833,7 @@ async def submit_answer_audio(
     if question:
         q_text = question.question_text or question.content or ""
 
-    _evaluate_and_update_score(
-        db=session_db,
-        answer=answer,
-        question_text=q_text,
-        session_obj=session_obj,
-        result_obj=result,
-    )
-
-    # Refresh to get latest score/feedback written by the helper
-    try:
-        session_db.refresh(answer)
-    except Exception:
-        pass
+    # Evaluation is now handled by the separate Evaluate API to ensure millisecond response time.
 
     return ApiResponse(
         status_code=200,
@@ -1176,8 +1863,11 @@ async def submit_answer_code(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Check for tab-switch timeout
+    ensure_session_started(session_db, session)
+
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)
+    enforce_interview_duration(session_db, session)
 
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
@@ -1215,13 +1905,11 @@ async def submit_answer_code(
     question = session_db.get(CodingQuestions, coding_question_id)
     if not question: raise HTTPException(status_code=404, detail="Coding question not found")
 
-    try:
-        _evaluate_and_update_score(session_db, answer, question.problem_statement or question.title or "", session, result)
-    except Exception as e:
-        logger.error(f"Evaluation failed for coding answer {answer.id}: {e}")
+    # Evaluation is now handled by the separate Evaluate API.
+    
     session_db.refresh(answer)
 
-    from ..schemas.interview_responses import AnswerShort, CodingQuestionWithAnswer
+    from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
     
     import json as _json
     answer_data = AnswerShort(
@@ -1269,8 +1957,11 @@ async def submit_answer_text(
     session = session_db.get(InterviewSession, interview_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
 
-    # Check for tab-switch timeout
+    ensure_session_started(session_db, session)
+
+    # Check for tab-switch timeout and duration timeout
     enforce_tab_timeout(session_db, session)
+    enforce_interview_duration(session_db, session)
 
     result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
     if not result:
@@ -1291,7 +1982,8 @@ async def submit_answer_text(
         except: pass
     elif not question:
         coding_q = session_db.get(CodingQuestions, question_id)
-        if coding_q: real_coding_id = question_id
+        if coding_q:
+            real_coding_id = question_id
 
     if coding_q and real_coding_id:
         from ..models.db_models import CodingAnswers
@@ -1319,10 +2011,9 @@ async def submit_answer_text(
         session_db.commit()
         session_db.refresh(answer)
 
-        _evaluate_and_update_score(session_db, answer, coding_q.problem_statement or coding_q.title or "", session, result)
-        session_db.refresh(answer)
+        # Evaluation is now handled by the separate Evaluate API.
 
-        from ..schemas.interview_responses import AnswerShort, CodingQuestionWithAnswer
+        from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
         import json as _json
 
         answer_data = AnswerShort(
@@ -1387,10 +2078,10 @@ async def submit_answer_text(
     session_db.commit()
     session_db.refresh(answer)
 
-    _evaluate_and_update_score(session_db, answer, question.question_text or question.content or "", session, result)
+    # Evaluation is now handled by the separate Evaluate API.
     session_db.refresh(answer)
 
-    from ..schemas.interview_responses import AnswerShort, QuestionWithAnswer
+    from ..schemas.interview.access import AnswerShort, QuestionWithAnswer
     
     answer_data = AnswerShort(
         id=answer.id,
@@ -1425,30 +2116,24 @@ async def submit_answer_text(
 
 @router.post("/finish/{interview_id}", response_model=ApiResponse[dict])
 async def finish_interview(interview_id: int, background_tasks: BackgroundTasks, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
-    from ..services.status_manager import record_status_change
-    from ..models.db_models import CandidateStatus
-    
     interview_session = session_db.get(InterviewSession, interview_id)
     if not interview_session: raise HTTPException(status_code=404)
-    
-    interview_session.end_time = datetime.now(timezone.utc)
-    interview_session.is_completed = True
-    interview_session.status = InterviewStatus.COMPLETED
-    
-    # Track completion status
-    record_status_change(
+    from ..services.status_manager import complete_interview_session
+
+    complete_interview_session(
         session=session_db,
         interview_session=interview_session,
-        new_status=CandidateStatus.INTERVIEW_COMPLETED,
-        metadata={"completed_at": format_iso_datetime(datetime.now(timezone.utc))}
+        reason="manual_finish",
+        current_status_label="Completed",
     )
-    
-    session_db.add(interview_session)
-    session_db.commit()
     
     # Process results in background using plain function (no Celery dependency)
     from ..tasks.interview_tasks import process_session_results
     background_tasks.add_task(process_session_results, interview_id)
+    
+    # Cleanup proctoring resources
+    from ..services.camera import CameraService
+    CameraService().clear_session(interview_id)
     return ApiResponse(
         status_code=200,
         data={"status": "finished"},
@@ -1479,13 +2164,13 @@ async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(
 
 
 
-@router.post("/{interview_id}/tab-switch", response_model=ApiResponse[dict])
+@router.post("/{interview_id}/tab-switch", response_model=ApiResponse[InterviewAccessResponse])
 async def log_tab_switch(
     interview_id: int,
-    request: TabSwitchRequest,
+    request: TabSwitchRequest = TabSwitchRequest(), 
     session_db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
-) -> ApiResponse[InterviewSessionData]:
+) -> ApiResponse[InterviewAccessResponse]:
     """
     Logs a tab switch event during the interview.
     Increments warning count and notifies admins.
@@ -1540,21 +2225,11 @@ async def log_tab_switch(
         )
         
         if session_obj.tab_switch_count >= 3:
-            # Immediate termination
-            session_obj.is_suspended = True
-            session_obj.suspension_reason = "multiple_tab_switch"
-            session_obj.suspended_at = now
-            session_obj.tab_warning_active = False # Deactivate warning as it's now a termination
-            
-            record_status_change(
-                session=session_db,
-                interview_session=session_obj,
-                new_status=CandidateStatus.SUSPENDED,
-                metadata={"reason": "multiple_tab_switch", "count": session_obj.tab_switch_count}
-            )
-            # Ensure database is committed before raising exception
-            session_db.add(session_obj)
-            session_db.commit()
+            # Immediate termination (handled inside add_violation now, but we trigger task here)
+            # add_violation called above already marked it as COMPLETED if it reached the threshold
+            from ..core.tasks import run_background_task
+            from ..tasks.interview_tasks import process_session_results_task
+            run_background_task(process_session_results_task, session_obj.id)
 
             raise HTTPException(
                 status_code=403,
@@ -1579,6 +2254,9 @@ async def log_tab_switch(
             if elapsed > 30:
                 # Terminate
                 session_obj.is_suspended = True
+                session_obj.status = InterviewStatus.COMPLETED
+                session_obj.is_completed = True
+                session_obj.end_time = now
                 session_obj.suspension_reason = "tab_switch_timeout"
                 session_obj.suspended_at = now
                 session_obj.tab_warning_active = False
@@ -1592,6 +2270,10 @@ async def log_tab_switch(
                 # Ensure database is committed before raising exception
                 session_db.add(session_obj)
                 session_db.commit()
+
+                from ..core.tasks import run_background_task
+                from ..tasks.interview_tasks import process_session_results_task
+                run_background_task(process_session_results_task, session_obj.id)
 
                 raise HTTPException(
                     status_code=403,
@@ -1612,7 +2294,7 @@ async def log_tab_switch(
     session_db.commit()
     session_db.refresh(session_obj)
 
-    # Build InterviewSessionData for consistent response
+    # Build InterviewAccessResponse for consistent response
     # candidate_data = None
     # if session_obj.candidate:
     #     candidate_data = UserNested(
@@ -1654,7 +2336,7 @@ async def log_tab_switch(
     #         created_at=session_obj.paper.created_at or datetime.now(timezone.utc)
     #     )
 
-    # result_data = InterviewSessionData(
+    # result_data = InterviewAccessResponse(
     #     id=session_obj.id,
     #     access_token=session_obj.access_token,
     #     admin_user=serialize_user(session_obj.admin) if session_obj.admin else None,  # ← Always UserNested
@@ -1684,12 +2366,7 @@ async def log_tab_switch(
 
     return ApiResponse(
         status_code=200 if not session_obj.is_suspended else 403,
-        data={
-            "tab_switch_count": session_obj.tab_switch_count,
-            "tab_warning_active": session_obj.tab_warning_active,
-            "is_suspended": session_obj.is_suspended,
-            "reason": session_obj.suspension_reason
-        },
+        data=_serialize_interview_access_detail(session_obj),
         message=return_msg
     )
 
@@ -1709,6 +2386,9 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
         if elapsed > 30:
             logger.warning(f"Session {session_obj.id}: Proactive termination due to tab-switch timeout ({elapsed}s)")
             session_obj.is_suspended = True
+            session_obj.status = InterviewStatus.COMPLETED
+            session_obj.is_completed = True
+            session_obj.end_time = now
             session_obj.suspension_reason = "tab_switch_timeout"
             session_obj.suspended_at = now
             session_obj.tab_warning_active = False
@@ -1723,6 +2403,10 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
             db.add(session_obj)
             db.commit()
             db.refresh(session_obj)
+
+            from ..core.tasks import run_background_task
+            from ..tasks.interview_tasks import process_session_results_task
+            run_background_task(process_session_results_task, session_obj.id)
             
     if session_obj.is_suspended:
         raise HTTPException(
@@ -1734,6 +2418,60 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
             }
         )
 
+def enforce_interview_duration(db: Session, session_obj: InterviewSession) -> None:
+    """
+    Checks if the interview duration has exceeded.
+    
+    Behavior:
+    - Global Mode: Strictly enforced from start_time.
+    - Sequential Mode: Dynamically extended to ensure all questions get their full budget.
+    """
+    if session_obj.status == InterviewStatus.LIVE and session_obj.start_time:
+        now = datetime.now(timezone.utc)
+        
+        if session_obj.allow_question_navigate:
+            # 1. GLOBAL MODE: Hard wall-clock limit
+            start_time = session_obj.start_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+                
+            expiration_time = start_time + timedelta(minutes=session_obj.duration_minutes)
+            is_expired = now > expiration_time
+        else:
+            # 2. SEQUENTIAL MODE: Relaxation.
+            # Sequential interviews are managed per-question. The "global" deadline 
+            # is dynamic and managed in serialization/enforcement. 
+            # We allow access as long as the session isn't explicitly completed.
+            is_expired = False
+            
+            # Optional: Add a safety timeout (e.g. 24 hours)
+            start_time = session_obj.start_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            if now > start_time + timedelta(hours=24):
+                is_expired = True
+
+        if is_expired:
+            logger.warning(f"Session {session_obj.id}: Automatic completion due to duration timeout")
+            from ..services.status_manager import complete_interview_session
+            from ..core.tasks import run_background_task
+            from ..tasks.interview_tasks import process_session_results_task
+
+            complete_interview_session(
+                session=db,
+                interview_session=session_obj,
+                reason="duration_timeout",
+                current_status_label="Completed (Time Limit)",
+            )
+            run_background_task(process_session_results_task, session_obj.id)
+
+    if session_obj.status == InterviewStatus.COMPLETED or session_obj.is_completed:
+        raise HTTPException(
+            status_code=403,
+            detail="The interview duration has expired. Your session has been automatically completed."
+        )
+
+
 
 # --- Standalone Tools ---
 
@@ -1741,84 +2479,95 @@ def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
 async def speech_to_text_tool(audio: UploadFile = File(...), current_user: User = Depends(get_current_user)):
     """
     Public standalone tool to convert speech to text.
-    No authentication required.
     """
     try:
-        # Create a temp file to process
-        temp_filename = f"temp_stt_{uuid.uuid4().hex}.wav"
         content = await audio.read()
         
-        # Using a temporary path, but reusing audio service logic
-        # Note: In a real prod env, might want a specific temp dir
-        temp_path = f"app/assets/audio/standalone/{temp_filename}" 
-        os.makedirs(os.path.dirname(temp_path), exist_ok=True)
+        # Validate audio file is not empty
+        if not content or len(content) < 1024:  # Less than 1KB is likely empty/corrupted
+            raise HTTPException(status_code=400, detail="Audio file is empty or too small. Please upload a valid audio file.")
         
-        audio_service.save_audio_blob(content, temp_path)
-        
-        # Perform STT
-        text = await audio_service.speech_to_text(temp_path)
-        
-        # Cleanup
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Perform STT directly using bytes via a temp file inside the service
+        # We can pass the bytes or upload to Cloudinary and pass the URL
+        # For simplicity and speed for a 'tool', we'll upload to Cloudinary first
+        audio_url = get_audio_service().upload_audio_blob(content, folder="standalone_tools")
+        if not audio_url:
+            raise Exception("Failed to upload audio for processing")
             
+        text = await get_audio_service().speech_to_text(audio_url)
+
         return ApiResponse(
             status_code=200,
-            data={"text": text},
+            data={"text": text, "audio_url": audio_url},
             message="Speech converted to text successfully"
         )
     except Exception as e:
         logger.error(f"Standalone speech to text failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Speech to text conversion failed.")
 
+@router.post("/tools/sttEvaluate", response_model=ApiResponse[dict])
+async def stt_evaluate_tool(
+    audio: UploadFile = File(...),
+    question_text: str = Form(...),
+    expected_answer: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Standalone tool to convert speech to text AND evaluate it against a question.
+    """
+    try:
+        content = await audio.read()
+        audio_url = get_audio_service().upload_audio_blob(content, folder="standalone_tools")
+        if not audio_url:
+            raise Exception("Failed to upload audio for processing")
+            
+        transcribed_text = await get_audio_service().speech_to_text(audio_url)
+            
+        if not transcribed_text:
+            return ApiResponse(
+                status_code=400,
+                data={},
+                message="Speech transcription failed or returned empty text."
+            )
+            
+        # Evaluate
+        evaluation = interview_service.evaluate_answer_content(
+            question=question_text,
+            answer=transcribed_text
+        )
+        
+        return ApiResponse(
+            status_code=200,
+            data={
+                "transcribed_text": transcribed_text,
+                "evaluation": evaluation,
+                "expected_answer": expected_answer,
+                "audio_url": audio_url
+            },
+            message="Speech evaluated successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"sttEvaluate tool failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="sttEvaluate tool failed.")
+
 @router.get("/tts")
 async def standalone_tts(text: str, background_tasks: BackgroundTasks):
-    """
-    Generate Text-to-Speech (TTS) audio for the provided text via GET.
-    Enables direct browser playback in HTML <audio> tags via query parameters.
-    """
-    temp_mp3 = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.mp3"
-    wav_path = f"app/assets/audio/standalone/tts_{uuid.uuid4().hex}.wav"
-    
+    return await _generate_tts_response(text, background_tasks)
+
+async def _generate_tts_response(text: str, background_tasks: BackgroundTasks):
+    """Internal helper for TTS generation and cleanup."""
+    # Use the refactored text_to_speech which returns a Cloudinary URL
     try:
-        os.makedirs(os.path.dirname(temp_mp3), exist_ok=True)
+        cloudinary_url = await get_audio_service().text_to_speech(text, folder="standalone_tts")
         
-        # 1. Generate MP3 stream
-        await audio_service.text_to_speech(text, temp_mp3)
-        
-        # 2. Convert to standard PCM WAV (16kHz, Mono, 16-bit)
-        audio = AudioSegment.from_file(temp_mp3)
-        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
-        audio.export(wav_path, format="wav")
-        
-        # 3. Cleanup intermediate MP3
-        if os.path.exists(temp_mp3):
-            os.remove(temp_mp3)
+        if not cloudinary_url:
+            raise Exception("TTS generation failed")
 
-        # 4. Return FileResponse and schedule cleanup
-        def cleanup():
-            if os.path.exists(wav_path):
-                try: os.remove(wav_path)
-                except Exception as e:
-                    logger.error(f"TTS Cleanup Error: {e}")
-
-        background_tasks.add_task(cleanup)
-        
-        return FileResponse(
-            wav_path,
-            media_type="audio/wav",
-            content_disposition_type="inline"
-        )
+        # Return RedirectResponse to the Cloudinary URL
+        from fastapi.responses import RedirectResponse
+        return RedirectResponse(url=cloudinary_url)
 
     except Exception as e:
         logger.error(f"TTS Generation Error: {e}")
-        # Final safety cleanup
-        for p in [temp_mp3, wav_path]:
-            if os.path.exists(p): 
-                try: 
-                    os.remove(p)
-                except Exception as e:
-                    logger.error(f"TTS Cleanup Error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")
-        
         raise HTTPException(status_code=500, detail="Failed to generate TTS audio.")

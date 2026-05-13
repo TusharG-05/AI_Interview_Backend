@@ -41,12 +41,12 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
                     break
 
         if os.getenv("SPACE_ID"):
-            worker_logger.info("Cloud Environment (HF Spaces) detected.")
+            worker_logger.info("Cloud Environment (HF Spaces) detected. Using CPU-optimized MediaPipe settings.")
     
-        worker_logger.info(f"GazeWorker: Initializing MediaPipe with model: {abs_model_path}")
+        worker_logger.info(f"GazeWorker: Initializing MediaPipe FaceLandmarker with model: {abs_model_path}")
     
         if not os.path.exists(abs_model_path):
-            worker_logger.error(f"GazeWorker: CRITICAL - Model file not found. AI Proctoring will fail.")
+            worker_logger.error(f"GazeWorker: CRITICAL ERROR - Model file missing at {abs_model_path}. Proctoring will fail.")
             return
 
         base_options = python.BaseOptions(model_asset_path=abs_model_path)
@@ -60,8 +60,12 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
             min_tracking_confidence=0.25
         )
         
-        landmarker = vision.FaceLandmarker.create_from_options(options)
-        worker_logger.info("GazeWorker: MediaPipe Landmarker created successfully.")
+        try:
+            landmarker = vision.FaceLandmarker.create_from_options(options)
+            worker_logger.info("GazeWorker: MediaPipe landmarker initialized successfully.")
+        except Exception as mp_e:
+            worker_logger.error(f"GazeWorker: MediaPipe creation failed: {mp_e}")
+            return
         
         # State tracking for grace period
         suspicious_start_time = None
@@ -175,10 +179,21 @@ def gaze_worker(frame_queue: multiprocessing.Queue, result_queue: multiprocessin
 # =============================================================================
 # BACKEND API: GazeDetector Class
 # =============================================================================
+from ..core.config import IS_ORCHESTRATOR
+
 class GazeDetector:
     def __init__(self, model_path='app/assets/face_landmarker.task', max_faces=1):
         logger.info("Initializing GazeDetector...")
         self.model_path = model_path
+        
+        # --- Skip initialization in Orchestrator Mode (Render Free Tier) ---
+        if IS_ORCHESTRATOR:
+            logger.info("GazeDetector: Orchestrator Mode enabled. Worker Process DISABLED to save memory.")
+            self.worker = None
+            self.frame_queue = None
+            self.result_queue = None
+            return
+
         self.frame_queue = multiprocessing.Queue(maxsize=1)
         self.result_queue = multiprocessing.Queue(maxsize=1)
         
@@ -192,6 +207,8 @@ class GazeDetector:
         logger.info("Gaze Worker started.")
         
     def process_frame(self, frame_bgr):
+        if IS_ORCHESTRATOR:
+            return None
         try:
             # Send BGR directly; worker will convert to RGB
             if not self.frame_queue.full():

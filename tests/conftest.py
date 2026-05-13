@@ -38,9 +38,16 @@ sys.modules["pydub"] = pydub
 sys.modules["app.services.camera"] = MagicMock()
 sys.modules["app.services.webrtc"] = MagicMock()
 
-# Mock External APIs (Modal, HF)
+# Mock External APIs (Modal, HF, Cloudinary)
 sys.modules["modal"] = MagicMock()
 sys.modules["huggingface_hub"] = MagicMock()
+mock_cloudinary = MagicMock()
+mock_uploader = MagicMock()
+# Configure upload to return a realistic dict so CloudinaryService returns a string
+mock_uploader.upload.return_value = {"secure_url": "https://res.cloudinary.com/mock/resume_file.pdf"}
+mock_cloudinary.uploader = mock_uploader
+sys.modules["cloudinary"] = mock_cloudinary
+sys.modules["cloudinary.uploader"] = mock_uploader
 
 # --- 2. DB MOCKS & FIXTURES ---
 from sqlmodel import SQLModel, Session, create_engine
@@ -114,24 +121,41 @@ def test_users_fixture(session):
 def override_dependencies(session):
     """
     Override get_db and init_db to prevent real DB connections.
+    Also patches compute_dashboard_metrics to avoid SQLite re-entrant lock
+    when WebSocket broadcast code opens its own Session(engine).
     """
+    from unittest.mock import patch
+
     # 1. Mock the init_db call to avoid engine creation
     try:
         import app.core.database
         app.core.database.init_db = MagicMock()
     except ImportError:
         pass
-    
+
     # 2. Override the get_db dependency
     from app.core.database import get_db
-    from app.server import app
-    
+    from app.server import app as fastapi_app
+    import app.core.database
+
+    # Patch the engine so direct imports like 'from ..core.database import engine' work
+    old_engine = app.core.database.engine
+    app.core.database.engine = session.get_bind()
+
     def _get_test_db():
         yield session
 
-    app.dependency_overrides[get_db] = _get_test_db
-    yield
-    app.dependency_overrides.clear()
+    _dummy_metrics = {"live": 0, "proctoring_activity": "0.00%", "failed_today": 0, "passed_today": 0}
+
+    # 3. Patch compute_dashboard_metrics everywhere it is imported so WebSocket
+    #    broadcast helpers never open a second concurrent DB session (SQLite deadlock).
+    with patch("app.services.status_manager.compute_dashboard_metrics", return_value=_dummy_metrics), \
+         patch("app.services.websocket_manager.compute_dashboard_metrics", return_value=_dummy_metrics, create=True):
+        fastapi_app.dependency_overrides[get_db] = _get_test_db
+        yield
+        fastapi_app.dependency_overrides.clear()
+
+    app.core.database.engine = old_engine
 
 @pytest.fixture(name="client")
 def client_fixture(session):
@@ -139,17 +163,17 @@ def client_fixture(session):
     TestClient fixture for FastAPI apps.
     Overrides the get_db dependency per test function.
     """
-    from app.server import app
+    from app.server import app as fastapi_app
     from app.core.database import get_db
     
     def _get_test_db():
         yield session
 
-    app.dependency_overrides[get_db] = _get_test_db
+    fastapi_app.dependency_overrides[get_db] = _get_test_db
     
     from fastapi.testclient import TestClient
-    yield TestClient(app)
-    app.dependency_overrides.clear()
+    yield TestClient(fastapi_app)
+    fastapi_app.dependency_overrides.clear()
 
 @pytest.fixture(scope="session")
 def event_loop():

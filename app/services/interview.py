@@ -1,32 +1,26 @@
 import os
 import random
 import json
+import re
 from typing import Dict, Union, Optional, Any
 from sqlmodel import Session, select
 from ..models.db_models import Questions
-from ..core.config import local_llm
+from ..core.config import local_llm, IS_ORCHESTRATOR, USE_MODAL
 from ..prompts.evaluation import evaluation_prompt
 from ..prompts.code_evaluation import code_evaluation_prompt
 from ..core.logger import get_logger
+from ..core.ai_clients import get_groq_client, call_llm, GROQ_MODEL
 from huggingface_hub import InferenceClient
-from groq import Groq
 
 logger = get_logger(__name__)
 
-# Modal integration flag (shared with audio.py)
-USE_MODAL = os.getenv("USE_MODAL", "false").lower() == "true"
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Initialize Groq Client if key is available
-groq_client = None
-if GROQ_API_KEY:
-    try:
-        groq_client = Groq(api_key=GROQ_API_KEY)
-        logger.info("Groq client initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to initialize Groq client: {e}")
+# Initialize Groq Client lazily via centralized ai_clients
+def get_interview_groq():
+    return get_groq_client()
 
-evaluation_chain = evaluation_prompt | local_llm
+# Chain initialization (moved inside functions for lazy loading)
+
 
 
 # Lazy load Modal LLM
@@ -77,6 +71,125 @@ def calculate_scaled_score(llm_score: Any, question_marks: float) -> float:
     return round(final_score_clamped, 1)
 
 
+def _safe_feedback_from_score(score_out_of_10: Any) -> str:
+    """Fallback coaching feedback when model feedback is empty or fully unsafe."""
+    try:
+        s = float(score_out_of_10)
+    except (TypeError, ValueError):
+        s = 5.0
+
+    if s >= 8.0:
+        return (
+            "Your answer is strong overall. Keep your explanation structured and verify key details before submitting."
+        )
+    if s >= 6.0:
+        return (
+            "Your answer is partially correct. Improve precision and explain your reasoning more clearly."
+        )
+    if s >= 4.0:
+        return (
+            "Your answer needs improvement. Focus on the core concept and organize your response step-by-step."
+        )
+    return (
+        "Your answer is currently incorrect or incomplete. Revisit the fundamentals and answer with clearer reasoning."
+    )
+
+
+def _extract_target_term(question: str) -> str:
+    """Extract the main concept from definition-style questions."""
+    q = re.sub(r"\s+", " ", (question or "").strip().lower())
+    patterns = [
+        r"^what\s+is\s+an?\s+(.+?)\??$",
+        r"^what\s+are\s+(.+?)\??$",
+        r"^define\s+(.+?)\??$",
+        r"^explain\s+(.+?)\??$",
+    ]
+    for pattern in patterns:
+        m = re.match(pattern, q)
+        if m:
+            term = m.group(1).strip(" .?")
+            # Remove trailing context words that are usually not part of the term.
+            term = re.sub(r"\s+in\s+python$", "", term).strip()
+            term = re.sub(r"^(a|an|the)\s+", "", term).strip()
+            return term
+    return ""
+
+
+def _contains_target_keyword(sentence_lower: str, target_term: str) -> bool:
+    """Check if sentence mentions target concept keywords with simple singular/plural matching."""
+    if not target_term:
+        return False
+
+    stop_words = {"a", "an", "the", "of", "in", "on", "for", "to", "and", "or"}
+    keywords = [w for w in re.findall(r"[a-zA-Z]+", target_term.lower()) if w not in stop_words and len(w) >= 4]
+    for kw in keywords:
+        # Match both singular/plural forms for common cases (decorator/decorators).
+        if re.search(rf"\b{re.escape(kw)}s?\b", sentence_lower):
+            return True
+    return False
+
+
+def _is_pronoun_definition(sentence_lower: str) -> bool:
+    """Check if sentence looks like a definition starting with pronoun/article (it/they/this/that are/is...)."""
+    # Pattern: (pronoun/article) + (definition verb) = likely defining something mentioned before
+    pattern = r"^(it|they|this|that|these|those|such|one)\s+(are|is|can be|refers to|means|defines)"
+    return bool(re.match(pattern, sentence_lower.strip()))
+
+
+def _sanitize_feedback_no_answer_leak(feedback: str, score_out_of_10: Any, question: str) -> str:
+    """Keep dynamic feedback but remove answer-revealing statements."""
+    if not feedback or not str(feedback).strip():
+        return _safe_feedback_from_score(score_out_of_10)
+
+    clean = re.sub(r"\s+", " ", str(feedback)).strip()
+
+    # If model emitted code blocks/solutions, do not return them.
+    if "```" in clean:
+        return _safe_feedback_from_score(score_out_of_10)
+
+    leak_patterns = [
+        r"\b(correct|ideal|expected|model|sample)\s+answer\b",
+        r"\bthe\s+answer\s+is\b",
+        r"\b(correct\s+response|best\s+answer|correct\s+result)\b",
+        r"\byou\s+should\s+(have\s+)?answered\b",
+        r"\bhere('?s|\s+is)\s+the\s+answer\b",
+    ]
+    definition_verbs = [
+        " is ", " are ", " means ", " refers to ", " can be defined as ", " is defined as ", " used to "
+    ]
+    target_term = _extract_target_term(question)
+    is_definition_question = bool(target_term)  # If we extracted a term, it's a definition question
+
+    sentences = re.split(r"(?<=[.!?])\s+", clean)
+    safe_sentences = []
+    for sentence in sentences:
+        s = sentence.strip()
+        if not s:
+            continue
+        lowered = s.lower()
+        if any(re.search(pattern, lowered) for pattern in leak_patterns):
+            continue
+
+        # Semantic leak guard: for definition-style questions, drop sentences that define or describe the target term.
+        if target_term and _contains_target_keyword(lowered, target_term) and any(v in lowered for v in definition_verbs):
+            continue
+        
+        # Pronoun-based definition guard: for definition questions, drop sentences like "They are..." or "It is..."
+        # that follow directly after mentioning the concept (these are typically answer-defining sentences)
+        if is_definition_question and _is_pronoun_definition(lowered) and any(v in lowered for v in definition_verbs):
+            continue
+
+        safe_sentences.append(s)
+
+    if not safe_sentences:
+        return _safe_feedback_from_score(score_out_of_10)
+
+    sanitized = " ".join(safe_sentences).strip()
+    if len(sanitized) > 500:
+        sanitized = sanitized[:500].rsplit(" ", 1)[0].rstrip(".,;: ") + "."
+    return sanitized
+
+
 def evaluate_answer_content(
     question: str,
     answer: str,
@@ -110,13 +223,17 @@ def evaluate_answer_content(
             
             data = json.loads(clean_content)
             # Normalize keys
-            feedback = data.get("feedback") or data.get("reason") or ""
+            feedback_raw = data.get("feedback") or data.get("reason") or ""
             score_raw = data.get("score_out_of_10")
             if score_raw is None:
                 score_raw = data.get("score", 5.0)
+
+            safe_feedback = _sanitize_feedback_no_answer_leak(feedback_raw, score_raw, question)
+            if feedback_raw and safe_feedback != str(feedback_raw).strip():
+                logger.info("Evaluation feedback sanitized to prevent answer leakage.")
             
             return {
-                "feedback": feedback,
+                "feedback": safe_feedback,
                 "score": calculate_scaled_score(score_raw, question_marks)
             }
         except Exception:
@@ -137,15 +254,19 @@ def evaluate_answer_content(
                     logger.warning(f"Modal attempt {attempt + 1} failed: {e}")
 
         # 2. Groq Fallback
+        groq_client = get_interview_groq()
         if groq_client:
             try:
                 system_instruction = (
-                    "You are an expert technical interviewer. Evaluate the candidate's answer. "
-                    "Provide constructive feedback. Return a JSON object with "
+                    "You are an expert technical interviewer. Evaluate the answer. "
+                    "Address the user directly as 'You' and 'Your' in your feedback (e.g., 'Your answer is...'). "
+                    "Never reveal, quote, paraphrase, or hint at the correct/ideal/expected answer. "
+                    "Do not provide model answers, sample answers, exact fixes, final code, or direct solution steps. "
+                    "Provide constructive and high-level coaching feedback. Return a JSON object with "
                     "'feedback' (string) and 'score_out_of_10' (float 0-10)."
                 )
                 completion = groq_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model=GROQ_MODEL,
                     messages=[
                         {"role": "system", "content": system_instruction},
                         {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}"}
@@ -170,7 +291,7 @@ def evaluate_answer_content(
                     response = client.chat_completion(
                         model="Qwen/Qwen2.5-7B-Instruct",
                         messages=[
-                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10)."},
+                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10). Never reveal, quote, paraphrase, or hint at the correct answer. Do not provide model answers, exact fixes, or direct solution steps. Provide high-level coaching feedback only."},
                             {"role": "user", "content": f"Q: {question}\nA: {answer}"}
                         ],
                         max_tokens=512,
@@ -181,10 +302,15 @@ def evaluate_answer_content(
                 except Exception as e:
                     logger.warning(f"HF attempt {attempt + 1} failed: {e}")
 
-            # Local fallback (Ollama via LangChain)
-            response = evaluation_chain.invoke({"question": question, "answer": answer})
-            parsed = _parse_llm_result(response.content)
-            if parsed: return parsed
+            # Local fallback (Ollama via LangChain) - Skip in Orchestrator mode to avoid timeout
+            if not IS_ORCHESTRATOR:
+                evaluation_chain = evaluation_prompt | local_llm
+                response = evaluation_chain.invoke({"question": question, "answer": answer})
+                parsed = _parse_llm_result(response.content)
+                if parsed: return parsed
+            else:
+                logger.warning("Orchestrator mode: Skipping local LLM fallback.")
+
             
         except Exception as e:
             logger.error(f"Fallback attempt {attempt + 1} failed: {e}")
@@ -253,6 +379,33 @@ def evaluate_code_submission(
 
     code_eval_chain = code_evaluation_prompt | local_llm
 
+    # --- Groq Fallback (High Speed) ---
+    groq_client = get_interview_groq()
+    if groq_client:
+        try:
+            logger.info("evaluate_code: Attempting Groq API...")
+            system_instruction = (
+                "You are an expert technical interviewer. Evaluate the code submission. "
+                "Address the user directly as 'You' and 'Your' in your feedback (e.g., 'Your code is...'). "
+                "Provide constructive feedback. Return a JSON object with 'feedback' (string), "
+                "'score' (float 0-10), 'correctness' (string), 'time_complexity' (string), "
+                "'space_complexity' (string), and 'issues' (array of strings)."
+            )
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": f"Problem: {problem_title}\nStatement: {problem_statement}\nCode: {code}"}
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"},
+            )
+            result = _json.loads(completion.choices[0].message.content)
+            logger.info(f"evaluate_code: Groq API score={result.get('score')}")
+            return _scale_code_result(result)
+        except Exception as e:
+            logger.warning(f"evaluate_code: Groq API failed: {e}")
+
     # --- Hugging Face Inference API ---
     hf_token = os.getenv("HF_TOKEN")
     if hf_token:
@@ -282,18 +435,27 @@ def evaluate_code_submission(
             logger.warning(f"evaluate_code: HF API failed: {e}")
 
     # --- Local Ollama fallback ---
-    try:
-        logger.info("evaluate_code: Using local Ollama...")
-        result = _chain_invoke(code_eval_chain, chain_vars)
-        logger.info(f"evaluate_code: Ollama score={result.get('score')}")
-        return _scale_code_result(result)
-    except Exception as e:
-        logger.error(f"evaluate_code: Ollama failed: {e}")
+    if not IS_ORCHESTRATOR:
+        try:
+            logger.info("evaluate_code: Using local Ollama...")
+            result = _chain_invoke(code_eval_chain, chain_vars)
+            logger.info(f"evaluate_code: Ollama score={result.get('score')}")
+            return _scale_code_result(result)
+        except Exception as e:
+            logger.error(f"evaluate_code: Ollama failed: {e}")
+            return _scale_code_result({
+                "feedback": "Code evaluation service temporarily unavailable.",
+                "score": 0.0,
+                "error": True,
+            })
+    else:
+        logger.warning("Orchestrator mode: Skipping local code evaluation.")
         return _scale_code_result({
-            "feedback": "Code evaluation service temporarily unavailable.",
+            "feedback": "Code evaluation unavailable (Orchestrator Mode).",
             "score": 0.0,
             "error": True,
         })
+
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +498,36 @@ def generate_coding_questions_from_prompt(
         return data
 
     last_error = None
+    groq_client = get_interview_groq()
+
+    # --- Groq API ---
+    if groq_client:
+        try:
+            logger.info("generate_coding_questions: Attempting Groq API...")
+            system_instruction = (
+                "You are an expert technical interviewer. Generate LeetCode-style coding problems in JSON format. "
+                "Return a JSON array of objects with: 'title', 'problem_statement', 'examples', 'constraints', "
+                "'starter_code', 'topic', 'difficulty', 'marks', and 'response_type' (set to 'code')."
+            )
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": system_instruction},
+                    {"role": "user", "content": f"Topic/Prompt: {ai_prompt}\nDifficulty Mix: {difficulty_mix}\nNum: {num_questions}"}
+                ],
+                temperature=0.4,
+                response_format={"type": "json_object"},
+            )
+            content = completion.choices[0].message.content
+            result = _parse_json(content)
+            if isinstance(result, dict) and "questions" in result:
+                result = result["questions"]
+            if isinstance(result, list):
+                logger.info(f"generate_coding_questions: Groq API returned {len(result)} problems")
+                return result
+        except Exception as e:
+            last_error = f"Groq API failed: {str(e)}"
+            logger.warning(last_error)
 
     # --- Hugging Face Inference API ---
     hf_token = os.getenv("HF_TOKEN")
@@ -362,22 +554,27 @@ def generate_coding_questions_from_prompt(
             logger.warning(last_error)
 
     # --- Local Ollama ---
-    try:
-        logger.info("generate_coding_questions: Using local Ollama...")
-        response = generation_chain.invoke({
-            "ai_prompt": ai_prompt,
-            "difficulty_mix": difficulty_mix,
-            "num_questions": num_questions,
-        })
-        result = _parse_json(response.content)
-        logger.info(f"generate_coding_questions: Ollama returned {len(result)} problems")
-        return result
-    except Exception as e:
-        error_msg = f"Ollama failed: {str(e)}"
-        if last_error:
-            error_msg = f"{last_error} | {error_msg}"
-        logger.error(error_msg)
-        raise ValueError(f"Coding question generation failed: {error_msg}")
+    if not IS_ORCHESTRATOR:
+        try:
+            logger.info("generate_coding_questions: Using local Ollama...")
+            response = generation_chain.invoke({
+                "ai_prompt": ai_prompt,
+                "difficulty_mix": difficulty_mix,
+                "num_questions": num_questions,
+            })
+            result = _parse_json(response.content)
+            logger.info(f"generate_coding_questions: Ollama returned {len(result)} problems")
+            return result
+        except Exception as e:
+            error_msg = f"Ollama failed: {str(e)}"
+            if last_error:
+                error_msg = f"{last_error} | {error_msg}"
+            logger.error(error_msg)
+            raise ValueError(f"Coding question generation failed: {error_msg}")
+    else:
+        logger.warning("Orchestrator mode: Skipping local coding question generation.")
+        raise ValueError(f"Coding question generation failed: {last_error or 'Remote services unavailable and local fallback disabled in Orchestrator Mode'}")
+
 
 
 def get_or_create_question(session: Session, content: str, topic: str = "General", difficulty: str = "Unknown") -> Questions:
@@ -413,6 +610,9 @@ def generate_questions_from_prompt(
     """
     from ..prompts.question_generation import question_generation_prompt
 
+    # Initialize Groq client
+    groq_client = get_groq_client()
+
     generation_chain = question_generation_prompt | local_llm
 
     # Build the rendered prompt string to use for the HF fallback
@@ -422,18 +622,21 @@ def generate_questions_from_prompt(
         num_questions=num_questions,
     )
 
-    def _parse_json(raw: str) -> list[dict]:
-        """Strip markdown fences and parse JSON array."""
+    def _parse_json(raw: str) -> Union[list, dict]:
+        """Strip markdown fences and parse JSON."""
         content = raw.strip()
-        # Remove ```json ... ``` or ``` ... ``` wrappers
         if content.startswith("```"):
             lines = content.split("\n")
-            lines = [l for l in lines if not l.startswith("```")]
+            if lines[0].startswith("```"): lines = lines[1:]
+            if lines and lines[-1].strip() == "```": lines = lines[:-1]
             content = "\n".join(lines).strip()
-        data = json.loads(content)
-        if not isinstance(data, list):
-            raise ValueError("LLM did not return a JSON array")
-        return data
+        
+        try:
+            data = json.loads(content)
+            return data
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse LLM JSON: {e}\nContent: {content}")
+            raise ValueError(f"LLM returned invalid JSON: {str(e)}")
 
     last_error = None
 
@@ -469,13 +672,26 @@ def generate_questions_from_prompt(
             # and returns a JSON object, not a raw array.
             
             result = _parse_json(content)
-            # Some LLMs wrap the array in a "questions" key if forced into "json_object" mode
-            if isinstance(result, dict) and "questions" in result:
-                result = result["questions"]
+            # If result is a dict, extract the questions list
+            if isinstance(result, dict):
+                if "questions" in result:
+                    result = result["questions"]
+                elif "data" in result: # and "data" ...
+                    result = result["data"]
+                else:
+                    # If it's a dict but no obvious key, maybe it's just one question?
+                    # Or check for any list value
+                    for val in result.values():
+                        if isinstance(val, list):
+                            result = val
+                            break
             
             if isinstance(result, list):
                 logger.info(f"generate_questions: Groq API returned {len(result)} questions")
                 return result
+            else:
+                logger.error(f"Groq returned non-list result: {result}")
+                raise ValueError("AI service returned an unexpected response format.")
         except Exception as e:
             last_error = f"Groq API failed: {str(e)}"
             logger.warning(last_error)
@@ -512,19 +728,24 @@ def generate_questions_from_prompt(
             logger.warning(last_error)
 
     # --- Local Ollama ---
-    try:
-        logger.info("generate_questions: Using local Ollama...")
-        response = generation_chain.invoke({
-            "ai_prompt": ai_prompt,
-            "years_of_experience": years_of_experience,
-            "num_questions": num_questions,
-        })
-        result = _parse_json(response.content)
-        logger.info(f"generate_questions: Ollama returned {len(result)} questions")
-        return result
-    except Exception as e:
-        error_msg = f"Ollama failed: {str(e)}"
-        if last_error:
-            error_msg = f"{last_error} | {error_msg}"
-        logger.error(error_msg)
-        raise ValueError(f"Question generation failed: {error_msg}")
+    if not IS_ORCHESTRATOR:
+        try:
+            logger.info("generate_questions: Using local Ollama...")
+            response = generation_chain.invoke({
+                "ai_prompt": ai_prompt,
+                "years_of_experience": years_of_experience,
+                "num_questions": num_questions,
+            })
+            result = _parse_json(response.content)
+            logger.info(f"generate_questions: Ollama returned {len(result)} questions")
+            return result
+        except Exception as e:
+            error_msg = f"Ollama failed: {str(e)}"
+            if last_error:
+                error_msg = f"{last_error} | {error_msg}"
+            logger.error(error_msg)
+            raise ValueError(f"Question generation failed: {error_msg}")
+    else:
+        logger.warning("Orchestrator mode: Skipping local question generation.")
+        raise ValueError(f"Question generation failed: {last_error or 'Remote services unavailable and local fallback disabled in Orchestrator Mode'}")
+

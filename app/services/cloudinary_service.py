@@ -69,3 +69,41 @@ class CloudinaryService:
             logger.error(f"Cloudinary resume upload failed: {str(e)}")
             # Raise the exception so the API endpoint can catch it and return a 500 error
             raise e
+
+    def upload_audio(self, file_content: Union[bytes, BinaryIO], folder: str = "interview_audios") -> str:
+        """
+        Uploads audio content to Cloudinary and returns the secure URL.
+        Uses resource_type='video' as Cloudinary treats audio as video without a visual track.
+        """
+        try:
+            if hasattr(file_content, "read"):
+                try:
+                    file_content.seek(0)
+                except Exception: pass
+                file_bytes = file_content.read()
+            else:
+                file_bytes = file_content
+
+            # Generate a unique ID for the resource
+            unique_id = uuid.uuid4().hex
+            public_id = f"audio_{unique_id}"
+
+            upload_result = cloudinary.uploader.upload(
+                file_bytes,
+                folder=folder,
+                public_id=public_id,
+                resource_type="video", # Audio uses 'video' resource type
+                overwrite=True
+            )
+            
+            secure_url = upload_result.get("secure_url")
+            if not secure_url:
+                logger.error("Cloudinary audio upload succeeded but no secure_url was returned.")
+                return ""
+
+            logger.info(f"Audio uploaded to Cloudinary: {secure_url}")
+            return secure_url
+
+        except Exception as e:
+            logger.error(f"Cloudinary audio upload failed: {str(e)}")
+            raise e

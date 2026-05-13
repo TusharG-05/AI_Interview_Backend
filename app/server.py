@@ -2,11 +2,34 @@ import os
 import shutil
 import contextlib
 import sentry_sdk
+from typing import Any
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from fastapi.routing import APIRouter, APIRoute
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+
+# --- Startup Instrumentation ---
+print("\033[94m[STARTUP] app.server module initializing...\033[0m", flush=True)
+
+class ExcludeNoneJSONResponse(JSONResponse):
+    """Custom JSONResponse that excludes None values by default."""
+    def render(self, content: Any) -> bytes:
+        return super().render(jsonable_encoder(content, exclude_none=True))
+
+class ExcludeNoneRoute(APIRoute):
+    """Custom route class that excludes None values from responses by default."""
+    def __init__(self, *args, **kw):
+        if "response_model_exclude_none" not in kw:
+            kw["response_model_exclude_none"] = True
+        super().__init__(*args, **kw)
+
+# Patch APIRouter globally so all routers (including those imported later) use this route class
+APIRouter.route_class = ExcludeNoneRoute
 from .core.database import init_db
 from .core.logger import setup_logging, get_logger
-from .core.config import SENTRY_DSN, REDIS_URL
+from .core.config import SENTRY_DSN, REDIS_URL, IS_ORCHESTRATOR
+
 
 # PRE-INIT: Database must be initialized before heavy AI imports (Torch/TensorFlow)
 # to avoid segmentation faults in the database driver (psycopg2-binary).
@@ -34,21 +57,7 @@ if SENTRY_DSN:
     )
     logger.info("Lifespan: Sentry monitoring initialized.")
 
-@contextlib.asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Lifespan: Starting Application (API-Only Mode)...")
-    
-    # RATE LIMITING: Protect AI resources
-    try:
-        import redis.asyncio as redis
-        from fastapi_limiter import FastAPILimiter
-        redis_conn = redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-        await FastAPILimiter.init(redis_conn)
-        logger.info("Lifespan: API Rate Limiting initialized (Redis).")
-    except Exception as re_e:
-        logger.warning(f"Lifespan: Rate Limiter failed to start: {re_e}")
-    
+def _apply_torchaudio_patch():
     # MONKEY PATCH: Fix speechbrain vs torchaudio 2.x incompatibility
     try:
         import torchaudio
@@ -60,44 +69,117 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to apply torchaudio monkey patch: {e}")
 
-    # These imports are now safe since init_db() already finished
-    from .services.camera import CameraService
-    from .routers.interview import audio_service
-    
-    # Pre-warm models in background
-    import threading
-    def warm_up():
-        logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
-        from .core.config import local_llm
+def _warm_up_ml_models():
+    import time as _time
+    # HF Space Fix: Skip pre-warm during launch to avoid 503 timeout
+    if os.getenv("SPACE_ID"):
+        logger.info("Warm-up: Skipping intensive local model pre-warm on Hugging Face Space for fast startup.")
+        return
+
+    # Wait slightly before starting heavy work to allow health check to pass
+    _time.sleep(60) 
+    logger.info("Warm-up: Loading AI Models (Whisper, LLM, Speaker)...")
+    from .core.config import local_llm
+    from .routers.interview import get_audio_service
+    try:
+        audio_service = get_audio_service()
+        # Trigger lazy loading properties for audio/speech models
+        _ = audio_service.stt_model
+        _ = audio_service.speaker_model
+        
+        # Local LLM (Ollama) is often absent in cloud/HF environments
         try:
-            # Trigger lazy loading properties for audio/speech models
-            _ = audio_service.stt_model
-            _ = audio_service.speaker_model
+            local_llm.invoke("Hello")
+        except Exception as llm_e:
+            logger.info(f"Warm-up: Local LLM (Ollama) unreachable, skipping pre-warm: {llm_e}")
             
-            # Local LLM (Ollama) is often absent in cloud/HF environments
+        logger.info("Warm-up: AI Models Ready.")
+    except Exception as e:
+        logger.error(f"Warm-up process encountered an error: {e}")
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Lifespan: Starting Application (API-Only Mode)...")
+    
+    # --- Background Expiry Task (Cron-in-code) ---
+    async def periodic_expiry_check():
+        from .tasks.interview_tasks import expire_interviews_task
+        logger.info("Lifespan: Background expiry check loop started.")
+        while True:
             try:
-                local_llm.invoke("Hello")
-            except Exception as llm_e:
-                logger.info(f"Warm-up: Local LLM (Ollama) unreachable, skipping pre-warm: {llm_e}")
-                
-            logger.info("Warm-up: AI Models Ready.")
-        except Exception as e:
-            logger.error(f"Warm-up process encountered an error: {e}")
+                # We call the function directly. Since it's a celery task, 
+                # we call .delay() if we want it in celery, but here we want it in-process
+                # to satisfy "cron in code" without a separate beat worker.
+                # Actually, expire_interviews_task is a regular function decorated with @celery_app.task
+                # so calling it directly works fine.
+                expire_interviews_task()
+            except Exception as e:
+                logger.error(f"Lifespan: Error in background expiry check: {e}")
+            await asyncio.sleep(60)
+
+    import asyncio
+    app.state.expiry_task = asyncio.create_task(periodic_expiry_check())
     
-    # Start warm-up in background thread so server starts instantly
-    threading.Thread(target=warm_up, daemon=True).start()
-    logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
+    # RATE LIMITING: Protect AI resources
+    redis_conn = None
+    try:
+        import redis.asyncio as redis
+        from fastapi_limiter import FastAPILimiter
+            
+        # Robust connection options for Rate Limiter
+        conn_kwargs = {"decode_responses": True}
+        if REDIS_URL.startswith("rediss://"):
+            conn_kwargs["ssl_cert_reqs"] = "none"
+            
+        redis_conn = redis.from_url(REDIS_URL, **conn_kwargs)
+        await FastAPILimiter.init(redis_conn)
+        logger.info("Lifespan: API Rate Limiting initialized successfully.")
+    except ImportError:
+        logger.warning("Lifespan: fastapi-limiter not installed. Rate limiting disabled.")
+    except Exception as re_e:
+        logger.error(f"Lifespan: Rate Limiter failed to start: {re_e}")
+    # --- Skip heavy ML if Orchestrator Mode ---
+    if not IS_ORCHESTRATOR:
+        _apply_torchaudio_patch()
+
+        # These imports are now safe since init_db() already finished
+        from .services.camera import CameraService
+        import threading
+        
+        # Start warm-up in background thread so server starts instantly
+        # On HF Spaces, we skip local ML warmup to save memory and startup time
+        if not os.getenv("SPACE_ID"):
+            threading.Thread(target=_warm_up_ml_models, daemon=True).start()
+            logger.info("Warm-up: Started in background thread for fast startup (Models: Whisper, LLM, Speaker).")
+        else:
+            logger.info("Warm-up: Skipped local model pre-warm on Hugging Face Space.")
+        
+        logger.info("Lifespan: Initializing CameraService...")
+        service = CameraService()
+        service.start()  # ✅ CRITICAL: Start detectors for proctoring
+    else:
+        logger.info("Lifespan: Running in ORCHESTRATOR mode (ML Services disabled).")
+        service = None
     
-    logger.info("Lifespan: Initializing CameraService...")
-    service = CameraService()
-    service.start()  # ✅ CRITICAL: Start detectors for proctoring
     logger.info("Lifespan: Startup Complete.")
     yield
     
     logger.info("Stopping Application Resources...")
+
     from .core.database import engine
-    service.stop()
+    if service is not None:
+        service.stop()
     engine.dispose()
+    
+    # CLEANUP: Close Redis connection explicitly to avoid event loop error
+    if redis_conn is not None:
+        try:
+            await redis_conn.close()
+            logger.info("Lifespan: Redis connection closed successfully.")
+        except Exception as redis_close_err:
+            logger.warning(f"Lifespan: Error closing Redis connection: {redis_close_err}")
+    
     logger.info("Application Shutdown Complete.")
 
 class ExcludeNoneRoute(APIRoute):
@@ -112,13 +194,22 @@ app = FastAPI(
     description="High-performance JSON API for AI-driven face/gaze detection and automated interviews.",
     version="2.0.0",
     lifespan=lifespan,
+    default_response_class=ExcludeNoneJSONResponse,
     route_class=ExcludeNoneRoute,
 )
+
+# MOUNT: Serve local assets (Failover storage for stateless cloud dependencies)
+os.makedirs("app/assets/audio/failover", exist_ok=True)
+app.mount("/assets", StaticFiles(directory="app/assets"), name="assets")
+
+# MOUNT: Serve static test pages
+os.makedirs("app/static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 from fastapi.responses import JSONResponse
 from fastapi.requests import Request
 
-from .schemas.api_response import ApiErrorResponse
+from .schemas.shared.api_response import ApiErrorResponse
 
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
@@ -127,7 +218,7 @@ from fastapi.encoders import jsonable_encoder
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Catch 422 validation errors and wrap them."""
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=422,
         content=ApiErrorResponse(
             status_code=422,
@@ -143,7 +234,7 @@ async def not_found_handler(request: Request, exc: Exception):
     if hasattr(exc, "detail"):
         message = str(exc.detail)
         
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=404,
         content=ApiErrorResponse(
             status_code=404,
@@ -163,19 +254,19 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         message = exc.detail.get("message", "Error occurred")
         data = exc.detail
 
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=exc.status_code,
         content=ApiErrorResponse(
             status_code=exc.status_code,
             message=message,
             data=data
-        ).model_dump()
+        ).model_dump() | {"detail": message}
     )
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global Exception: {exc}", exc_info=True)
-    return JSONResponse(
+    return ExcludeNoneJSONResponse(
         status_code=500,
         content=ApiErrorResponse(
             status_code=500,
@@ -184,20 +275,24 @@ async def global_exception_handler(request: Request, exc: Exception):
         ).model_dump()
     )
 
+from .core.config import FRONTEND_URL
 from fastapi.middleware.cors import CORSMiddleware
-import os
 
-# SECURITY: Allow ALL origins (including localhost) for development convenience
-# WARNING: This effectively disables CORS protection.
-# ALLOW_ORIGIN_REGEX = r".*"
+# SECURITY: Restrict origins in production, allow development origins
+origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+if FRONTEND_URL and FRONTEND_URL not in origins:
+    origins.append(FRONTEND_URL)
+if os.getenv("ENV") == "development":
+    origins = ["*"] # Keep wildcard for local dev convenience if explicitly set
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # HF Proxy Fix: Support X-Forwarded-Proto and X-Forwarded-For
 # This ensures that WebSockets and Redirects use the correct protocol (https)
@@ -224,97 +319,55 @@ async def proxy_fix_middleware(request: Request, call_next):
 import time
 import json
 
-@app.middleware("http")
-async def diagnostic_logging_middleware(request: Request, call_next):
-    # Skip in production/Hugging Face to avoid issues
-    if os.getenv("ENV") == "production" or os.getenv("SPACE_ID"):
-        return await call_next(request)
-        
-    # Skip noisy endpoints like swagger docs
-    if request.url.path in ["/docs", "/openapi.json", "/redoc"]:
-        return await call_next(request)
-        
-    start_time = time.time()
-    
-    # 1. Safely read and restore the request body (Skip multipart to avoid breaking file uploads)
-    content_type = request.headers.get("content-type", "")
-    is_multipart = "multipart/form-data" in content_type
-    
-    body_str = ""
-    is_json = False
-    
-    if not is_multipart:
-        try:
-            body_bytes = await request.body()
-            # Restore the stream so the endpoints can still access the body
-            async def receive():
-                return {"type": "http.request", "body": body_bytes}
-            request._receive = receive
-            
-            # 2. Try to parse JSON for pretty printing and masking passwords
-            if body_bytes:
-                try:
-                    parsed = json.loads(body_bytes)
-                    # Mask potential secrets
-                    for key in ["password", "token", "access_token"]:
-                        if isinstance(parsed, dict) and key in parsed:
-                            parsed[key] = "********"
-                    body_str = json.dumps(parsed, indent=2)
-                    is_json = True
-                except Exception:
-                    body_str = body_bytes.decode(errors="replace")[:500]
-        except Exception:
-            body_str = "<error reading body>"
-    else:
-        body_str = "<multipart/form-data (skipped to preserve stream)>"
 
-    print(f"\n\033[96m[REQUEST START] {request.method} {request.url.path}\033[0m", flush=True)
-    if body_str:
-        print(f"\033[90mPayload:\n{body_str}\033[0m", flush=True)
-        
-    # 3. Execute the request and catch any 500s directly here to print context
-    try:
-        response = await call_next(request)
-        process_time = (time.time() - start_time) * 1000
-        
-        # Color based on status code
-        if 200 <= response.status_code < 300:
-            color = "\033[92m" # Green
-        elif 400 <= response.status_code < 500:
-            color = "\033[93m" # Yellow
-        else:
-            color = "\033[91m" # Red
-            
-        print(f"{color}[REQUEST END] {request.method} {request.url.path} - {response.status_code} - {process_time:.2f}ms\033[0m", flush=True)
-        return response
-        
-    except Exception as e:
-        process_time = (time.time() - start_time) * 1000
-        print(f"\n\033[91m====================== CRITICAL ERROR ======================\033[0m", flush=True)
-        print(f"\033[91mFailed Endpoint: {request.method} {request.url.path}\033[0m", flush=True)
-        print(f"\033[91mExecution Time: {process_time:.2f}ms\033[0m", flush=True)
-        print(f"\033[91mInput Payload that caused failure:\n{body_str}\033[0m", flush=True)
-        print(f"\033[91m------------------------------------------------------------\033[0m", flush=True)
-        import traceback
-        traceback.print_exc()
-        print(f"\033[91m============================================================\033[0m\n", flush=True)
-        raise e
+# --- Rate Limiting Strategy ---
+from fastapi import Depends
 
-# (Redundant endpoint removed. Use settings.router instead)
+# Rate limiters are defined per-endpoint using fastapi_limiter
+# Placeholder for future implementation with proper async context
+general_limiter = []
+auth_limiter = []
+heavy_ai_limiter = []
+ml_task_limiter = []
 
-# Lazy include routers to ensure AI models (imported within routers) 
-# don't conflict with database initialization logic.
-from .routers import video, settings, admin, interview, auth, candidate, teams, coding_papers, resume
+# --- Router Inclusion (Instrumented for Cloud Debugging) ---
+print("\n\033[94m[STARTUP] Loading routers...\033[0m", flush=True)
 
-app.include_router(video.router, prefix="/api")
+# Diagnostic
+from .core.config import SECRET_KEY as C_SEC
+from .auth.security import SECRET_KEY as S_SEC
+print(f"DEBUG AUTH: Match={C_SEC == S_SEC} Config={C_SEC[:5]} Security={S_SEC[:5]}")
+
+from .routers import auth, settings, admin, teams, coding_papers, resume, interview, candidate, video, admin_ws, websocket
+
+print("\033[94m[STARTUP] Including Auth, Settings, Admin, Teams...\033[0m", flush=True)
+app.include_router(auth.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
-app.include_router(interview.router, prefix="/api")
-app.include_router(auth.router, prefix="/api")
-app.include_router(candidate.router, prefix="/api")
 app.include_router(teams.router, prefix="/api")
-app.include_router(coding_papers.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Resume, Coding, Interview...\033[0m", flush=True)
 app.include_router(resume.router, prefix="/api")
+app.include_router(coding_papers.router, prefix="/api")
+app.include_router(interview.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Candidate Router...\033[0m", flush=True)
+app.include_router(candidate.router, prefix="/api")
+
+print("\033[94m[STARTUP] Including Video Router (Heavy)...\033[0m", flush=True)
+app.include_router(video.router, prefix="/api")
+
+# Heavy ML Routers: Only load if not in orchestrator-only mode
+if IS_ORCHESTRATOR:
+    logger.info("Orchestrator Mode: ML services are disabled but routers are active.")
+
+# General Dashboard Websocket (Real-time monitoring)
+app.include_router(admin_ws.router, prefix="/api/admin")
+
+# Event-driven Websocket: Candidate violations + Admin dashboard events
+app.include_router(websocket.router)
+
+print("\033[92m[STARTUP] All routers included successfully.\033[0m\n", flush=True)
 
 from fastapi.responses import RedirectResponse
 

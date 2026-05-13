@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 from sqlalchemy.exc import IntegrityError
@@ -6,9 +6,12 @@ from sqlalchemy.exc import IntegrityError
 from ..core.database import get_db as get_session
 from ..models.db_models import Team, QuestionPaper, User
 from ..auth.dependencies import get_super_admin_user, get_admin_user
-from ..schemas.requests import TeamCreate, TeamUpdate
-from ..schemas.responses import TeamRead, TeamReadBasic, PaperRead, QuestionRead
-from ..schemas.api_response import ApiResponse
+from ..schemas.teams.management import TeamCreateRequest as TeamCreate, TeamUpdateRequest as TeamUpdate
+from ..schemas.teams.management import TeamDetailResponse as TeamRead
+from ..schemas.shared.team import TeamReadBasic
+from ..schemas.admin.papers import GetPaperResponse as PaperRead, AdminQuestionRead as QuestionRead
+from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
+from ..schemas.shared.user import UserNested
 from ..core.logger import get_logger
 from ..utils import format_iso_datetime
 
@@ -33,7 +36,7 @@ def _serialize_team(team: Team, session: Session) -> TeamRead:
             created_at=team.created_at.isoformat() if team.created_at else "",
             user_count=len(users_orm)
         )
-        users_out.append(UserRead(
+        users_out.append(UserNested(
             id=u.id,
             email=u.email,
             full_name=u.full_name,
@@ -72,8 +75,8 @@ def _serialize_team_basic(team: Team, session: Session) -> TeamReadBasic:
 @router.post("/teams", response_model=ApiResponse[TeamRead], status_code=201)
 async def create_team(
     team_data: TeamCreate,
-    current_user: User = Depends(get_super_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_super_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """
     Create a new team.  
@@ -93,7 +96,6 @@ async def create_team(
     try:
         session.commit()
         session.refresh(new_team)
-        pass
     except IntegrityError as e:
         session.rollback()
         logger.error(f"IntegrityError creating team: {str(e)}")
@@ -117,19 +119,32 @@ async def create_team(
 # LIST — Admin + Super Admin
 # ---------------------------------------------------------------------------
 
-@router.get("/teams", response_model=ApiResponse[List[TeamReadBasic]])
+@router.get("/teams", response_model=ApiResponse[PaginatedResponse[TeamReadBasic]])
 async def list_teams(
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)],
+    skip: int = 0,
+    limit: int = 20,
+    search: Optional[str] = None
 ):
     """
     List all teams. Returns only basic team information without nested papers.
     *(Admin + Super Admin)*
     """
-    teams = session.exec(select(Team).order_by(Team.name)).all()
-    for t in teams:
-        pass
-            
+    query = select(Team)
+    
+    if search:
+        search_filter = f"%{search}%"
+        query = query.where(Team.name.ilike(search_filter))
+        
+    from sqlalchemy import func
+    count_query = select(func.count()).select_from(query.subquery())
+    total_count = session.exec(count_query).one()
+    
+    teams = session.exec(
+        query.order_by(Team.name.asc()).offset(skip).limit(limit)
+    ).all()
+    
     # Serialize, completely omitting nested data
     data = []
     for t in teams:
@@ -137,7 +152,12 @@ async def list_teams(
         
     return ApiResponse(
         status_code=200,
-        data=data,
+        data={
+            "items": data,
+            "total": total_count,
+            "skip": skip,
+            "limit": limit
+        },
         message="Teams retrieved successfully"
     )
 
@@ -149,8 +169,8 @@ async def list_teams(
 @router.get("/teams/{team_id}", response_model=ApiResponse[TeamRead])
 async def get_team(
     team_id: int,
-    current_user: User = Depends(get_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """
     Get details of a specific team, including its question paper count.  
@@ -174,8 +194,8 @@ async def get_team(
 async def update_team(
     team_id: int,
     team_update: TeamUpdate,
-    current_user: User = Depends(get_super_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_super_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """
     Update a team's name or description.  
@@ -199,7 +219,6 @@ async def update_team(
     try:
         session.commit()
         session.refresh(team)
-        pass
     except IntegrityError:
         session.rollback()
         raise HTTPException(
@@ -225,8 +244,8 @@ async def update_team(
 @router.delete("/teams/{team_id}", response_model=ApiResponse[dict])
 async def delete_team(
     team_id: int,
-    current_user: User = Depends(get_super_admin_user),
-    session: Session = Depends(get_session)
+    current_user: Annotated[User, Depends(get_super_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
 ):
     """
     Delete a team. Users in this team will have their team_id set to NULL.

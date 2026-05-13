@@ -11,16 +11,22 @@ from ..auth.security import (
     create_access_token, 
     ACCESS_TOKEN_EXPIRE_MINUTES
 )
-from ..schemas.requests import UserCreate, LoginRequest
-from ..schemas.responses import Token, UserRead
-from ..schemas.api_response import ApiResponse
-from ..schemas.user_schemas import serialize_user
+from ..schemas.auth.login import LoginRequest, TokenResponse as Token, MeResponse as UserRead
+from ..schemas.auth.registration import RegisterRequest as UserCreate
+from ..schemas.shared.api_response import ApiResponse
+from ..schemas.shared.user import serialize_user
+
 from typing import Optional
 from ..auth.dependencies import get_current_user, get_current_user_optional
-from ..models.db_models import User, UserRole, InterviewSession, Team
+from ..models.db_models import User, UserRole, InterviewSession, InterviewStatus, Team
+from ..services.email import EmailService
+from ..services.interview_access import LINK_VALIDITY_MINUTES, evaluate_interview_access
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 logger = logging.getLogger(__name__)
+
+# Initialize services
+email_service = EmailService()
 
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
@@ -69,6 +75,25 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
                 detail="Invalid interview link or candidate mismatch.",
             )
 
+        access_decision = evaluate_interview_access(interview)
+        if not access_decision.allowed:
+            if access_decision.reason == "cancelled":
+                raise HTTPException(status_code=403, detail="This interview has been cancelled.")
+            if access_decision.reason == "completed":
+                raise HTTPException(status_code=403, detail="This interview has already been completed.")
+            if access_decision.entry_window_expired or access_decision.reason == "explicitly_expired":
+                if interview.status != InterviewStatus.EXPIRED:
+                    interview.status = InterviewStatus.EXPIRED
+                    session.add(interview)
+                    session.commit()
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"This interview link has expired. Candidates must join within {interview.duration_minutes} minutes of the scheduled time.",
+                )
+            if access_decision.duration_expired:
+                raise HTTPException(status_code=403, detail="This interview session has expired.")
+            raise HTTPException(status_code=403, detail="Interview link is not active.")
+
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_access_token(
         data={"sub": user.email}, expires_delta=access_token_expires
@@ -85,10 +110,10 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "email": user.email,
         "full_name": user.full_name,
         "role": str(user.role.value) if hasattr(user.role, "value") else str(user.role),
-        "profile_image_url" : user.profile_image,
+        "profile_image" : user.profile_image,
         "team": team_data
     }
-    
+    print(token_data)
     return ApiResponse(
         status_code=200,
         data=token_data,
@@ -164,6 +189,13 @@ async def register(
             raise HTTPException(
                 status_code=403,
                 detail="Registration is restricted to Admins. Please contact an administrator."
+            )
+        
+        # Role-based restriction: Admins can only create Candidates
+        if current_user.role == UserRole.ADMIN and user_data.role != UserRole.CANDIDATE:
+            raise HTTPException(
+                status_code=403,
+                detail="Admins are only permitted to register Candidates. Please contact a Super Admin for other roles."
             )
 
     existing_user = session.exec(select(User).where(User.email == user_data.email.lower())).first()
@@ -248,4 +280,3 @@ async def read_users_me(current_user: User = Depends(get_current_user), session:
         data=user_data,
         message="User profile retrieved successfully"
     )
-
