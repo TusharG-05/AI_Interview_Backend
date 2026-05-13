@@ -140,21 +140,25 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # Configure DeepFace to use project-local storage
 # DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights
-# In production (like HF Spaces), use /tmp for writable storage
+# In production (like HF Spaces), use a secure subfolder in system temp
+import tempfile
 if ENV == "production" or os.path.exists("/app"):
-    DEEPFACE_STORAGE_DIR = "/tmp/deepface"
+    # Use a more unique subfolder in temp
+    DEEPFACE_STORAGE_DIR = os.path.join(tempfile.gettempdir(), "ai_interview_platform_deepface")
 else:
     # Local dev
     DEEPFACE_STORAGE_DIR = os.path.abspath("models/deepface")
     
 os.environ["DEEPFACE_HOME"] = DEEPFACE_STORAGE_DIR
 try:
-    os.makedirs(DEEPFACE_STORAGE_DIR, exist_ok=True)
+    if not os.path.exists(DEEPFACE_STORAGE_DIR):
+        # Create with mode 0o700 (Read/Write/Execute for owner ONLY)
+        os.makedirs(DEEPFACE_STORAGE_DIR, mode=0o700, exist_ok=True)
 except Exception as e:
-    # Last resort fallback to /tmp
-    DEEPFACE_STORAGE_DIR = "/tmp/deepface"
+    # Fallback with restricted permissions
+    DEEPFACE_STORAGE_DIR = os.path.join(tempfile.gettempdir(), "ai_interview_fallback_deepface")
     os.environ["DEEPFACE_HOME"] = DEEPFACE_STORAGE_DIR
-    os.makedirs(DEEPFACE_STORAGE_DIR, exist_ok=True)
+    os.makedirs(DEEPFACE_STORAGE_DIR, mode=0o700, exist_ok=True)
 
 # Ensure directories exist
 for d in [ASSETS_DIR, AUDIO_DIR, PROCTORING_LOGS_DIR]:

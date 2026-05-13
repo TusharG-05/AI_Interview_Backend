@@ -78,18 +78,19 @@ class AudioService:
             logger.info(f"Loading Speaker Verification Model on {device}...")
             
             # Fix for HF Spaces Permission Error / Windows Symlink Error
-            # Priority: 1. /app/models/speechbrain (Pre-downloaded in Docker) 2. /tmp/models (Writeable)
+            # Priority: 1. /app/models/speechbrain (Pre-downloaded in Docker) 2. Secure Temp (Writeable)
+            import tempfile
             if os.path.exists("/app/models/speechbrain"):
                 save_path = os.path.abspath("/app/models/speechbrain")
             elif os.getenv("SPACE_ID"):
-                save_path = os.path.abspath("/tmp/models/speechbrain")
+                save_path = os.path.join(tempfile.gettempdir(), "ai_interview_speechbrain_models")
             else:
                 save_path = os.path.abspath("models/speechbrain")
                 
             try:
                 if not os.path.exists(os.path.join(save_path, "hyperparams.yaml")):
                     logger.info(f"Downloading SpeechBrain model to {save_path} (no symlinks)...")
-                    os.makedirs(save_path, exist_ok=True)
+                    os.makedirs(save_path, mode=0o700, exist_ok=True)
                     snapshot_download(
                         repo_id="speechbrain/spkrec-ecapa-voxceleb",
                         local_dir=save_path,

@@ -44,18 +44,22 @@ class EmailService:
         return sender_email
 
     def _create_smtp_client(self):
+        # Secure SSL Context: Enforces TLS 1.2+, checks hostname, and verifies certificates
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+
         if self.smtp_use_ssl:
             return smtplib.SMTP_SSL(
                 self.smtp_server,
                 self.smtp_port,
                 timeout=15,
-                context=ssl.create_default_context(),
+                context=context,
             )
 
         server = smtplib.SMTP(self.smtp_server, self.smtp_port, timeout=15)
         if self.smtp_starttls:
             server.ehlo()
-            server.starttls(context=ssl.create_default_context())
+            server.starttls(context=context)
             server.ehlo()
         return server
 

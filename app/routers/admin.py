@@ -1102,14 +1102,18 @@ async def list_interviews(
             start_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(hour=0, minute=0, second=0, microsecond=0)
             query = query.where(InterviewSession.schedule_time >= start_dt)
         except ValueError:
-            logger.warning(f"Invalid from_date format: {from_date}")
+            # Sanitize user-controlled data to prevent log injection (CRLF injection)
+            safe_from = from_date.replace('\n', '').replace('\r', '')[:50]
+            logger.warning(f"Invalid from_date format: {safe_from}")
 
     if to_date:
         try:
             end_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(hour=23, minute=59, second=59, microsecond=999999)
             query = query.where(InterviewSession.schedule_time <= end_dt)
         except ValueError:
-            logger.warning(f"Invalid to_date format: {to_date}")
+            # Sanitize user-controlled data to prevent log injection (CRLF injection)
+            safe_to = to_date.replace('\n', '').replace('\r', '')[:50]
+            logger.warning(f"Invalid to_date format: {safe_to}")
     
     if current_user.role != UserRole.SUPER_ADMIN:
         query = query.where(
