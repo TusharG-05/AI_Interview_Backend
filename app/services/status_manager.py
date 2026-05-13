@@ -83,7 +83,9 @@ def get_enriched_admin_data(interview_id: int, session: Optional[Session] = None
                 "candidate_email": candidate.email
             },
             "proctoring_events": {
-                "tab_switch_count": interview_session.tab_switch_count
+                "tab_switch_count": interview_session.tab_switch_count,
+                "warning_count": interview_session.warning_count,
+                "max_warnings": interview_session.max_warnings
             },
             "dashboard_data": _get_metrics(session)
         }
@@ -100,17 +102,25 @@ def get_enriched_admin_data(interview_id: int, session: Optional[Session] = None
         if close_session:
             session.close()
 
-async def _broadcast_violation_event(interview_id: int, event_type: str, details: Optional[str] = None, tab_switch_count: Optional[int] = None):
+async def _broadcast_violation_event(interview_id: int, event_type: str, details: Optional[str] = None):
     """
     Broadcast a violation event to both candidate and admin dashboard WebSockets.
     
-    For candidates: Sends ViolationEvent immediately
+    For candidates: Sends ViolationEvent immediately with warning counts
     For admin: Sends ViolationEvent with metadata
     """
     try:
         from .websocket_manager import manager
         from ..schemas.websocket.events import ViolationEvent
         
+        # Broadcast to admin dashboard (include enriched data)
+        # We do this first to get the most recent warning_count if needed
+        enriched_data = get_enriched_admin_data(interview_id)
+        
+        # Extract counts from enriched data for the candidate payload
+        warning_count = enriched_data.get("proctoring_events", {}).get("warning_count", 0)
+        max_warnings = enriched_data.get("proctoring_events", {}).get("max_warnings", 3)
+
         # Map event_type to violation_type expected by ViolationEvent
         violation_type_map = {
             "tab_switch": "tab_switch",
@@ -121,12 +131,14 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
         
         violation_type = violation_type_map.get(event_type, event_type.lower())
         
-        # Create violation event
+        # Create violation event for candidate
         violation_event = ViolationEvent(
             violation_type=violation_type,
             interview_id=interview_id,
             timestamp=datetime.now(timezone.utc),
-            details=details
+            details=details,
+            warning_count=warning_count,
+            max_warnings=max_warnings
         )
         
         # Broadcast to candidate
@@ -134,9 +146,6 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
             interview_id,
             violation_event.model_dump(mode='json')
         )
-        
-        # Broadcast to admin dashboard (include enriched data)
-        enriched_data = get_enriched_admin_data(interview_id)
         
         admin_payload = {
             "event_type": "violation_detected",
@@ -491,8 +500,7 @@ def add_violation(
         _broadcast_violation_event(
             interview_session.id,
             event_type,
-            details,
-            tab_switch_count=interview_session.warning_count if event_type == "tab_switch" else None
+            details
         )
     )
     
