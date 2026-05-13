@@ -7,11 +7,11 @@
 # ============================================================
 
 # Load .env
-if [ -f .env ]; then
+if [[ -f .env ]]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
-if [ -z "$HF_TOKEN" ]; then
+if [[ -z "$HF_TOKEN" ]]; then
     echo "❌ Error: HF_TOKEN is not set in your .env file."
     echo "Please add HF_TOKEN=\"your_token\" to your .env file."
     exit 1
@@ -23,10 +23,10 @@ DEPLOY_DIR="../hf_deploy_v2"
 echo "🚀 Starting Deployment to Hugging Face (v2)..."
 
 # ── 1. Bootstrap deploy dir the first time ──────────────────
-if [ ! -d "$DEPLOY_DIR/.git" ]; then
+if [[ ! -d "$DEPLOY_DIR/.git" ]]; then
     echo "📁 Deploy directory not found. Cloning from Hugging Face..."
     git clone "https://user:$HF_TOKEN@huggingface.co/spaces/ichigo253/Ai_Interview_Backend_v2" "$DEPLOY_DIR"
-    if [ $? -ne 0 ]; then
+    if [[ $? -ne 0 ]]; then
         echo "❌ Clone failed. Check that the HF Space exists and HF_TOKEN is valid."
         exit 1
     fi

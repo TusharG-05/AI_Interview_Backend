@@ -118,15 +118,26 @@ async def generate_resume_prompt(
         # 1. Handle Cloudinary or Local Path
         if user.resume_path.startswith('https://') or user.resume_path.startswith('http://'):
             # Download from URL
-            response = requests.get(user.resume_path, timeout=30)
-            if response.status_code != 200:
+            def _download():
+                resp = requests.get(user.resume_path, timeout=30)
+                resp.raise_for_status()
+                return resp.content
+
+            try:
+                content = await asyncio.to_thread(_download)
+            except Exception as e:
+                logger.error(f"Failed to download resume from {user.resume_path}: {e}")
                 raise HTTPException(status_code=500, detail="Failed to download resume from source")
             
             # Create a temporary file with the correct extension
             ext = os.path.splitext(user.resume_path.split('?')[0])[1] or ".pdf"
-            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                tmp.write(response.content)
-                temp_file_path = tmp.name
+            
+            def _write_temp(content, suffix):
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(content)
+                    return tmp.name
+            
+            temp_file_path = await asyncio.to_thread(_write_temp, content, ext)
         else:
             # Local path
             if not os.path.exists(user.resume_path):

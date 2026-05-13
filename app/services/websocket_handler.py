@@ -17,6 +17,7 @@ from ..services.status_manager import (
 )
 
 logger = get_logger(__name__)
+_background_tasks = set()
 
 # Standardized logging helper
 def log_info(interview_id: int, message: str):
@@ -146,7 +147,9 @@ async def handle_tab_switch_event(interview_id: int, session: Session, data: dic
             
             if session_obj.is_suspended:
                 from ..tasks.interview_tasks import process_session_results
-                asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+                task = asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
                 log_info(interview_id, "Interview suspended via tab-switch threshold, triggering evaluation.")
 
             session.add(session_obj)
@@ -186,7 +189,9 @@ async def handle_tab_return_event(interview_id: int, session: Session, data: dic
                 )
                 
                 from ..tasks.interview_tasks import process_session_results
-                asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+                task = asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
                 log_warning(interview_id, f"Suspended due to tab-switch timeout ({elapsed}s)")
             else:
                 session_obj.tab_warning_active = False
@@ -214,7 +219,9 @@ async def handle_finish_interview_event(interview_id: int, websocket: WebSocket,
                 current_status_label="Completed",
             )
             
-            asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+            task = asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
             
             try:
                 CameraService().clear_session(interview_id)

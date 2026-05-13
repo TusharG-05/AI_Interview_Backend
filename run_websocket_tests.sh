@@ -4,7 +4,7 @@
 # Set environment variables for live backend testing
 # These should be set in your environment or passed explicitly
 
-if [ -z "$LIVE_INTERVIEW_BASE_URL" ]; then
+if [[ -z "$LIVE_INTERVIEW_BASE_URL" ]]; then
     echo "ERROR: LIVE_INTERVIEW_BASE_URL not set"
     echo "Please set the following environment variables:"
     echo "  LIVE_INTERVIEW_BASE_URL              (e.g., http://localhost:8000)"

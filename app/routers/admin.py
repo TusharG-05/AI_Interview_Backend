@@ -192,9 +192,12 @@ async def upload_questions_doc(
             detail="Unsupported file format. Please upload .pdf, .docx, .txt, or .xlsx"
         )
         
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(await file.read())
-        temp_path = tmp.name
+    def _write_temp_file(content, suffix):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(content)
+            return tmp.name
+
+    temp_path = await asyncio.to_thread(_write_temp_file, await file.read(), ext)
     
     try:
         # 2. Extract questions

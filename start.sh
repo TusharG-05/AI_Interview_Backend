@@ -5,7 +5,7 @@ set -e
 export PYTHONUNBUFFERED=TRUE
 export PYTHONPATH=$PYTHONPATH:.
 
-if [ -f .env ]; then
+if [[ -f .env ]]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
@@ -13,7 +13,7 @@ fi
 # On Render/Managed environments, REDIS_URL is provided. On HF, we start local.
 if [[ "$DISABLE_REDIS" == "true" ]]; then
     echo "⭕ Redis is DISABLED via environment variable."
-elif [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL" == *"localhost"* ]]; then
+elif [[ -z "$REDIS_URL" ]] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_URL" == *"localhost"* ]]; then
     echo "🚀 Starting local Redis server..."
     # On very low RAM (Render 512MB), starting Redis can cause OOM.
     # We use aggressive memory limits for local Redis.
@@ -31,7 +31,7 @@ elif [ -z "$REDIS_URL" ] || [[ "$REDIS_URL" == *"127.0.0.1"* ]] || [[ "$REDIS_UR
     MAX_WAIT=10
     WAITED=0
     until redis-cli ping 2>/dev/null | grep -q PONG; do
-        if [ "$WAITED" -ge "$MAX_WAIT" ]; then
+        if [[ "$WAITED" -ge "$MAX_WAIT" ]]; then
             echo "WARNING: Redis did not start within ${MAX_WAIT}s. Continuing without Redis."
             break
         fi
@@ -47,7 +47,7 @@ fi
 # ── Start Celery worker and Beat (Only if enabled and environment supports background processes) ─────────
 # In Orchestrator mode (Render), we use FastAPI BackgroundTasks directly 
 # to save memory. Disable celery worker by default on Render / Spaces.
-if [[ "$DISABLE_CELERY" == "true" ]] || [[ "$ENV_MODE" == "orchestrator" ]] || [ -n "$RENDER" ] || [ -n "$SPACE_ID" ]; then
+if [[ "$DISABLE_CELERY" == "true" ]] || [[ "$ENV_MODE" == "orchestrator" ]] || [[ -n "$RENDER" ]] || [[ -n "$SPACE_ID" ]]; then
     echo "⭕ Celery worker and Beat are DISABLED/Skipped (Orchestrator Mode or Cloud Environment detected)."
     echo "Use external cron services to call /api/admin/system/expire-interviews endpoint for expiration."
 else
@@ -64,7 +64,7 @@ fi
 
 # ── Start FastAPI ─────────────────────────────────────────────────────────────
 echo "Starting FastAPI application (ENV: ${ENV:-production}, MODE: ${ENV_MODE:-Standard})..."
-if [ "${ENV}" = "development" ]; then
+if [[ "${ENV}" == "development" ]]; then
     echo "Running in development mode with live reload!"
     exec uvicorn app.server:app --host 0.0.0.0 --port "${PORT:-7860}" --reload
 else

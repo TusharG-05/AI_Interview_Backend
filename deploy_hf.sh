@@ -2,11 +2,11 @@
 
 # Configuration
 # Load from .env if it exists
-if [ -f .env ]; then
+if [[ -f .env ]]; then
     export $(grep -v '^#' .env | xargs)
 fi
 
-if [ -z "$HF_TOKEN" ]; then
+if [[ -z "$HF_TOKEN" ]]; then
     echo "❌ Error: HF_TOKEN is not set in your .env file."
     echo "Please add HF_TOKEN=\"your_token\" to your .env file."
     exit 1

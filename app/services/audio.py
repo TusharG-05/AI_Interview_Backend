@@ -196,18 +196,21 @@ class AudioService:
         if audio_path.startswith(("http://", "https://")):
             import tempfile
             import requests
-            try:
+            def _download_audio():
+                resp = requests.get(audio_path, timeout=10)
+                resp.raise_for_status()
                 # Use a specific extension based on URL if possible, otherwise .wav
                 ext = ".wav"
                 if ".mp3" in audio_path.lower(): ext = ".mp3"
                 elif ".webm" in audio_path.lower(): ext = ".webm"
                 
-                temp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-                response = requests.get(audio_path, timeout=10)
-                response.raise_for_status()
-                temp.write(response.content)
-                temp.close()
-                return temp.name, True
+                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp:
+                    temp.write(resp.content)
+                    return temp.name
+
+            try:
+                temp_name = await asyncio.to_thread(_download_audio)
+                return temp_name, True
             except Exception as e:
                 logger.error(f"Failed to download audio from {audio_path}: {e}")
                 return "", False
@@ -261,8 +264,10 @@ class AudioService:
                 if modal_cls:
                     try:
                         logger.info(f"Using Modal for STT: {local_path}")
-                        with open(local_path, "rb") as f:
-                            audio_bytes = f.read()
+                        def _read_audio():
+                            with open(local_path, "rb") as f:
+                                return f.read()
+                        audio_bytes = await asyncio.to_thread(_read_audio)
                         
                         logger.info(f"Modal STT Request (Async): {len(audio_bytes)} bytes")
                         result = await self._call_modal_stt(modal_cls, audio_bytes)

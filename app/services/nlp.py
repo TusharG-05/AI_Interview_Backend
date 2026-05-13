@@ -49,9 +49,11 @@ class NLPService:
                     return ""
                 
                 ext = os.path.splitext(resume_path.split('?')[0])[1] or ".pdf"
-                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                    tmp.write(content)
-                    temp_file_path = tmp.name
+                def _write_temp(content, suffix):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                        tmp.write(content)
+                        return tmp.name
+                temp_file_path = await asyncio.to_thread(_write_temp, content, ext)
             else:
                 # Local path - ensure it's a valid file and use absolute path for security
                 if not resume_path or not os.path.isfile(resume_path):
