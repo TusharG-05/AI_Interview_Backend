@@ -158,15 +158,14 @@ async def upload_selfie(
             logger.info(f"Updated status for interview {interview_id} to SELFIE_UPLOADED via candidate API")
 
     
-        # 3. Generate Dual Embeddings (Hybrid Strategy)
+    # 3. Generate Dual Embeddings (Hybrid Strategy)
     try:
         from ..services.face import get_modal_embedding
         from ..core.config import USE_MODAL
         import json
         import tempfile
         import os
-        
-        # 0. Check if we should skip local processing
+        import asyncio
 
         embeddings_map = {}
         
@@ -182,41 +181,28 @@ async def upload_selfie(
                         embeddings_map["ArcFace"] = result["embedding"]
                         logger.info("ArcFace embedding generated via Modal")
             except Exception as e:
-                logger.warning(f"Modal ArcFace enrollment failed: {e}")
+                logger.warning(f"Modal embedding generation failed: {e}")
+        
+        # Helper for local DeepFace processing (Replaced with shared service)
+        from ..services.face import get_face_embeddings_async
 
         # Fallback to local ArcFace if Modal failed/disabled (Skip in Orchestrator)
         if "ArcFace" not in embeddings_map and not IS_ORCHESTRATOR:
-            from deepface import DeepFace
             try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(image_bytes)
-                    tmp_path = tmp.name
-                try:
-                    arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                    if arc_objs:
-                        embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-                        logger.info("ArcFace embedding generated locally")
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
+                arc_embedding = await get_face_embeddings_async(image_bytes, "ArcFace")
+                if arc_embedding:
+                    embeddings_map["ArcFace"] = arc_embedding
+                    logger.info("ArcFace embedding generated locally via shared thread utility")
             except Exception as e:
                 logger.warning(f"Local ArcFace fallback failed: {e}")
 
         # 2. Generate SFace (Always local as lightweight backup, skip in Orchestrator)
         if not IS_ORCHESTRATOR:
             try:
-                from deepface import DeepFace
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                    tmp.write(image_bytes)
-                    tmp_path = tmp.name
-                try:
-                    sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                    if sface_objs:
-                        embeddings_map["SFace"] = sface_objs[0]["embedding"]
-                        logger.info("SFace embedding generated locally")
-                finally:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
+                sface_embedding = await get_face_embeddings_async(image_bytes, "SFace")
+                if sface_embedding:
+                    embeddings_map["SFace"] = sface_embedding
+                    logger.info("SFace embedding generated locally via shared thread utility")
             except Exception as e:
                 logger.warning(f"SFace embedding failed: {e}")
 
@@ -284,8 +270,10 @@ async def get_profile_image(
 
     # 3. Try Disk Fallback
     if user.profile_image and os.path.exists(user.profile_image):
+        from ..utils.safe_path import validate_safe_path
+        safe_path = validate_safe_path(user.profile_image)
         return FileResponse(
-            user.profile_image,
+            safe_path,
             media_type="image/jpeg",
             headers={"Content-Disposition": "inline"}
         )

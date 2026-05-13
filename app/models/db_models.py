@@ -1,5 +1,5 @@
 from typing import Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlmodel import Field, SQLModel, Relationship, Column, ForeignKey, Integer
 from enum import Enum
 import uuid
@@ -77,7 +77,7 @@ class Team(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(unique=True, index=True)  # Globally unique
     description: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Relationships
     users: List["User"] = Relationship(
@@ -93,7 +93,7 @@ class QuestionPaper(SQLModel, table=True):
     admin_user: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
     question_count: int = Field(default=0)
     total_marks: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     admin: Optional[User] = Relationship(back_populates="question_papers")
     questions: List["Questions"] = Relationship(
         back_populates="paper",
@@ -136,7 +136,7 @@ class CodingQuestionPaper(SQLModel, table=True):
     admin_user: Optional[int] = Field(default=None, foreign_key="user.id")  # Nullable to preserve papers when admin deleted
     question_count: int = Field(default=0)
     total_marks: int = Field(default=0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Relationships
     admin: Optional["User"] = Relationship(
@@ -214,7 +214,7 @@ class InterviewSession(SQLModel, table=True):
     # Candidate Status Tracking
     current_status: str = Field(default="")
     current_question_index: int = Field(default=0)
-    last_activity: datetime = Field(default_factory=datetime.utcnow)
+    last_activity: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Warning System
     warning_count: int = Field(default=0)
@@ -276,7 +276,7 @@ class ProctoringEvent(SQLModel, table=True):
     )
     event_type: str 
     details: str = Field(default="")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Severity and Warning Tracking
     severity: str = Field(default="info")  # Options: "info", "warning", "critical"
@@ -291,7 +291,7 @@ class StatusTimeline(SQLModel, table=True):
         sa_column=Column(Integer, ForeignKey("interviewsession.id", ondelete="CASCADE"))
     )
     status: CandidateStatus
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     context_data: str = Field(default="{}")  # Not null; default empty JSON
 
     session: InterviewSession = Relationship(back_populates="status_timeline")
@@ -305,7 +305,7 @@ class QuestionAttempt(SQLModel, table=True):
     question_id: Optional[int] = Field(default=None, foreign_key="questions.id")
     coding_question_id: Optional[int] = Field(default=None, foreign_key="codingquestions.id")
     question_type: str = Field(default="theory") # "theory" or "coding"
-    start_time: datetime = Field(default_factory=datetime.utcnow)
+    start_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     duration_seconds: int = Field(default=300)
     status: str = Field(default="active")  # active | submitted | expired
     is_completed: bool = Field(default=False)
@@ -321,7 +321,7 @@ class InterviewResult(SQLModel, table=True):
     )
     result_status: str = Field(default="PENDING", title="Status: PENDING, PASS, or FAIL")
     total_score: float = Field(default=0.0)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     session: "InterviewSession" = Relationship(back_populates="result")
     answers: List["Answers"] = Relationship(
@@ -351,7 +351,7 @@ class Answers(SQLModel, table=True):
     audio_path: str = Field(default="")     # Only for audio-type answers
     transcribed_text: str = Field(default="")  # Filled after STT
 
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Relationships
     interview_result: InterviewResult = Relationship(back_populates="answers")
@@ -377,7 +377,7 @@ class CodingAnswers(SQLModel, table=True):
     audio_path: str = Field(default="")
     transcribed_text: str = Field(default="")
 
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Relationships
     interview_result: InterviewResult = Relationship(back_populates="coding_answers")

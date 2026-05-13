@@ -56,8 +56,9 @@ class WebSocketManager:
             # Lazy import to avoid circular dependency
             from .status_manager import get_enriched_admin_data
             
-            # Create enriched payload
-            enriched_data = get_enriched_admin_data(interview_id)
+            import asyncio
+            # Create enriched payload (Offload to thread as it hits DB synchronously)
+            enriched_data = await asyncio.to_thread(get_enriched_admin_data, interview_id)
 
             payload = {
                 "event_type": "candidate_logged_in",
@@ -84,8 +85,9 @@ class WebSocketManager:
             # Lazy import to avoid circular dependency
             from .status_manager import get_enriched_admin_data
             
-            # Create enriched payload
-            enriched_data = get_enriched_admin_data(interview_id)
+            import asyncio
+            # Create enriched payload (Offload to thread as it hits DB synchronously)
+            enriched_data = await asyncio.to_thread(get_enriched_admin_data, interview_id)
 
             payload = {
                 "event_type": event_type,

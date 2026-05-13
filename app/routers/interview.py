@@ -1115,28 +1115,18 @@ async def upload_selfie_session(
     # 4. Check for stored embeddings (Auto-enroll if missing)
     if not candidate.face_embedding:
         _logger.info(f"Auto-enrolling candidate {candidate_id} since no reference embedding found.")
-        # Save to temp for DeepFace
-        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
-            tmp.write(image_bytes)
-            tmp_path = tmp.name
-        
+        from ..services.face import get_face_embeddings_async
         try:
             embeddings_map = {}
             # SFace (Priority)
-            try:
-                sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                if sface_objs:
-                    embeddings_map["SFace"] = sface_objs[0]["embedding"]
-            except Exception as e:
-                _logger.warning(f"SFace enrollment failed: {e}")
+            sface_emb = await get_face_embeddings_async(image_bytes, "SFace")
+            if sface_emb:
+                embeddings_map["SFace"] = sface_emb
 
             # ArcFace
-            try:
-                arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                if arc_objs:
-                    embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-            except Exception as e:
-                _logger.warning(f"ArcFace enrollment failed: {e}")
+            arc_emb = await get_face_embeddings_async(image_bytes, "ArcFace")
+            if arc_emb:
+                embeddings_map["ArcFace"] = arc_emb
 
             if not embeddings_map:
                 raise HTTPException(status_code=400, detail="Failed to generate face embeddings for enrollment. Please ensure a clear face is visible.")
@@ -1144,7 +1134,6 @@ async def upload_selfie_session(
             candidate.face_embedding = json.dumps(embeddings_map)
             # Use original filename or dummy for profile_image if needed
             candidate.profile_image = f"enrolled_{candidate.id}.jpg"
-            session_db.add(candidate)
             session_db.commit()
             
             return ApiResponse(
@@ -1152,21 +1141,19 @@ async def upload_selfie_session(
                 data={"verified": True, "score": 1.0, "message": "Face enrolled successfully."},
                 message="Face enrolled as reference."
             )
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
+        except Exception as e:
+            _logger.error(f"Auto-enrollment failed: {e}")
+            raise HTTPException(status_code=500, detail="Failed to enroll face.")
     
-    # 5. Generate embeddings from uploaded selfie
     try:
         from ..services.face import get_modal_embedding
-        from ..core.config import USE_MODAL
+        from ..core.config import USE_MODAL, IS_ORCHESTRATOR
         
         arcface_embedding = None
         sface_embedding = None
-        is_orchestrator = os.getenv("ENV_MODE") == "orchestrator"
         
         # 1. Try Modal (GPU) if enabled or if in Orchestrator mode (where local is disabled)
-        if USE_MODAL or is_orchestrator:
+        if USE_MODAL or IS_ORCHESTRATOR:
             try:
                 modal_cls = get_modal_embedding()
                 if modal_cls:
@@ -1180,47 +1167,22 @@ async def upload_selfie_session(
         
         # 2. Local Fallback (Skip in Orchestrator mode to avoid importing DeepFace)
         if arcface_embedding is None and not IS_ORCHESTRATOR:
-            from deepface import DeepFace
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                tmp.write(image_bytes)
-                tmp_path = tmp.name
+            from ..services.face import get_face_embeddings_async
             
-            try:
-                # Generate ArcFace if not already got from Modal
-                try:
-                    arc_objs = DeepFace.represent(
-                        img_path=tmp_path,
-                        model_name="ArcFace",
-                        detector_backend="mediapipe",
-                        enforce_detection=True
-                    )
-                    if arc_objs:
-                        arcface_embedding = arc_objs[0]["embedding"]
-                        _logger.info("ArcFace embedding generated locally")
-                except Exception as e:
-                    _logger.warning(f"Local ArcFace embedding failed: {e}")
-                
-                # Always generate SFace locally as lightweight backup
-                try:
-                    sface_objs = DeepFace.represent(
-                        img_path=tmp_path,
-                        model_name="SFace",
-                        detector_backend="mediapipe",
-                        enforce_detection=True
-                    )
-                    if sface_objs:
-                        sface_embedding = sface_objs[0]["embedding"]
-                        _logger.info("SFace embedding generated locally")
-                except Exception as e:
-                    _logger.warning(f"Local SFace embedding failed: {e}")
-            finally:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
+            # Generate ArcFace if not already got from Modal
+            arcface_embedding = await get_face_embeddings_async(image_bytes, "ArcFace")
+            if arcface_embedding:
+                _logger.info("ArcFace embedding generated locally via async utility")
+            
+            # Always generate SFace locally as lightweight backup
+            sface_embedding = await get_face_embeddings_async(image_bytes, "SFace")
+            if sface_embedding:
+                _logger.info("SFace embedding generated locally via async utility")
         
         # Check if any embeddings were generated
         if arcface_embedding is None and sface_embedding is None:
             detail_msg = "Failed to generate face embeddings."
-            if is_orchestrator and not USE_MODAL:
+            if IS_ORCHESTRATOR and not USE_MODAL:
                 detail_msg += " (Note: Orchestrator mode requires USE_MODAL=true for face recognition)"
             else:
                 detail_msg += " Please ensure a clear face is visible in the image."
@@ -1722,7 +1684,7 @@ async def submit_answer_audio(
     enforce_interview_duration(session_db, session_obj)
     
     content = await audio.read()
-    cloudinary_url = get_audio_service().upload_audio_blob(content, folder="interview_responses")
+    cloudinary_url = await get_audio_service().upload_audio_blob(content, folder="interview_responses")
     
     if not cloudinary_url:
         logger.error(f"Failed to upload response audio for session {interview_id}")

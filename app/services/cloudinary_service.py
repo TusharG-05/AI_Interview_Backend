@@ -12,7 +12,12 @@ logger = logging.getLogger(__name__)
 # cloudinary.config() is not required if CLOUDINARY_URL is set.
 
 class CloudinaryService:
-    def upload_image(self, file_content: bytes, folder: str = "interview_selfies") -> str:
+    async def upload_image(self, file_content: bytes, folder: str = "interview_selfies") -> str:
+        """Async wrapper for image upload."""
+        import asyncio
+        return await asyncio.to_thread(self._upload_image_sync, file_content, folder)
+
+    def _upload_image_sync(self, file_content: bytes, folder: str = "interview_selfies") -> str:
         """
         Uploads image content to Cloudinary and returns the secure URL.
         """
@@ -27,7 +32,12 @@ class CloudinaryService:
             logger.error(f"Cloudinary upload failed: {e}")
             raise e
 
-    def upload_resume(self, file_content: Union[bytes, BinaryIO], folder: str = "resumes") -> str:
+    async def upload_resume(self, file_content: Union[bytes, BinaryIO], folder: str = "resumes") -> str:
+        """Async wrapper for resume upload."""
+        import asyncio
+        return await asyncio.to_thread(self._upload_resume_sync, file_content, folder)
+
+    def _upload_resume_sync(self, file_content: Union[bytes, BinaryIO], folder: str = "resumes") -> str:
         """
         Uploads resume (PDF) to Cloudinary as a 'raw' resource and returns the secure URL.
         """
@@ -70,7 +80,12 @@ class CloudinaryService:
             # Raise the exception so the API endpoint can catch it and return a 500 error
             raise e
 
-    def upload_audio(self, file_content: Union[bytes, BinaryIO], folder: str = "interview_audios") -> str:
+    async def upload_audio(self, file_content: Union[bytes, BinaryIO], folder: str = "interview_audios") -> str:
+        """Async wrapper for audio upload."""
+        import asyncio
+        return await asyncio.to_thread(self._upload_audio_sync, file_content, folder)
+
+    def _upload_audio_sync(self, file_content: Union[bytes, BinaryIO], folder: str = "interview_audios") -> str:
         """
         Uploads audio content to Cloudinary and returns the secure URL.
         Uses resource_type='video' as Cloudinary treats audio as video without a visual track.

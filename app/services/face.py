@@ -31,6 +31,37 @@ def get_modal_embedding():
     return _modal_get_embedding
 
 
+async def get_face_embeddings_async(image_bytes: bytes, model_name: str = "ArcFace") -> Optional[List[float]]:
+    """
+    Asynchronously generate face embeddings using DeepFace in a separate thread.
+    Prevents event loop blocking during heavy CPU/ML operations.
+    """
+    import asyncio
+    import tempfile
+    import os
+    
+    def _sync_repr(img_bytes, m_name):
+        from deepface import DeepFace
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                tmp.write(img_bytes)
+                tmp_path = tmp.name
+            
+            # Note: We use enforce_detection=False to avoid 400 errors if face is slightly obscured
+            objs = DeepFace.represent(img_path=tmp_path, model_name=m_name, enforce_detection=False)
+            return objs[0]["embedding"] if objs else None
+        except Exception as e:
+            logger.warning(f"Local {m_name} representation failed in thread: {e}")
+            return None
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try: os.remove(tmp_path)
+                except: pass
+    
+    return await asyncio.to_thread(_sync_repr, image_bytes, model_name)
+
+
 class MediaPipeDetector:
     """Handles face detection using MediaPipe."""
     def __init__(self, model_path='app/assets/face_landmarker.task', num_faces=4, min_confidence=0.5):

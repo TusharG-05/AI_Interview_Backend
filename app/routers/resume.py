@@ -83,8 +83,11 @@ async def get_resume(
     if not os.path.exists(user.resume_path):
         raise HTTPException(status_code=404, detail="Resume file not found")
     
+    from ..utils.safe_path import validate_safe_path
+    safe_path = validate_safe_path(user.resume_path)
+    
     return FileResponse(
-        path=user.resume_path,
+        path=safe_path,
         filename=f"resume_{target_user_id}.pdf",
         media_type="application/pdf"
     )

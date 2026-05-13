@@ -115,7 +115,7 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
         
         # Broadcast to admin dashboard (include enriched data)
         # We do this first to get the most recent warning_count if needed
-        enriched_data = get_enriched_admin_data(interview_id)
+        enriched_data = await asyncio.to_thread(get_enriched_admin_data, interview_id)
         
         # Extract counts from enriched data for the candidate payload
         warning_count = enriched_data.get("proctoring_events", {}).get("warning_count", 0)
@@ -182,7 +182,7 @@ async def _broadcast_interview_suspended_event(interview_id: int, violation_type
         from ..schemas.websocket.events import AdminDashboardEvent
         
         # Create suspension event payload and include enriched data
-        enriched_data = get_enriched_admin_data(interview_id)
+        enriched_data = await asyncio.to_thread(get_enriched_admin_data, interview_id)
 
         suspension_payload = {
             "event_type": "interview_suspended",
@@ -221,7 +221,7 @@ async def _broadcast_interview_started_event(interview_id: int):
         from ..schemas.websocket.events import AdminDashboardEvent
         
         # Create enriched payload
-        enriched_data = get_enriched_admin_data(interview_id)
+        enriched_data = await asyncio.to_thread(get_enriched_admin_data, interview_id)
 
         payload = {
             "event_type": "interview_started",
@@ -253,7 +253,7 @@ async def _broadcast_interview_completed_event(interview_id: int, result_status:
         from ..schemas.websocket.events import AdminDashboardEvent
         
         # Create enriched payload
-        enriched_data = get_enriched_admin_data(interview_id)
+        enriched_data = await asyncio.to_thread(get_enriched_admin_data, interview_id)
 
         payload = {
             "event_type": "interview_completed",
@@ -286,7 +286,7 @@ async def _broadcast_interview_expired_event(interview_id: int):
         from ..schemas.websocket.events import AdminDashboardEvent
         
         # Create enriched payload
-        enriched_data = get_enriched_admin_data(interview_id)
+        enriched_data = await asyncio.to_thread(get_enriched_admin_data, interview_id)
 
         payload = {
             "event_type": "interview_expired",

@@ -4,7 +4,8 @@ import json
 
 async def test_admin_ws():
     """Test admin WebSocket connection"""
-    token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkB0ZXN0LmNvbSIsImV4cCI6MTc3ODA2NzM5N30.d3ZiMDgMB4hf3ttm2j5cnLbsBRLlfLTXYLIDfgo-0CE"
+    import os
+    token = os.getenv("ADMIN_TOKEN", "REPLACE_WITH_VALID_TOKEN")
     url = f"ws://127.0.0.1:8000/api/dashboard/ws?token={token}"
     
     print(f"🔗 Connecting to: {url}")

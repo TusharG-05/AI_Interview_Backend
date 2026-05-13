@@ -338,8 +338,12 @@ class AudioService:
             
             # Upload to Cloudinary
             try:
-                with open(temp_path, "rb") as f:
-                    cloudinary_url = self.cloudinary.upload_audio(f, folder=folder)
+                def _read_temp():
+                    with open(temp_path, "rb") as f:
+                        return f.read()
+                
+                audio_bytes = await asyncio.to_thread(_read_temp)
+                cloudinary_url = await self.cloudinary.upload_audio(audio_bytes, folder=folder)
                 logger.info(f"TTS generated and uploaded: {cloudinary_url}")
                 return cloudinary_url
             except Exception as e:
@@ -353,7 +357,7 @@ class AudioService:
                 failover_path = os.path.join(failover_dir, failover_filename)
                 
                 import shutil
-                shutil.copy(temp_path, failover_path)
+                await asyncio.to_thread(shutil.copy, temp_path, failover_path)
                 logger.warning(f"CRITICAL: TTS saved locally at {failover_path} (EPHEMERAL)")
                 return failover_path
                 
@@ -362,7 +366,8 @@ class AudioService:
             return None
         finally:
             if temp_path and os.path.exists(temp_path):
-                try: os.remove(temp_path)
+                try: 
+                    await asyncio.to_thread(os.remove, temp_path)
                 except: pass
 
     async def text_to_speech_turbo(self, text: str, folder: str = "interview_questions") -> Tuple[Optional[str], Optional[str]]:
@@ -384,15 +389,18 @@ class AudioService:
             await communicate.save(temp_path)
             
             # Read bytes for immediate Base64 response
-            with open(temp_path, "rb") as f:
-                audio_bytes = f.read()
-                base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
+            def _read_file():
+                with open(temp_path, "rb") as f:
+                    return f.read()
+            
+            audio_bytes = await asyncio.to_thread(_read_file)
+            base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
             
             logger.info(f"TTS generated Turbo (Base64 length: {len(base64_audio)})")
 
             # Perform Cloudinary upload (We return the URL too, but the UI can ignore it if it uses the bytes)
             try:
-                cloudinary_url = self.cloudinary.upload_audio(audio_bytes, folder=folder)
+                cloudinary_url = await self.cloudinary.upload_audio(audio_bytes, folder=folder)
                 return base64_audio, cloudinary_url
             except Exception as e:
                 logger.error(f"TTS Cloudinary Error (Turbo): {e}")
@@ -403,7 +411,8 @@ class AudioService:
             return None, None
         finally:
             if temp_path and os.path.exists(temp_path):
-                try: os.remove(temp_path)
+                try: 
+                    await asyncio.to_thread(os.remove, temp_path)
                 except: pass
 
     async def text_to_speech_bytes(self, text: str) -> Optional[bytes]:
@@ -422,20 +431,25 @@ class AudioService:
             communicate = edge_tts.Communicate(text, self.female_voice)
             await communicate.save(temp_path)
             
-            with open(temp_path, "rb") as f:
-                return f.read()
+            def _read_file():
+                with open(temp_path, "rb") as f:
+                    return f.read()
+            
+            return await asyncio.to_thread(_read_file)
                 
         except Exception as e:
             logger.error(f"TTS Bytes Generation Error: {e}")
             return None
         finally:
             if temp_path and os.path.exists(temp_path):
-                try: os.remove(temp_path)
+                try: 
+                    await asyncio.to_thread(os.remove, temp_path)
                 except: pass
 
-    def upload_audio_blob(self, blob: bytes, folder: str = "interview_responses") -> Optional[str]:
+    async def upload_audio_blob(self, blob: bytes, folder: str = "interview_responses") -> Optional[str]:
         """Uploads an audio blob directly to Cloudinary and returns the URL."""
         import tempfile
+        import asyncio
         temp_mp3 = None
         
         # Validate blob is not empty
@@ -444,14 +458,17 @@ class AudioService:
             return None
             
         try:
-            fd, temp_mp3 = tempfile.mkstemp(suffix=".mp3")
-            with os.fdopen(fd, 'wb') as f:
-                f.write(blob)
+            def _write_temp():
+                fd, path = tempfile.mkstemp(suffix=".mp3")
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(blob)
+                return path
+
+            temp_mp3 = await asyncio.to_thread(_write_temp)
             
             # Upload to Cloudinary
             try:
-                with open(temp_mp3, 'rb') as f:
-                    cloudinary_url = self.cloudinary.upload_audio(f, folder=folder)
+                cloudinary_url = await self.cloudinary.upload_audio(blob, folder=folder)
                 if cloudinary_url:
                     return cloudinary_url
             except Exception as e:
@@ -461,8 +478,9 @@ class AudioService:
             failover_dir = "app/assets/audio/failover"
             os.makedirs(failover_dir, exist_ok=True)
             failover_path = os.path.join(failover_dir, os.path.basename(temp_mp3))
+            
             import shutil
-            shutil.copy(temp_mp3, failover_path)
+            await asyncio.to_thread(shutil.copy, temp_mp3, failover_path)
             logger.warning(f"CRITICAL: Stored audio blob locally at {failover_path} (EPHEMERAL)")
             return failover_path
         except Exception as e:
@@ -470,8 +488,18 @@ class AudioService:
             return None
         finally:
             if temp_mp3 and os.path.exists(temp_mp3):
-                try: os.remove(temp_mp3)
+                try: 
+                    await asyncio.to_thread(os.remove, temp_mp3)
                 except: pass
+
+    async def save_audio_blob_async(self, blob: bytes, output_path: str):
+        """Async version of save_audio_blob."""
+        def _write():
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            with open(output_path, "wb") as f:
+                f.write(blob)
+        await asyncio.to_thread(_write)
+        return output_path
 
     def save_audio_blob(self, blob, output_path):
         """DEPRECATED: Use upload_audio_blob instead. Still saves locally for legacy support in this call."""
@@ -480,12 +508,14 @@ class AudioService:
             f.write(blob)
         return output_path
 
-    def calculate_energy(self, audio_path):
-        """Calculates RMS energy of an audio file to detect silence."""
+    async def calculate_energy_async(self, audio_path: str) -> int:
+        """Calculates RMS energy of an audio file to detect silence (Async)."""
         try:
             from pydub import AudioSegment
-            audio = AudioSegment.from_file(audio_path)
-            return audio.rms
+            def _get_rms():
+                audio = AudioSegment.from_file(audio_path)
+                return audio.rms
+            return await asyncio.to_thread(_get_rms)
         except Exception as e:
             logger.error(f"Energy Check Error: {e}")
             return 0

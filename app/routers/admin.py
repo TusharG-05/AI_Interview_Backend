@@ -181,19 +181,24 @@ async def upload_questions_doc(
     """
     Upload a document (.pdf, .docx, .txt, .xlsx) to extract questions and add them to a paper.
     """
-    import uuid
     import os
-    # 1. Save file temporarily
-    file_id = str(uuid.uuid4())
-    ext = os.path.splitext(file.filename)[1]
-    temp_path = f"/tmp/{file_id}{ext}"
+    import tempfile
     
-    with open(temp_path, "wb") as f:
-        f.write(await file.read())
+    # 1. Validate extension and save file temporarily securely
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ['.pdf', '.docx', '.txt', '.xlsx']:
+        raise HTTPException(
+            status_code=400, 
+            detail="Unsupported file format. Please upload .pdf, .docx, .txt, or .xlsx"
+        )
+        
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(await file.read())
+        temp_path = tmp.name
     
     try:
         # 2. Extract questions
-        extracted_data = get_nlp_service().extract_qa_from_file(temp_path, questions_only=True)
+        extracted_data = await get_nlp_service().extract_qa_from_file(temp_path, questions_only=True)
 
         
         if not extracted_data:
@@ -238,7 +243,8 @@ async def upload_questions_doc(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         if os.path.exists(temp_path):
-            os.remove(temp_path)
+            import asyncio
+            await asyncio.to_thread(os.remove, temp_path)
 
 @router.get("/papers/{paper_id}", response_model=ApiResponse[GetPaperResponse])
 async def get_paper(
@@ -922,7 +928,7 @@ async def schedule_interview(
         max_questions=schedule_data.max_questions or 0,
         status=InterviewStatus.SCHEDULED,
         current_status=CandidateStatus.INVITED,
-        last_activity=datetime.utcnow(),
+        last_activity=datetime.now(timezone.utc),
         warning_count=0,
         max_warnings=3,
         is_suspended=False,
@@ -2106,9 +2112,12 @@ async def get_response_audio(
         
     if not os.path.exists(response.audio_path):
         raise HTTPException(status_code=404, detail="Audio file missing on server")
-        
+    
+    from ..utils.safe_path import validate_safe_path
+    safe_path = validate_safe_path(response.audio_path)
+    
     return FileResponse(
-        response.audio_path,
+        safe_path,
         media_type="audio/wav", # Adjust if needed, but wav is standard for our recording uploads
         content_disposition_type="inline"
     )
@@ -2137,9 +2146,12 @@ async def get_enrollment_audio(
 
     if not os.path.exists(interview_session.enrollment_audio_path):
         raise HTTPException(status_code=404, detail="Enrollment audio file missing on server")
+    
+    from ..utils.safe_path import validate_safe_path
+    safe_path = validate_safe_path(interview_session.enrollment_audio_path)
         
     return FileResponse(
-        interview_session.enrollment_audio_path,
+        safe_path,
         media_type="audio/wav",
         content_disposition_type="inline"
     )
@@ -2208,54 +2220,37 @@ async def create_user(
             
             # A. Generate Face Embeddings (Hybrid Strategy)
             if not IS_ORCHESTRATOR:
+                from ..services.face import get_face_embeddings_async
+                import json
+                
                 try:
-                    from deepface import DeepFace
-                    import json
-                    import tempfile
-                    import os
-
                     embeddings_map = {}
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-                        tmp.write(image_bytes)
-                        tmp_path = tmp.name
                     
-                    try:
-                        # ArcFace
-                        try:
-                            arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
-                            if arc_objs:
-                                embeddings_map["ArcFace"] = arc_objs[0]["embedding"]
-                        except Exception as e:
-                            logger.warning(f"ArcFace failed during user creation: {e}")
-
-                        # SFace
-                        try:
-                            sface_objs = DeepFace.represent(img_path=tmp_path, model_name="SFace", enforce_detection=False)
-                            if sface_objs:
-                                embeddings_map["SFace"] = sface_objs[0]["embedding"]
-                        except Exception as e:
-                            logger.warning(f"SFace failed during user creation: {e}")
-
-                        if embeddings_map:
-                            new_user.face_embedding = json.dumps(embeddings_map)
-                    finally:
-                        if os.path.exists(tmp_path):
-                            os.remove(tmp_path)
+                    # Generate ArcFace
+                    arc_embedding = await get_face_embeddings_async(image_bytes, "ArcFace")
+                    if arc_embedding:
+                        embeddings_map["ArcFace"] = arc_embedding
+                        
+                    # Generate SFace
+                    sface_embedding = await get_face_embeddings_async(image_bytes, "SFace")
+                    if sface_embedding:
+                        embeddings_map["SFace"] = sface_embedding
+                        
+                    if embeddings_map:
+                        new_user.face_embedding = json.dumps(embeddings_map)
+                        logger.info(f"Generated face embeddings for new user: {list(embeddings_map.keys())}")
+                        
                 except Exception as e:
-                    logger.error(f"Embedding generation failed: {e}")
+                    logger.error(f"Face embedding generation failed during user creation: {e}")
 
             # B. Upload to Cloudinary
             try:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(
-                        get_cloudinary_service().upload_image, 
-                        image_bytes, 
-                        folder="profile_pictures" 
-                    )
-                    cloudinary_url = future.result(timeout=15)
-                    if cloudinary_url:
-                        new_user.profile_image = cloudinary_url
+                cloudinary_url = await get_cloudinary_service().upload_image(
+                    image_bytes, 
+                    folder="profile_pictures" 
+                )
+                if cloudinary_url:
+                    new_user.profile_image = cloudinary_url
             except Exception as e:
                 logger.error(f"Cloudinary upload failed: {e}")
 
@@ -2268,7 +2263,7 @@ async def create_user(
         try:
             await resume.seek(0)
             # Upload to Cloudinary
-            resume_url = get_cloudinary_service().upload_resume(resume.file, folder="resumes")
+            resume_url = await get_cloudinary_service().upload_resume(resume.file, folder="resumes")
             if resume_url:
                 new_user.resume_path = resume_url
                 updates_made = True
@@ -2465,7 +2460,7 @@ async def update_user(
         
         try:
             await resume.seek(0)
-            cloudinary_url = get_cloudinary_service().upload_resume(resume.file, folder="resumes")
+            cloudinary_url = await get_cloudinary_service().upload_resume(resume.file, folder="resumes")
             print(cloudinary_url)
 
             if cloudinary_url:

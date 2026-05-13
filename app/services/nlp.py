@@ -11,7 +11,7 @@ class NLPService:
         logger.info("Initializing NLPService (Lazy Loading with LLM)...")
         self.model_name = model_name
 
-    def calculate_similarity(self, text1, text2):
+    async def calculate_similarity(self, text1, text2):
         """
         Calculates similarity using LLM evaluation.
         Returns a score between 0 and 1.
@@ -21,41 +21,50 @@ class NLPService:
         
         from .interview import evaluate_answer_content
         # Note: evaluate_answer_content returns a dict with "score"
-        result = evaluate_answer_content(question=text2, answer=text1)
+        import asyncio
+        result = await asyncio.to_thread(evaluate_answer_content, question=text2, answer=text1)
         return float(result.get("score", 0.0)) / 10.0 # Normalize 0-10 to 0-1
 
-    def get_interview_prompt_from_resume(self, resume_path: str) -> str:
+    async def get_interview_prompt_from_resume(self, resume_path: str) -> str:
         """
         Extracts text from a resume file and generates a structured interview prompt.
         """
         import requests
         import tempfile
+        import asyncio
         
         temp_file_path = None
         try:
             # 1. Handle Cloudinary or Local Path
             if resume_path.startswith(('http://', 'https://')):
-                response = requests.get(resume_path, timeout=30)
-                if response.status_code != 200:
-                    logger.error(f"Failed to download resume from {resume_path}")
+                def _download():
+                    response = requests.get(resume_path, timeout=30)
+                    response.raise_for_status()
+                    return response.content
+
+                try:
+                    content = await asyncio.to_thread(_download)
+                except Exception as e:
+                    logger.error(f"Failed to download resume from {resume_path}: {e}")
                     return ""
                 
                 ext = os.path.splitext(resume_path.split('?')[0])[1] or ".pdf"
                 with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                    tmp.write(response.content)
+                    tmp.write(content)
                     temp_file_path = tmp.name
             else:
-                if not os.path.exists(resume_path):
-                    logger.error(f"Resume file not found at {resume_path}")
+                # Local path - ensure it's a valid file and use absolute path for security
+                if not resume_path or not os.path.isfile(resume_path):
+                    logger.error(f"Resume file not found or invalid: {resume_path}")
                     return ""
-                temp_file_path = resume_path
+                temp_file_path = os.path.abspath(resume_path)
 
             # 2. Extract and AI-Structure the Resume
-            resume_text = self.extract_text_from_file(temp_file_path)
+            resume_text = await self.extract_text_from_file(temp_file_path)
             if not resume_text:
                 return ""
 
-            structured_resume = self.arrange_resume_with_ai(resume_text)
+            structured_resume = await self.arrange_resume_with_ai(resume_text)
 
             # 3. Format Structured Prompt
             prompt = (
@@ -76,39 +85,57 @@ class NLPService:
                 try: os.remove(temp_file_path)
                 except: pass
 
-    def extract_text_from_file(self, file_path):
+    async def extract_text_from_file(self, file_path):
         """Extracts raw text from .txt, .pdf, or .docx files."""
-        ext = os.path.splitext(file_path)[1].lower()
-        content = ""
-
+        import asyncio
+        from ..utils.safe_path import validate_safe_path
+        
+        # Security: Validate that the file path is within allowed directories
         try:
-            if ext == '.txt':
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-            elif ext == '.pdf':
-                import fitz  # PyMuPDF
-                doc = fitz.open(file_path)
-                content = "\n".join([page.get_text() for page in doc])
-                doc.close()
-            elif ext == '.docx':
-                from docx import Document
-                doc = Document(file_path)
-                content = "\n".join([para.text for para in doc.paragraphs])
-            else:
-                raise ValueError(f"Unsupported file format for text extraction: {ext}")
+            file_path = validate_safe_path(file_path)
         except Exception as e:
-            logger.error(f"Error reading file {file_path}: {e}")
+            logger.error(f"Path validation failed for {file_path}: {e}")
             return ""
+
+        if not os.path.isfile(file_path):
+            logger.error(f"File not found: {file_path}")
+            return ""
+            
+        def _extract():
+            ext = os.path.splitext(file_path)[1].lower()
+            content = ""
+            try:
+                if ext == '.txt':
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                elif ext == '.pdf':
+                    import fitz  # PyMuPDF
+                    doc = fitz.open(file_path)
+                    content = "\n".join([page.get_text() for page in doc])
+                    doc.close()
+                elif ext == '.docx':
+                    from docx import Document
+                    doc = Document(file_path)
+                    content = "\n".join([para.text for para in doc.paragraphs])
+                else:
+                    raise ValueError(f"Unsupported file format for text extraction: {ext}")
+                return content
+            except Exception as e:
+                logger.error(f"Error reading file {file_path}: {e}")
+                return ""
+
+        content = await asyncio.to_thread(_extract)
 
         # Clean text
         content = "".join(char for char in content if char.isprintable() or char in "\n\r\t")
         return content.strip()
 
-    def arrange_resume_with_ai(self, resume_text: str) -> str:
+    async def arrange_resume_with_ai(self, resume_text: str) -> str:
         """Uses AI to summarize and structure raw resume text for better prompt generation."""
         if not resume_text:
             return ""
 
+        import asyncio
         system_prompt = (
             "You are a Professional Resume Analyzer. Your task is to extract and structure "
             "raw resume text into a clean professional summary optimized for generating interview questions."
@@ -127,21 +154,22 @@ class NLPService:
 
         try:
             logger.info("Calling LLM to arrange resume text...")
-            structured_summary = call_llm(prompt, system_prompt=system_prompt)
+            structured_summary = await asyncio.to_thread(call_llm, prompt, system_prompt=system_prompt)
             return structured_summary or resume_text # Fallback to raw if AI fails
         except Exception as e:
             logger.error(f"Error arranging resume with AI: {e}")
             return resume_text
 
-    def extract_qa_from_file(self, file_path, questions_only=False):
+    async def extract_qa_from_file(self, file_path, questions_only=False):
         """Extracts Q&A pairs (or just questions) from .txt, .pdf, .docx, or .xlsx files."""
+        import asyncio
         ext = os.path.splitext(file_path)[1].lower()
         
         try:
             if ext in ['.xlsx', '.xls']:
-                return self._extract_from_excel(file_path)
+                return await self._extract_from_excel(file_path)
             
-            content = self.extract_text_from_file(file_path)
+            content = await self.extract_text_from_file(file_path)
             if not content:
                 return []
 
@@ -150,31 +178,35 @@ class NLPService:
             logger.debug(content[:500])
             logger.debug("---------------------------------------")
 
-            return self.parse_qa_pairs(content, questions_only=questions_only)
+            return await asyncio.to_thread(self.parse_qa_pairs, content, questions_only=questions_only)
         except Exception as e:
             logger.error(f"Error extracting QA from {file_path}: {e}")
             return []
 
-    def _extract_from_excel(self, file_path):
-        import pandas as pd
-        df = pd.read_excel(file_path)
-        
-        # Priority 1: Search for common column names
-        target_col = None
-        common_names = ['question', 'questions', 'q']
-        for col in df.columns:
-            if str(col).lower() in common_names:
-                target_col = col
-                break
-        
-        if target_col is not None:
-            questions = df[target_col].dropna().astype(str).tolist()
-        elif len(df.columns) >= 2:
-            questions = df.iloc[:, 1].dropna().astype(str).tolist()
-        else:
-            questions = df.iloc[:, 0].dropna().astype(str).tolist()
-        
-        return [{'question': q.strip()} for q in questions if q.strip()]
+    async def _extract_from_excel(self, file_path):
+        import asyncio
+        def _excel_read():
+            import pandas as pd
+            df = pd.read_excel(file_path)
+            
+            # Priority 1: Search for common column names
+            target_col = None
+            common_names = ['question', 'questions', 'q']
+            for col in df.columns:
+                if str(col).lower() in common_names:
+                    target_col = col
+                    break
+            
+            if target_col is not None:
+                questions = df[target_col].dropna().astype(str).tolist()
+            elif len(df.columns) >= 2:
+                questions = df.iloc[:, 1].dropna().astype(str).tolist()
+            else:
+                questions = df.iloc[:, 0].dropna().astype(str).tolist()
+            
+            return [{'question': q.strip()} for q in questions if q.strip()]
+
+        return await asyncio.to_thread(_excel_read)
 
     def parse_qa_pairs(self, text, questions_only=False):
         """
