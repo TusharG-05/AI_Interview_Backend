@@ -24,6 +24,8 @@ from ..models.db_models import (
     InterviewResult
 )
 import json
+import asyncio
+import threading
 from ..schemas.shared.user import serialize_user
 from ..core.logger import get_logger
 import asyncio
@@ -83,7 +85,9 @@ def get_enriched_admin_data(interview_id: int, session: Optional[Session] = None
                 "candidate_email": candidate.email
             },
             "proctoring_events": {
-                "tab_switch_count": interview_session.tab_switch_count
+                "tab_switch_count": interview_session.tab_switch_count,
+                "warning_count": interview_session.warning_count,
+                "max_warnings": interview_session.max_warnings
             },
             "dashboard_data": _get_metrics(session)
         }
@@ -100,17 +104,25 @@ def get_enriched_admin_data(interview_id: int, session: Optional[Session] = None
         if close_session:
             session.close()
 
-async def _broadcast_violation_event(interview_id: int, event_type: str, details: Optional[str] = None, tab_switch_count: Optional[int] = None):
+async def _broadcast_violation_event(interview_id: int, event_type: str, details: Optional[str] = None):
     """
     Broadcast a violation event to both candidate and admin dashboard WebSockets.
     
-    For candidates: Sends ViolationEvent immediately
+    For candidates: Sends ViolationEvent immediately with warning counts
     For admin: Sends ViolationEvent with metadata
     """
     try:
         from .websocket_manager import manager
         from ..schemas.websocket.events import ViolationEvent
         
+        # Broadcast to admin dashboard (include enriched data)
+        # We do this first to get the most recent warning_count if needed
+        enriched_data = get_enriched_admin_data(interview_id)
+        
+        # Extract counts from enriched data for the candidate payload
+        warning_count = enriched_data.get("proctoring_events", {}).get("warning_count", 0)
+        max_warnings = enriched_data.get("proctoring_events", {}).get("max_warnings", 3)
+
         # Map event_type to violation_type expected by ViolationEvent
         violation_type_map = {
             "tab_switch": "tab_switch",
@@ -121,12 +133,14 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
         
         violation_type = violation_type_map.get(event_type, event_type.lower())
         
-        # Create violation event
+        # Create violation event for candidate
         violation_event = ViolationEvent(
             violation_type=violation_type,
             interview_id=interview_id,
             timestamp=datetime.now(timezone.utc),
-            details=details
+            details=details,
+            warning_count=warning_count,
+            max_warnings=max_warnings
         )
         
         # Broadcast to candidate
@@ -134,9 +148,6 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
             interview_id,
             violation_event.model_dump(mode='json')
         )
-        
-        # Broadcast to admin dashboard (include enriched data)
-        enriched_data = get_enriched_admin_data(interview_id)
         
         admin_payload = {
             "event_type": "violation_detected",
@@ -300,16 +311,37 @@ async def _broadcast_interview_expired_event(interview_id: int):
         
     except Exception as e:
         logger.error(f"Failed to broadcast interview expired event: {e}")
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
 
+def set_main_loop(loop: asyncio.AbstractEventLoop):
+    global _main_loop
+    _main_loop = loop
+    logger.debug("Main event loop registered in StatusManager.")
 
 def _fire_async_broadcast(coro):
     """Fire and forget async broadcast (non-blocking)."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        global _main_loop
+        loop = None
+        
+        # 1. Try to get the running loop (works if called from main thread)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+            
+        # 2. Use the registered main loop (works if called from background threads)
+        if not loop:
+            loop = _main_loop
+            
+        if loop and loop.is_running():
             asyncio.run_coroutine_threadsafe(coro, loop)
         else:
-            asyncio.run(coro)
+            # Fallback for synchronous scripts or if loop is not yet running
+            try:
+                asyncio.run(coro)
+            except RuntimeError:
+                logger.debug("WS Broadcast: Could not find or run event loop, skipping broadcast.")
     except Exception as e:
         logger.error(f"Failed to fire async broadcast: {e}")
 
@@ -325,8 +357,8 @@ VIOLATION_SEVERITY = {
     "MULTIPLE FACES DETECTED": "warning",
     "NO FACE DETECTED": "warning",
     "tab_switch": "warning",
-    "SECURITY ALERT: UNAUTHORIZED PERSON": "critical",
-    "unauthorized_device": "critical",
+    "SECURITY ALERT: UNAUTHORIZED PERSON": "warning",
+    "unauthorized_device": "warning",
 }
 
 
@@ -406,6 +438,11 @@ def add_violation(
     Returns:
         The created ProctoringEvent
     """
+    # If the session is already suspended, skip all processing and broadcasting.
+    # We only process violations until the moment of suspension.
+    if interview_session.is_suspended:
+        return None
+
     # Determine severity
     severity = force_severity or VIOLATION_SEVERITY.get(event_type, "info")
     
@@ -491,8 +528,7 @@ def add_violation(
         _broadcast_violation_event(
             interview_session.id,
             event_type,
-            details,
-            tab_switch_count=interview_session.warning_count if event_type == "tab_switch" else None
+            details
         )
     )
     

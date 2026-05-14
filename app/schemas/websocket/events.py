@@ -26,10 +26,12 @@ class ViolationEvent(BaseModel):
     - no_face
     - wrong_candidate
     """
-    event_type: str = "violation"
+    event_type: str = "violation_detected"
     interview_id: int
     violation_type: str  # 'tab_switch', 'multiple_faces', 'no_face', 'wrong_candidate'
     details: Optional[str] = None
+    warning_count: Optional[int] = None
+    max_warnings: Optional[int] = None
     timestamp: datetime = None
 
     def __init__(self, **data):

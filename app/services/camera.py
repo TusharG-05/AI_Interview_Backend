@@ -42,6 +42,7 @@ class CameraService:
         self.session_results: dict[int, dict] = {}  # last detection details for debugging
         self.session_start_times: dict[int, float] = {} # {interview_id: timestamp}
         self.session_last_active: dict[int, float] = {} # {interview_id: timestamp}
+        self.session_last_violation_time: dict[int, float] = {} # {interview_id: last_persist_timestamp}
         
         from concurrent.futures import ThreadPoolExecutor
         self.executor = ThreadPoolExecutor(max_workers=5)
@@ -122,7 +123,10 @@ class CameraService:
             gaze_status = "No Gaze"
             
             if self.face_detector:
-                f_res = self.face_detector.process_frame(frame, interview_id)
+                # FACE RECOGNITION DISABLED: interview_id is no longer passed so the
+                # detector won't attempt identity matching against the enrolled candidate.
+                # To re-enable recognition, replace `None` with `interview_id` below.
+                f_res = self.face_detector.process_frame(frame, None)
                 if f_res: face_status = f_res
             
             if self.gaze_detector:
@@ -141,7 +145,9 @@ class CameraService:
             warning = ""
             if n_face > 1: warning = "MULTIPLE FACES DETECTED"
             elif n_face == 0: warning = "NO FACE DETECTED"
-            elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
+            # FACE RECOGNITION DISABLED: The unauthorized person check is commented out.
+            # To re-enable, uncomment the line below.
+            # elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
             elif "WARNING" in str(gaze_status): warning = str(gaze_status)
 
             # Update latest frame for MJPEG stream (Isolate by session)
@@ -156,11 +162,17 @@ class CameraService:
                     self.session_start_times[interview_id] = time.time()
                 self.session_last_active[interview_id] = time.time()
 
-            # --- PERSIST PROCTORING EVENT (With Grace Period) ---
+            # --- PERSIST PROCTORING EVENT (With Grace Period & Throttling) ---
             GRACE_PERIOD = 30 # Seconds
-            in_grace_period = (time.time() - self.session_start_times.get(interview_id, time.time())) < GRACE_PERIOD
+            VIOLATION_COOLDOWN = 5 # Seconds
             
-            if warning and not in_grace_period:
+            in_grace_period = (time.time() - self.session_start_times.get(interview_id, time.time())) < GRACE_PERIOD
+            last_v_time = self.session_last_violation_time.get(interview_id, 0)
+            cooldown_passed = (time.time() - last_v_time) > VIOLATION_COOLDOWN
+            
+            if warning and not in_grace_period and cooldown_passed:
+                # Update last violation time to throttle
+                self.session_last_violation_time[interview_id] = time.time()
                 def persist_violation(iid, warn, n_f, fnd, g_s):
                     from ..core.database import engine
                     from sqlmodel import Session
