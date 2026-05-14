@@ -55,6 +55,7 @@ opencv-python-headless==4.13.0.90
 numpy==2.3.5
 pillow==11.3.0
 pydub==0.25.1
+mediapipe==0.10.31
 
 # System Utils
 psutil==7.2.1

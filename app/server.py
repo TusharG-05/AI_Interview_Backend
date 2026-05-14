@@ -171,6 +171,14 @@ async def lifespan(app: FastAPI):
     
     logger.info("Stopping Application Resources...")
 
+    # Close all open WebRTC PeerConnections to release SRTP/ICE resources
+    try:
+        from .routers.video import close_all_peer_connections, WEBRTC_AVAILABLE
+        if WEBRTC_AVAILABLE:
+            await close_all_peer_connections()
+    except Exception as webrtc_err:
+        logger.warning(f"Lifespan: Error closing WebRTC connections: {webrtc_err}")
+
     from .core.database import engine
     if service is not None:
         service.stop()

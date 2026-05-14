@@ -319,12 +319,19 @@ class FaceService:
 
         # --- Avoid Multiprocessing in Orchestrator Mode (Render Free Tier) ---
         if IS_ORCHESTRATOR:
-            logger.info("FaceService: Orchestrator Mode enabled. Worker Process DISABLED to save memory.")
-            self.worker = None
+            logger.info("FaceService: Orchestrator Mode - initializing inline (in-thread) MediaPipe detector (no subprocess).")
+            self.worker = None  # No subprocess worker in orchestrator mode
             self.frame_queue = None
             self.result_queue = None
-            # Initialize an in-thread recognizer (lazy)
             self._lazy_recognizer = None
+            self._process_counter = 0
+            # Initialize inline detector for face counting (lightweight, no multiprocessing)
+            try:
+                self._inline_detector = MediaPipeDetector()
+                logger.info("FaceService: Inline MediaPipeDetector ready.")
+            except Exception as e:
+                self._inline_detector = None
+                logger.error(f"FaceService: Inline detector init failed: {e}")
             return
 
         self.frame_queue = multiprocessing.Queue(maxsize=10)
@@ -344,35 +351,37 @@ class FaceService:
         # 1. Update session encoding
         encoding = self.session_encodings.get(interview_id)
 
-        # --- ORCHESTRATOR PATH: In-thread (Modal only) ---
+        # --- ORCHESTRATOR PATH: Inline MediaPipe (no subprocess, memory-safe) ---
         if IS_ORCHESTRATOR:
-            # Throttle processing to save memory/cpu: Only process 1 in 10 frames
-            # In orchestrator mode, we primarily serve as a pass-through
-            # unless a Modal call is strictly needed.
-            # For now, we'll return the cached result to avoid blocking the main thread too long.
-            if not hasattr(self, "_process_counter"): self._process_counter = 0
+            if not hasattr(self, "_process_counter"):
+                self._process_counter = 0
             self._process_counter += 1
-            
-            if self._process_counter % 30 == 0: # Every ~30 frames (approx 3-5 seconds)
-                if self._lazy_recognizer is None:
-                    self._lazy_recognizer = FaceRecognizer(known_encoding=encoding)
-                else:
-                    self._lazy_recognizer.known_encoding = encoding
 
-                # Run detection & recognition in-thread (since it's mostly Modal await)
+            # Throttle: process every 5th frame to balance CPU and responsiveness
+            if self._process_counter % 5 == 0 and self._inline_detector is not None:
                 import cv2
                 from ..utils.image_processing import resize_with_aspect_ratio
-                img_small, _ = resize_with_aspect_ratio(frame_bgr, target_height=240)
-                # Note: No local detector in orchestrator mode, we just use a full-frame fake loc for now
-                # or we can just send the crop if we had a light detector.
-                # Since MediaPipe is removed from requirements-render, we skip local detection.
-                
-                # If Modal is enabled, recognizer.recognize will call it.
-                # If not, it returns False.
-                h, w = img_small.shape[:2]
-                matches = self._lazy_recognizer.recognize(img_small, [(0, w, h, 0)])
-                is_authorized = any(matches) if matches else False
-                self.session_results[interview_id] = (is_authorized, 1.0, 1 if matches else 0, [(0, w, h, 0)])
+                img_small, scale = resize_with_aspect_ratio(frame_bgr, target_height=360)
+                img_rgb = cv2.cvtColor(img_small, cv2.COLOR_BGR2RGB)
+                locs_scaled = self._inline_detector.detect(img_rgb)
+                # Scale bounding boxes back to original frame dimensions
+                final_locs = [
+                    (int(t / scale), int(r / scale), int(b / scale), int(l / scale))
+                    for (t, r, b, l) in locs_scaled
+                ]
+
+                # --- Face Recognition: Modal (ArcFace) → SFace fallback ---
+                # Only runs when a face is detected AND the session has an enrolled embedding.
+                is_authorized = False
+                if locs_scaled and encoding:
+                    if self._lazy_recognizer is None:
+                        self._lazy_recognizer = FaceRecognizer(known_encoding=encoding)
+                    else:
+                        self._lazy_recognizer.known_encoding = encoding
+                    matches = self._lazy_recognizer.recognize(img_rgb, locs_scaled)
+                    is_authorized = any(matches) if matches else False
+
+                self.session_results[interview_id] = (is_authorized, 1.0, len(final_locs), final_locs)
 
             return self.session_results.get(interview_id, (False, 1.0, 0, []))
 

@@ -186,12 +186,16 @@ class GazeDetector:
         logger.info("Initializing GazeDetector...")
         self.model_path = model_path
         
-        # --- Skip initialization in Orchestrator Mode (Render Free Tier) ---
+        # --- Run inline in Orchestrator Mode (no subprocess, memory-safe) ---
         if IS_ORCHESTRATOR:
-            logger.info("GazeDetector: Orchestrator Mode enabled. Worker Process DISABLED to save memory.")
+            logger.info("GazeDetector: Orchestrator Mode - using inline (in-thread) gaze analysis (no subprocess).")
             self.worker = None
             self.frame_queue = None
             self.result_queue = None
+            self._inline_landmarker = None  # Lazily initialized on first frame
+            self._suspicious_start_time = None
+            self._process_counter = 0
+            self._last_gaze_result = None
             return
 
         self.frame_queue = multiprocessing.Queue(maxsize=1)
@@ -206,9 +210,123 @@ class GazeDetector:
         self.worker.start()
         logger.info("Gaze Worker started.")
         
+    def _init_inline_landmarker(self):
+        """Lazily initialize MediaPipe FaceLandmarker for inline gaze processing."""
+        import os
+        import mediapipe as mp
+        from mediapipe.tasks import python
+        from mediapipe.tasks.python import vision
+
+        model_path = self.model_path
+        if not os.path.exists(model_path):
+            curr_dir = os.path.dirname(os.path.abspath(__file__))
+            for candidate in [
+                os.path.join(curr_dir, "..", "assets", "face_landmarker.task"),
+                os.path.join(os.getcwd(), "app", "assets", "face_landmarker.task"),
+                "/app/app/assets/face_landmarker.task",
+            ]:
+                if os.path.exists(candidate):
+                    model_path = os.path.abspath(candidate)
+                    break
+
+        if not os.path.exists(model_path):
+            logger.error(f"GazeDetector: Inline mode — model file not found at '{model_path}'.")
+            return
+
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            output_face_blendshapes=True,
+            output_facial_transformation_matrixes=True,
+            num_faces=1,
+            min_face_detection_confidence=0.25,
+            min_face_presence_confidence=0.25,
+            min_tracking_confidence=0.25,
+        )
+        self._inline_landmarker = vision.FaceLandmarker.create_from_options(options)
+        logger.info("GazeDetector: Inline FaceLandmarker initialized.")
+
+    def _process_gaze_inline(self, frame_bgr):
+        """Run gaze analysis inline (no subprocess). Returns a gaze status string."""
+        import cv2
+        import numpy as np
+        import mediapipe as mp
+
+        H_MIN, H_MAX = 0.44, 0.56
+        V_MIN, V_MAX = 0.48, 0.62
+        SUSPICION_THRESHOLD = 3.0
+
+        rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        results = self._inline_landmarker.detect(mp_image)
+
+        if not results.face_landmarks:
+            return "No Face"
+
+        face_landmarks = results.face_landmarks[0]
+        h, w, _ = rgb_frame.shape
+        mesh = [np.array([int(lm.x * w), int(lm.y * h)]) for lm in face_landmarks]
+
+        if len(mesh) <= 473:
+            return "Safe: Center"
+
+        def iris_ratio(p1, p2, iris):
+            total = np.linalg.norm(p2 - p1)
+            return 0.5 if total <= 1e-6 else np.linalg.norm(iris - p1) / total
+
+        avg_h = (iris_ratio(mesh[33], mesh[133], mesh[468]) + iris_ratio(mesh[362], mesh[263], mesh[473])) / 2
+        avg_v = (iris_ratio(mesh[159], mesh[145], mesh[468]) + iris_ratio(mesh[386], mesh[374], mesh[473])) / 2
+        face_h = np.linalg.norm(mesh[10] - mesh[152])
+        eye_h  = np.linalg.norm(mesh[159] - mesh[145])
+        is_blinking = eye_h < (face_h * 0.05)
+
+        if   avg_h < H_MIN:    raw = "Right"
+        elif avg_h > H_MAX:    raw = "Left"
+        elif avg_v < V_MIN:    raw = "Up"
+        elif avg_v > V_MAX:    raw = "Down"
+        elif is_blinking:      raw = "Blink"
+        else:                  raw = "Center"
+
+        if raw != "Center":
+            if self._suspicious_start_time is None:
+                self._suspicious_start_time = __import__("time").time()
+            elapsed = __import__("time").time() - self._suspicious_start_time
+            if elapsed > SUSPICION_THRESHOLD:
+                return f"WARNING: {'Sleeping/Eyes Closed' if raw == 'Blink' else f'Looking {raw}'}"
+            return f"Safe: Center (Brief {raw})"
+        else:
+            self._suspicious_start_time = None
+            return "Safe: Center"
+
     def process_frame(self, frame_bgr):
         if IS_ORCHESTRATOR:
-            return None
+            if not hasattr(self, "_process_counter"):
+                self._process_counter = 0
+            self._process_counter += 1
+
+            # Throttle to every 5th frame to save CPU
+            if self._process_counter % 5 != 0:
+                return self._last_gaze_result
+
+            # Lazily initialize the landmarker on first real processing call
+            if self._inline_landmarker is None:
+                try:
+                    self._init_inline_landmarker()
+                except Exception as e:
+                    logger.error(f"GazeDetector: Inline init failed: {e}")
+                    return None
+
+            if self._inline_landmarker is None:
+                return None
+
+            try:
+                result = self._process_gaze_inline(frame_bgr)
+                self._last_gaze_result = result
+                return result
+            except Exception as e:
+                logger.error(f"GazeDetector: Inline processing error: {e}")
+                return self._last_gaze_result
+
         try:
             # Send BGR directly; worker will convert to RGB
             if not self.frame_queue.full():

@@ -286,6 +286,24 @@ async def handle_video_stream_connect(interview_id: int, websocket: WebSocket, c
         
         if not camera_service.running:
             camera_service.start()
+
+        # Register candidate face embedding for identity matching.
+        # This is the enrolled photo embedding stored during candidate onboarding.
+        if camera_service.face_detector and current_user.role == UserRole.CANDIDATE:
+            try:
+                with Session(engine) as db_s:
+                    session_obj = db_s.get(InterviewSession, interview_id)
+                    if session_obj:
+                        candidate = db_s.get(User, session_obj.candidate_id)
+                        if candidate and getattr(candidate, "face_embedding", None):
+                            camera_service.face_detector.register_session_identity(
+                                interview_id, candidate.face_embedding
+                            )
+                            log_info(interview_id, "Face identity registered for recognition.")
+                        else:
+                            log_warning(interview_id, "No enrolled face embedding found; recognition disabled for this session.")
+            except Exception as e:
+                log_error(interview_id, f"Failed to register face identity: {e}")
             
         log_info(interview_id, f"Video Stream connected (User: {current_user.email})")
         return True

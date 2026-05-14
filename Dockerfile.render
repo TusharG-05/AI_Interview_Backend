@@ -38,6 +38,14 @@ COPY . /app
 # In orchestrator mode, models are offloaded to Modal/HF API.
 RUN chmod +x /app/start.sh
 
+# ── Pre-download MediaPipe face landmark model ───────────────────────────────
+# Required for inline (in-thread) gaze detection in Orchestrator Mode.
+# Downloading at build time avoids a 5-10s cold start delay on first frame.
+RUN mkdir -p /app/app/assets && \
+    wget -q -O /app/app/assets/face_landmarker.task \
+        https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task
+
+
 # Expose port (Render will provide PORT env var)
 # Note: Render provides PORT env var dynamically, this is just documentation
 EXPOSE 7860

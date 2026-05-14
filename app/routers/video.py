@@ -1,3 +1,4 @@
+import threading
 from typing import Optional, List, Dict, Union
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
 from pydantic import BaseModel
@@ -101,10 +102,27 @@ class Offer(BaseModel):
     type: str
     interview_id: Optional[int] = None
 
-# Global set to keep references to PCs
+# Global set to keep references to PCs — prevents garbage collection of open connections.
 pcs = set()
 # Global registry for active sessions: {interview_id: {"pc": pc, "track": video_track}}
 active_sessions = {}
+# Lock to guard concurrent mutations from the DataChannel and Track event handlers,
+# which can fire simultaneously and cause a race condition when linking channel ↔ track.
+_sessions_lock = threading.Lock()
+
+
+async def close_all_peer_connections():
+    """
+    Cleanly close ALL open WebRTC PeerConnections.
+    Called by server.py on application shutdown to prevent resource leaks
+    when candidates are still connected at the time the server stops.
+    """
+    import asyncio
+    if pcs:
+        logger.info(f"WebRTC Shutdown: Closing {len(pcs)} active PeerConnection(s)...")
+        await asyncio.gather(*[pc.close() for pc in pcs], return_exceptions=True)
+        pcs.clear()
+        logger.info("WebRTC Shutdown: All PeerConnections closed.")
 
 @router.post("/offer", response_model=ApiResponse[dict], dependencies=heavy_throttle)
 async def offer(params: Offer):
@@ -132,38 +150,52 @@ async def offer(params: Offer):
     interview_id = params.interview_id or 0
     
     # 1. Register for Admin Ghost Mode (Identity handled below)
-    active_sessions[interview_id] = {"pc": pc, "track": None, "channel": None}
+    with _sessions_lock:
+        active_sessions[interview_id] = {"pc": pc, "track": None, "channel": None}
 
     @pc.on("datachannel")
     def on_datachannel(channel):
         logger.info(f"WebRTC: DataChannel received from client for Session {interview_id}")
-        active_sessions[interview_id]["channel"] = channel
-        
-        # If the track was already initialized, link the channel now
-        if active_sessions[interview_id]["track"]:
-            active_sessions[interview_id]["track"].channel = channel
+        with _sessions_lock:
+            if interview_id in active_sessions:
+                active_sessions[interview_id]["channel"] = channel
+                # FIX: Link the channel to an already-initialized track if it arrived first.
+                track = active_sessions[interview_id].get("track")
+                if track:
+                    track.channel = channel
+                    logger.info(f"WebRTC: DataChannel retroactively linked to existing track for Session {interview_id}")
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        if pc.connectionState in ["failed", "closed"]:
-            await pc.close()
-            if interview_id in active_sessions and active_sessions[interview_id]["pc"] == pc:
-                del active_sessions[interview_id]
-                logger.info(f"WebRTC: Candidate {interview_id} Disconnected")
+        logger.info(f"WebRTC: Candidate connection state changed to '{pc.connectionState}' for Session {interview_id}")
+        if pc.connectionState in ["failed", "closed", "disconnected"]:
+            # FIX: Remove from the pcs set to prevent the memory leak of dangling PeerConnections.
+            pcs.discard(pc)
+            with _sessions_lock:
+                if interview_id in active_sessions and active_sessions[interview_id]["pc"] == pc:
+                    del active_sessions[interview_id]
+            logger.info(f"WebRTC: Candidate Session {interview_id} cleaned up (state: {pc.connectionState})")
+            # Close the connection only on failed/disconnected, not on already-closed
+            if pc.connectionState != "closed":
+                try:
+                    await pc.close()
+                except Exception:
+                    pass
 
     @pc.on("track")
     def on_track(track):
         if track.kind == "video":
-            # 1. Wrap with AI and pass the DataChannel (if already received)
-            current_channel = active_sessions.get(interview_id, {}).get("channel")
-            local_track = VideoTransformTrack(track, interview_id=interview_id, channel=current_channel)
-            
-            # 2. Add to PC (Echo back to candidate)
-            pc.addTrack(local_track)
-            
-            # 3. Register for Admin Ghost Mode
-            active_sessions[interview_id]["track"] = local_track
-            logger.info(f"WebRTC: Track registered for Session {interview_id} (Track initialized)")
+            with _sessions_lock:
+                # FIX: Safely retrieve the DataChannel even if it arrived before the track.
+                current_channel = active_sessions.get(interview_id, {}).get("channel")
+                local_track = VideoTransformTrack(track, interview_id=interview_id, channel=current_channel)
+                
+                # Add to PC (Echo back to candidate)
+                pc.addTrack(local_track)
+                
+                # Register for Admin Ghost Mode
+                active_sessions[interview_id]["track"] = local_track
+            logger.info(f"WebRTC: Track registered for Session {interview_id} (DataChannel ready: {bool(current_channel)})")
 
     offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
     await pc.setRemoteDescription(offer)

@@ -1,10 +1,17 @@
 import threading
 import time
 import os
+import cv2
 from typing import Optional, Tuple, Any
 from ..core.config import IS_ORCHESTRATOR
 from ..utils.image_processing import decode_image
 from ..core.logger import get_logger
+
+# FIX: Import DB dependencies at module level (not inline in threads) to prevent
+# Python global import-lock (GIL) deadlocks when multiple threads persist violations simultaneously.
+from ..core.database import engine
+from ..models.db_models import InterviewSession
+from sqlmodel import Session as DBSession
 
 logger = get_logger(__name__)
 
@@ -58,12 +65,28 @@ class CameraService:
         """
         if self.running: return
         
-        # --- Skip heavy detector initialization in Orchestrator Mode ---
+        # --- Orchestrator Mode: Use inline (in-thread) detectors instead of subprocesses ---
+        # MediaPipe is lightweight enough (~40MB) to run inline without multiprocessing.
+        # This enables real face counting and gaze detection on Render without OOM risk.
         if IS_ORCHESTRATOR:
-            logger.info("CameraService: Running in ORCHESTRATOR mode. Background detectors disabled.")
+            logger.info("CameraService: Orchestrator Mode — initializing inline MediaPipe detectors (no subprocess).")
+            try:
+                from .face import FaceDetector
+                self.face_detector = FaceDetector()
+                logger.info("CameraService: Orchestrator face detector ready.")
+            except Exception as e:
+                logger.error(f"CameraService: Orchestrator face detector init failed: {e}")
+
+            gaze_path = "app/assets/face_landmarker.task"
+            try:
+                from .gaze import GazeDetector
+                self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
+                logger.info("CameraService: Orchestrator gaze detector ready.")
+            except Exception as e:
+                logger.error(f"CameraService: Orchestrator gaze detector init failed: {e}")
 
             self.running = True
-            self._detectors_ready = True # Allow frames to pass through without analysis
+            self._detectors_ready = True
             return
 
         logger.info("Starting CameraService (Client-Side Streaming Mode)...")
@@ -123,10 +146,8 @@ class CameraService:
             gaze_status = "No Gaze"
             
             if self.face_detector:
-                # FACE RECOGNITION DISABLED: interview_id is no longer passed so the
-                # detector won't attempt identity matching against the enrolled candidate.
-                # To re-enable recognition, replace `None` with `interview_id` below.
-                f_res = self.face_detector.process_frame(frame, None)
+                # Pass interview_id so the detector can match against the candidate's enrolled embedding.
+                f_res = self.face_detector.process_frame(frame, interview_id)
                 if f_res: face_status = f_res
             
             if self.gaze_detector:
@@ -137,22 +158,17 @@ class CameraService:
             
             # --- ANNOTATE ---
             if locs:
-                import cv2
                 for (top, right, bottom, left) in locs:
                     cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
 
-            
             warning = ""
             if n_face > 1: warning = "MULTIPLE FACES DETECTED"
             elif n_face == 0: warning = "NO FACE DETECTED"
-            # FACE RECOGNITION DISABLED: The unauthorized person check is commented out.
-            # To re-enable, uncomment the line below.
-            # elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
+            elif n_face == 1 and not found: warning = "SECURITY ALERT: UNAUTHORIZED PERSON"
             elif "WARNING" in str(gaze_status): warning = str(gaze_status)
 
             # Update latest frame for MJPEG stream (Isolate by session)
             with self.frame_lock:
-                import cv2
                 success, buffer = cv2.imencode('.jpg', frame)
                 if success:
                     self.session_frames[interview_id] = buffer.tobytes()
@@ -173,14 +189,14 @@ class CameraService:
             if warning and not in_grace_period and cooldown_passed:
                 # Update last violation time to throttle
                 self.session_last_violation_time[interview_id] = time.time()
+
+                # FIX: Use module-level imports instead of inline imports inside thread callbacks.
+                # Inline imports inside thread executor callbacks can cause deadlocks
+                # under the Python GIL when multiple threads try to import the same module.
                 def persist_violation(iid, warn, n_f, fnd, g_s):
-                    from ..core.database import engine
-                    from sqlmodel import Session
                     from ..services.status_manager import add_violation
-                    from ..models.db_models import InterviewSession
-                    
                     try:
-                        with Session(engine) as db_session:
+                        with DBSession(engine) as db_session:
                             interview_session = db_session.get(InterviewSession, iid)
                             if interview_session:
                                 add_violation(
@@ -312,7 +328,11 @@ class CameraService:
             self.session_frames.pop(interview_id, None)
             self.session_frame_ids.pop(interview_id, None)
             self.session_warnings.pop(interview_id, None)
+            self.session_results.pop(interview_id, None)
             self.session_start_times.pop(interview_id, None)
             self.session_last_active.pop(interview_id, None)
+            # FIX: Also clear the violation cooldown tracker, otherwise a restarted session
+            # would silently suppress violations for up to VIOLATION_COOLDOWN seconds.
+            self.session_last_violation_time.pop(interview_id, None)
             logger.info(f"Proctoring: Cleared session data for Interview {interview_id}")
 
