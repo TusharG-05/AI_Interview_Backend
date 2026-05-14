@@ -268,15 +268,28 @@ async def global_exception_handler(request: Request, exc: Exception):
         ).model_dump()
     )
 
+# SECURITY: Restrict origins in production, allow development origins
 from .core.config import FRONTEND_URL
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
-# SECURITY: Restrict origins in production, allow development origins
-origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+# Base origins
+origins = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000"]
+
+# Add FRONTEND_URL from config
 if FRONTEND_URL and FRONTEND_URL not in origins:
     origins.append(FRONTEND_URL)
-if os.getenv("ENV") == "development":
-    origins = ["*"] # Keep wildcard for local dev convenience if explicitly set
+
+# Support multiple origins from environment variable
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS")
+if allowed_origins_env:
+    for origin in allowed_origins_env.split(","):
+        origin = origin.strip().rstrip("/")
+        if origin and origin not in origins:
+            origins.append(origin)
+
+# Note: allow_credentials=True requires specific origins (cannot be ["*"])
+# Even in development, we should list the origins explicitly to support cookies.
 
 app.add_middleware(
     CORSMiddleware,

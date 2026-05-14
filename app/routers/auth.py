@@ -31,14 +31,15 @@ email_service = EmailService()
 def set_auth_cookie(response: Response, token: str):
     """Sets the access_token cookie with secure flags."""
     from ..core.config import ENV
+    is_prod = ENV == "production"
     response.set_cookie(
         key="access_token",
         value=token,
         httponly=True,
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         expires=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        samesite="lax",
-        secure=(ENV == "production")  # Only secure in production (HTTPS)
+        samesite="none" if is_prod else "lax",
+        secure=is_prod  # Required for samesite="none"
     )
 
 @router.post("/login", response_model=ApiResponse[dict])
@@ -160,7 +161,12 @@ async def login_for_access_token(
 async def logout(response: Response):
     """Clears the authentication cookie."""
     from ..core.config import ENV
-    response.delete_cookie(key="access_token", samesite="lax", secure=(ENV == "production"))
+    is_prod = ENV == "production"
+    response.delete_cookie(
+        key="access_token", 
+        samesite="none" if is_prod else "lax", 
+        secure=is_prod
+    )
     return ApiResponse(
         status_code=200,
         data={},
@@ -201,7 +207,7 @@ async def register(
     existing_user = session.exec(select(User).where(User.email == user_data.email.lower())).first()
     if existing_user:
         logger.error(f"Registration attempt for already registered email: {user_data.email}")
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
 
     hashed_password = get_password_hash(user_data.password)
 
