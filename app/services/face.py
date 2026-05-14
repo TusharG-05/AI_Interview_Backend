@@ -33,12 +33,12 @@ def get_modal_embedding():
 
 class MediaPipeDetector:
     """Handles face detection using MediaPipe."""
-    def __init__(self, model_path='app/assets/face_landmarker.task', num_faces=4, min_confidence=0.5):
+    def __init__(self, model_path='app/assets/face_landmarker.task', num_faces=4, min_confidence=0.5, force_init=False):
         # --- Skip initialization in Orchestrator Mode or HF Space (Lazy) ---
+        # force_init=True bypasses this guard for inline orchestrator usage.
         is_hf = os.getenv("SPACE_ID") is not None
-        if IS_ORCHESTRATOR or is_hf:
+        if (IS_ORCHESTRATOR or is_hf) and not force_init:
             logger.info(f"MediaPipeDetector: Skipping eager initialization (Mode: {'Orchestrator' if IS_ORCHESTRATOR else 'HF'})")
-
             self.detector = None
             return
 
@@ -327,7 +327,9 @@ class FaceService:
             self._process_counter = 0
             # Initialize inline detector for face counting (lightweight, no multiprocessing)
             try:
-                self._inline_detector = MediaPipeDetector()
+                # force_init=True bypasses the orchestrator guard so the detector
+                # actually loads MediaPipe instead of returning None silently.
+                self._inline_detector = MediaPipeDetector(force_init=True)
                 logger.info("FaceService: Inline MediaPipeDetector ready.")
             except Exception as e:
                 self._inline_detector = None
