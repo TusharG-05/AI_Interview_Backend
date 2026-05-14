@@ -24,6 +24,8 @@ from ..models.db_models import (
     InterviewResult
 )
 import json
+import asyncio
+import threading
 from ..schemas.shared.user import serialize_user
 from ..core.logger import get_logger
 import asyncio
@@ -309,16 +311,37 @@ async def _broadcast_interview_expired_event(interview_id: int):
         
     except Exception as e:
         logger.error(f"Failed to broadcast interview expired event: {e}")
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
 
+def set_main_loop(loop: asyncio.AbstractEventLoop):
+    global _main_loop
+    _main_loop = loop
+    logger.debug("Main event loop registered in StatusManager.")
 
 def _fire_async_broadcast(coro):
     """Fire and forget async broadcast (non-blocking)."""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
+        global _main_loop
+        loop = None
+        
+        # 1. Try to get the running loop (works if called from main thread)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+            
+        # 2. Use the registered main loop (works if called from background threads)
+        if not loop:
+            loop = _main_loop
+            
+        if loop and loop.is_running():
             asyncio.run_coroutine_threadsafe(coro, loop)
         else:
-            asyncio.run(coro)
+            # Fallback for synchronous scripts or if loop is not yet running
+            try:
+                asyncio.run(coro)
+            except RuntimeError:
+                logger.debug("WS Broadcast: Could not find or run event loop, skipping broadcast.")
     except Exception as e:
         logger.error(f"Failed to fire async broadcast: {e}")
 
@@ -415,6 +438,11 @@ def add_violation(
     Returns:
         The created ProctoringEvent
     """
+    # If the session is already suspended, skip all processing and broadcasting.
+    # We only process violations until the moment of suspension.
+    if interview_session.is_suspended:
+        return None
+
     # Determine severity
     severity = force_severity or VIOLATION_SEVERITY.get(event_type, "info")
     

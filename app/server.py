@@ -119,6 +119,10 @@ async def lifespan(app: FastAPI):
             await asyncio.sleep(60)
 
     import asyncio
+    main_loop = asyncio.get_running_loop()
+    from .services.status_manager import set_main_loop
+    set_main_loop(main_loop)
+
     app.state.expiry_task = asyncio.create_task(periodic_expiry_check())
     
     # RATE LIMITING: Protect AI resources

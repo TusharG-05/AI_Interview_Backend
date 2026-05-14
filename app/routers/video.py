@@ -171,22 +171,26 @@ async def offer(params: Offer):
     await pc.setLocalDescription(answer)
 
 
-    # Register Candidate Identity (Embedding) from DB
-    from ..core.database import engine
-    from sqlmodel import Session, select
-    from ..models.db_models import InterviewSession, User
-    
-    with Session(engine) as db_session:
-        # Join session and user to get embedding
-        stmt = select(User).join(InterviewSession, InterviewSession.candidate_id == User.id).where(InterviewSession.id == interview_id)
-        user = db_session.exec(stmt).first()
-        if user and user.face_embedding:
-            cam = get_camera_service()
-            if cam.face_detector:
-                cam.face_detector.register_session_identity(interview_id, user.face_embedding)
-                logger.info(f"Identity registered for Session {interview_id}")
-            else:
-                logger.info(f"Identity registration skipped: Face detector is not initialized in this environment.")
+    # --- FACE RECOGNITION DISABLED ---
+    # Identity (face embedding) registration is commented out for now.
+    # Face count detection (NO FACE / MULTIPLE FACES) still works.
+    # To re-enable, uncomment the block below.
+    #
+    # from ..core.database import engine
+    # from sqlmodel import Session, select
+    # from ..models.db_models import InterviewSession, User
+    #
+    # with Session(engine) as db_session:
+    #     # Join session and user to get embedding
+    #     stmt = select(User).join(InterviewSession, InterviewSession.candidate_id == User.id).where(InterviewSession.id == interview_id)
+    #     user = db_session.exec(stmt).first()
+    #     if user and user.face_embedding:
+    #         cam = get_camera_service()
+    #         if cam.face_detector:
+    #             cam.face_detector.register_session_identity(interview_id, user.face_embedding)
+    #             logger.info(f"Identity registered for Session {interview_id}")
+    #         else:
+    #             logger.info(f"Identity registration skipped: Face detector is not initialized in this environment.")
 
 
     logger.info(f"WebRTC: Handshake complete for Session {interview_id}")
