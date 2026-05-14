@@ -1091,17 +1091,33 @@ async def list_interviews(
     query = select(InterviewSession)
     
     # 1. Date Filtering
+    def parse_date(date_str: str):
+        """Helper to handle basic ISO dates and optional padding."""
+        if not date_str:
+            return None
+        # Basic padding for cases like 2026-5-9 -> 2026-05-09
+        parts = date_str.split('T')[0].split('-')
+        if len(parts) == 3:
+            parts[1] = parts[1].zfill(2)
+            parts[2] = parts[2].zfill(2)
+            date_str = "-".join(parts) + (date_str[len("-".join(parts)):] if len(date_str) > 10 else "")
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+
     if from_date:
         try:
-            start_dt = datetime.fromisoformat(from_date.replace("Z", "+00:00")).replace(hour=0, minute=0, second=0, microsecond=0)
-            query = query.where(InterviewSession.schedule_time >= start_dt)
+            dt = parse_date(from_date)
+            if dt:
+                start_dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                query = query.where(InterviewSession.schedule_time >= start_dt)
         except ValueError:
             logger.warning(f"Invalid from_date format: {from_date}")
 
     if to_date:
         try:
-            end_dt = datetime.fromisoformat(to_date.replace("Z", "+00:00")).replace(hour=23, minute=59, second=59, microsecond=999999)
-            query = query.where(InterviewSession.schedule_time <= end_dt)
+            dt = parse_date(to_date)
+            if dt:
+                end_dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                query = query.where(InterviewSession.schedule_time <= end_dt)
         except ValueError:
             logger.warning(f"Invalid to_date format: {to_date}")
     
@@ -1324,8 +1340,13 @@ async def update_interview(
             detail="Not authorized to modify this interview session"
         )
     
-    # Prevent updates to live or completed interviews (business rule)
-    if interview_session.status in [InterviewStatus.LIVE, InterviewStatus.COMPLETED]:
+    # Prevent updates to active or completed interviews (business rule)
+    if interview_session.status in [
+        InterviewStatus.CONNECTED,
+        InterviewStatus.LIVE,
+        InterviewStatus.DISCONNECTED,
+        InterviewStatus.COMPLETED
+    ]:
         raise HTTPException(
             status_code=400, 
             detail=f"Cannot update interview with status '{interview_session.status.value}'. Only scheduled interviews can be modified."
@@ -1565,6 +1586,8 @@ async def get_all_results(
     skip: int = 0,
     limit: int = 20,
     search: Optional[str] = None,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
     current_user: User = Depends(get_admin_user), 
     session: Session = Depends(get_session)
 ):
@@ -1573,6 +1596,36 @@ async def get_all_results(
     from ..models.db_models import InterviewResult
     query = select(InterviewSession).join(InterviewResult)
     
+    # 1. Date Filtering (by schedule_time, consistent with /interviews)
+    def parse_date(date_str: str):
+        """Helper to handle basic ISO dates and optional padding."""
+        if not date_str:
+            return None
+        parts = date_str.split('T')[0].split('-')
+        if len(parts) == 3:
+            parts[1] = parts[1].zfill(2)
+            parts[2] = parts[2].zfill(2)
+            date_str = "-".join(parts) + (date_str[len("-".join(parts)):] if len(date_str) > 10 else "")
+        return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+
+    if from_date:
+        try:
+            dt = parse_date(from_date)
+            if dt:
+                start_dt = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+                query = query.where(InterviewSession.schedule_time >= start_dt)
+        except ValueError:
+            logger.warning(f"Invalid from_date format: {from_date}")
+
+    if to_date:
+        try:
+            dt = parse_date(to_date)
+            if dt:
+                end_dt = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                query = query.where(InterviewSession.schedule_time <= end_dt)
+        except ValueError:
+            logger.warning(f"Invalid to_date format: {to_date}")
+
     if current_user.role != UserRole.SUPER_ADMIN:
         query = query.where(InterviewSession.admin_id == current_user.id)
         
