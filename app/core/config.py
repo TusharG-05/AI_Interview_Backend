@@ -137,6 +137,11 @@ CRON_SECRET = os.getenv("CRON_SECRET", "")
 # Groq Configuration
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# WebRTC / TURN Configuration
+TURN_URL = os.getenv("TURN_URL")
+TURN_USERNAME = os.getenv("TURN_USERNAME")
+TURN_PASSWORD = os.getenv("TURN_PASSWORD")
+
 
 # Configure DeepFace to use project-local storage
 # DeepFace will look for models in {DEEPFACE_HOME}/.deepface/weights

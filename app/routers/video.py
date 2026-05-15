@@ -110,6 +110,40 @@ active_sessions = {}
 # which can fire simultaneously and cause a race condition when linking channel ↔ track.
 _sessions_lock = threading.Lock()
 
+@router.get("/credentials", response_model=ApiResponse[dict])
+async def get_webrtc_credentials():
+    """
+    Returns the ICE/TURN server configuration from environment variables.
+    This allows the client to avoid hardcoding sensitive credentials.
+    """
+    from ..core.config import TURN_USERNAME, TURN_PASSWORD
+    
+    ice_servers = [
+        {"urls": "stun:stun.l.google.com:19302"},
+        {"urls": "stun:stun.relay.metered.ca:80"},
+    ]
+    
+    if TURN_USERNAME and TURN_PASSWORD:
+        # Return all Metered TURN variants so the browser can use whichever is fastest
+        turn_urls = [
+            "turn:global.relay.metered.ca:80",
+            "turn:global.relay.metered.ca:80?transport=tcp",
+            "turn:global.relay.metered.ca:443",
+            "turns:global.relay.metered.ca:443?transport=tcp",
+        ]
+        for url in turn_urls:
+            ice_servers.append({
+                "urls": url,
+                "username": TURN_USERNAME,
+                "credential": TURN_PASSWORD
+            })
+        
+    return ApiResponse(
+        status_code=200,
+        data={"iceServers": ice_servers},
+        message="Credentials retrieved successfully"
+    )
+
 
 async def close_all_peer_connections():
     """
@@ -137,12 +171,23 @@ async def offer(params: Offer):
         raise HTTPException(status_code=503, detail="WebRTC (aiortc) is not available on this deployment.")
 
 
-    # Cloud Optimization: Add Google STUN servers for NAT traversal
+    # Cloud Optimization: Add STUN + TURN servers for NAT traversal
+    # These should ideally be loaded from environment variables for production.
+    from ..core.config import TURN_URL, TURN_USERNAME, TURN_PASSWORD
+    
     ice_servers = [
         RTCIceServer(urls="stun:stun.l.google.com:19302"),
         RTCIceServer(urls="stun:stun1.l.google.com:19302"),
-        RTCIceServer(urls="stun:stun2.l.google.com:19302")
     ]
+    
+    if TURN_URL and TURN_USERNAME and TURN_PASSWORD:
+        logger.info("WebRTC: Adding TURN server to configuration")
+        ice_servers.append(RTCIceServer(
+            urls=TURN_URL,
+            username=TURN_USERNAME,
+            credential=TURN_PASSWORD
+        ))
+
     configuration = RTCConfiguration(iceServers=ice_servers)
     pc = RTCPeerConnection(configuration=configuration)
     pcs.add(pc)
@@ -201,6 +246,16 @@ async def offer(params: Offer):
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
+
+    # 🔥 DEPLOYMENT FIX: Wait for ICE gathering to complete on the server side
+    # This ensures that the Answer sent back to the browser contains the TURN relay 
+    # candidates, which are required for Render/HF environments.
+    import asyncio
+    import time
+    gather_timeout = 2.0  # Max wait 2 seconds
+    start_gather = time.time()
+    while pc.iceGatheringState != "complete" and (time.time() - start_gather) < gather_timeout:
+        await asyncio.sleep(0.05)
 
 
     # --- FACE RECOGNITION DISABLED ---

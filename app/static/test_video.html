@@ -466,14 +466,27 @@
         setConnectionBadge('connecting');
         resetStats();
 
-        log('Step 1: Requesting media devices…');
+        log('Step 1: Requesting media devices and credentials…');
 
         try {
-            stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            // 🔥 NEW: Fetch secure credentials from backend instead of hardcoding
+            const credResponse = await fetch('/api/video/credentials');
+            const credResult   = await credResponse.json();
+            const iceConfig    = credResult.data.iceServers;
+            
+            // Lower resolution + framerate to reduce AI processing lag on the server
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    width:  { ideal: 640 },
+                    height: { ideal: 480 },
+                    frameRate: { ideal: 15, max: 20 }
+                },
+                audio: false
+            });
             localVideo.srcObject = stream;
             log('Step 2: Local camera active.');
 
-            const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+            const config = { iceServers: iceConfig };
             pc = new RTCPeerConnection(config);
 
             // FIX 3 – handle connection failures, re-enable UI on terminal states
@@ -507,13 +520,23 @@
             stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
             pc.ontrack = (event) => {
-                // FIX 1 – corrected step number (was duplicated as Step 5)
                 log('Step 6: Server video stream received (echo).', '#6366f1');
                 remoteVideo.srcObject = event.streams[0];
+
+                // Anti-lag: keep the remote video pinned to the live edge
+                // If it drifts more than 0.5s behind, jump forward to catch up
+                remoteVideo.addEventListener('timeupdate', () => {
+                    const buffered = remoteVideo.buffered;
+                    if (buffered.length > 0) {
+                        const liveEdge = buffered.end(buffered.length - 1);
+                        if (liveEdge - remoteVideo.currentTime > 0.5) {
+                            remoteVideo.currentTime = liveEdge - 0.1;
+                        }
+                    }
+                });
             };
 
             // Step 7: Create DataChannel on client side (Offerer)
-            // This ensures the channel is negotiated correctly in the SDP offer.
             dc = pc.createDataChannel("proctoring");
             log('Step 7: DataChannel created ("proctoring").', '#fbbf24');
 
@@ -530,10 +553,6 @@
                 elDC.style.color = 'var(--idle)';
             };
 
-            dc.onerror = (err) => {
-                log(`DataChannel error: ${err}`, '#ef4444');
-            };
-
             dc.onmessage = (e) => {
                 try {
                     const msg = JSON.parse(e.data);
@@ -547,14 +566,40 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            log('Step 4: Sending offer to API…');
+            // 🔥 DEPLOYMENT FIX: Wait for ICE gathering to complete (with 5s timeout)
+            // This ensures that all network candidates (STUN/TURN) are included in the SDP.
+            // A timeout prevents the page from hanging if the TURN server is unreachable.
+            log('Step 4: Gathering ICE candidates…', '#94a3b8');
+            await new Promise((resolve) => {
+                if (pc.iceGatheringState === 'complete') {
+                    resolve();
+                    return;
+                }
+                // Timeout: proceed after 5 seconds even if gathering isn't complete
+                const timeout = setTimeout(() => {
+                    log('ICE gathering timed out — proceeding with available candidates.', '#f59e0b');
+                    pc.removeEventListener('icegatheringstatechange', checkState);
+                    resolve();
+                }, 5000);
+
+                function checkState() {
+                    if (pc.iceGatheringState === 'complete') {
+                        clearTimeout(timeout);
+                        pc.removeEventListener('icegatheringstatechange', checkState);
+                        resolve();
+                    }
+                }
+                pc.addEventListener('icegatheringstatechange', checkState);
+            });
+
+            log('Step 5: Sending offer to API…');
             const response = await fetch('/api/video/offer', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     sdp:          pc.localDescription.sdp,
                     type:         pc.localDescription.type,
-                    interview_id: interviewId          // already validated above
+                    interview_id: interviewId
                 })
             });
 
@@ -565,7 +610,7 @@
             const result = await response.json();
 
             if (result.status_code === 200) {
-                log('Step 5: Server answer received. Completing handshake…');
+                log('Step 6: Server answer received. Completing handshake…');
                 await pc.setRemoteDescription(new RTCSessionDescription(result.data));
             } else {
                 throw new Error(result.message || 'Unknown server error');
