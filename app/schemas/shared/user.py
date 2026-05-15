@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from .team import TeamReadBasic
 
 class UserNested(BaseModel):
-    id: int
+    id: Optional[int] = None
     email: str
     full_name: str
     role: str

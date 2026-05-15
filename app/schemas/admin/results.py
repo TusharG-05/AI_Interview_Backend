@@ -169,8 +169,8 @@ class UpdateResultRequest(BaseModel):
 
 class GetAdminResultsListResponse(BaseModel):
     id: int
-    admin_user: UserNested
-    candidate_user: UserNested
+    admin_user: Optional[UserNested] = None
+    candidate_user: Optional[UserNested] = None
     status: str
     result_status: str = "PENDING"
     end_time: Optional[datetime] = None
