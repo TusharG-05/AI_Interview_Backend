@@ -24,7 +24,7 @@ class VideoTransformTrack(MediaStreamTrack):
     kind = "video"
 
     # Run AI analysis every N frames to keep the video smooth
-    _AI_PROCESS_EVERY_N_FRAMES = 5
+    _AI_PROCESS_EVERY_N_FRAMES = 10
 
     def __init__(self, track, interview_id: Optional[int] = None, channel=None):
         super().__init__()
