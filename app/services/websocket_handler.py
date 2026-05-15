@@ -93,6 +93,8 @@ async def process_candidate_message(interview_id: int, websocket: WebSocket, ses
         await handle_tab_switch_event(interview_id, session, data)
     elif msg_type == "tab_return":
         await handle_tab_return_event(interview_id, session, data)
+    elif msg_type == "proctoring_violation":
+        await handle_proctoring_violation_event(interview_id, session, data)
     elif msg_type == "finish_interview":
         await handle_finish_interview_event(interview_id, websocket, session, data)
     elif msg_type == "start_interview":
@@ -196,6 +198,80 @@ async def handle_tab_return_event(interview_id: int, session: Session, data: dic
             session.commit()
     except Exception as e:
         log_error(interview_id, f"Error processing tab_return: {e}", exc_info=True)
+
+async def handle_proctoring_violation_event(interview_id: int, session: Session, data: dict):
+    """
+    Handle a client-side proctoring violation sent by the frontend.
+
+    The frontend JS (using on-device detection e.g. MediaPipe/face-api.js)
+    sends this message when it detects a face or gaze violation.
+
+    Expected payload:
+        {
+            "type": "proctoring_violation",
+            "violation_type": "no_face" | "multiple_faces" | "gaze_away" | "unauthorized_person",
+            "details": "Optional human-readable description"
+        }
+    """
+    # Map frontend-friendly names → DB event_type strings used by add_violation / VIOLATION_SEVERITY
+    VIOLATION_TYPE_MAP = {
+        "no_face":            "NO FACE DETECTED",
+        "multiple_faces":     "MULTIPLE FACES DETECTED",
+        "gaze_away":          "gaze_away",
+        "unauthorized_person": "SECURITY ALERT: UNAUTHORIZED PERSON",
+    }
+
+    try:
+        raw_type = data.get("violation_type", "")
+        event_type = VIOLATION_TYPE_MAP.get(raw_type)
+
+        if not event_type:
+            log_warning(
+                interview_id,
+                f"proctoring_violation: Unknown violation_type '{raw_type}'. "
+                f"Accepted: {list(VIOLATION_TYPE_MAP.keys())}"
+            )
+            return
+
+        details = data.get("details") or raw_type
+
+        session_obj = session.exec(
+            select(InterviewSession).where(InterviewSession.id == interview_id)
+        ).first()
+
+        if not session_obj:
+            log_warning(interview_id, f"proctoring_violation: Session not found")
+            return
+
+        if session_obj.is_completed or session_obj.is_suspended:
+            log_debug(interview_id, f"proctoring_violation: Session already ended, ignoring '{raw_type}'")
+            return
+
+        add_violation(
+            session=session,
+            interview_session=session_obj,
+            event_type=event_type,
+            details=details,
+            force_severity="warning"
+        )
+
+        # If the violation pushed over the threshold and suspended the session,
+        # kick off result processing (same as tab_switch handler)
+        if session_obj.is_suspended:
+            from ..tasks.interview_tasks import process_session_results
+            asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
+            log_info(interview_id, f"Interview suspended via proctoring_violation '{raw_type}', triggering evaluation.")
+
+        session.add(session_obj)
+        session.commit()
+        log_info(
+            interview_id,
+            f"Proctoring violation handled: '{raw_type}' "
+            f"(warnings: {session_obj.warning_count}/{session_obj.max_warnings})"
+        )
+    except Exception as e:
+        log_error(interview_id, f"Error processing proctoring_violation: {e}", exc_info=True)
+
 
 async def handle_finish_interview_event(interview_id: int, websocket: WebSocket, session: Session, data: dict):
     try:
