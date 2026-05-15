@@ -78,7 +78,10 @@ class User(SQLModel, table=True):
         sa_relationship_kwargs={"foreign_keys": "User.team_id"}
     )
     question_papers: List["QuestionPaper"] = Relationship(back_populates="admin")
-    detail: Optional["UserDetail"] = Relationship(back_populates="user")
+    detail: Optional["UserDetail"] = Relationship(
+        back_populates="user",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
 
 class UserDetail(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
