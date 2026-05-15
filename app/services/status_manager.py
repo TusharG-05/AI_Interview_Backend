@@ -355,10 +355,10 @@ VIOLATION_SEVERITY = {
     
     # Hard violations - accumulate warnings
     "MULTIPLE FACES DETECTED": "warning",
-    "NO FACE DETECTED": "warning",
+    "NO FACE DETECTED": "info",
     "tab_switch": "warning",
-    "SECURITY ALERT: UNAUTHORIZED PERSON": "warning",
-    "unauthorized_device": "warning",
+    "SECURITY ALERT: UNAUTHORIZED PERSON": "info",
+    "unauthorized_device": "info",
 }
 
 
@@ -481,6 +481,11 @@ def add_violation(
         logger.warning(
             f"Session {interview_session.id} SUSPENDED due to critical violation: {event_type}"
         )
+        
+        # Trigger result calculation for the suspended session
+        from ..core.tasks import run_background_task
+        from ..tasks.interview_tasks import process_session_results_task
+        run_background_task(process_session_results_task, interview_session.id)
     
     # Handle warning-level violations
     elif severity == "warning":
@@ -517,6 +522,11 @@ def add_violation(
                 f"Session {interview_session.id} AUTO-SUSPENDED: "
                 f"Exceeded {interview_session.max_warnings} warnings"
             )
+            
+            # Trigger result calculation for the suspended session
+            from ..core.tasks import run_background_task
+            from ..tasks.interview_tasks import process_session_results_task
+            run_background_task(process_session_results_task, interview_session.id)
     
     session.add(event)
     session.add(interview_session)
@@ -627,6 +637,12 @@ def check_and_suspend(
     session.commit()
     
     logger.info(f"Session {interview_session.id} manually suspended and marked COMPLETED: {reason}")
+    
+    # Trigger result calculation for the suspended session
+    from ..core.tasks import run_background_task
+    from ..tasks.interview_tasks import process_session_results_task
+    run_background_task(process_session_results_task, interview_session.id)
+    
     return True
 
 
