@@ -13,6 +13,7 @@ router = APIRouter(prefix="/candidate", tags=["Candidate"])
 
 from ..schemas.admin.users import UserUpdate
 from ..schemas.candidate.history import HistoryItem, ListUpcomingInterviewsResponse, UpcomingInterviewItem
+from ..schemas.candidate.profile import CandidateDetailUpdate, CandidateProfileResponse, UserDetailBase
 from ..core.config import IS_ORCHESTRATOR
 from ..auth.dependencies import get_current_user
 from ..core.logger import get_logger
@@ -291,3 +292,111 @@ async def get_profile_image(
         )
         
     raise HTTPException(status_code=404, detail="No profile image found for this user")
+
+@router.get("/profile/me", response_model=ApiResponse[CandidateProfileResponse])
+async def get_my_profile(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Retrieve the current candidate's profile and details."""
+    from ..models.db_models import UserDetail, UserRole
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=403, detail="This endpoint is for candidates only")
+
+    detail = session.exec(select(UserDetail).where(UserDetail.user_id == current_user.id)).first()
+    
+    response_data = CandidateProfileResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        role=str(current_user.role.value) if hasattr(current_user.role, "value") else str(current_user.role),
+        details=UserDetailBase.model_validate(detail) if detail else None,
+        created_at=detail.created_at if detail else None,
+        updated_at=detail.updated_at if detail else None
+    )
+    
+    return ApiResponse(
+        status_code=200,
+        data=response_data,
+        message="Profile retrieved successfully"
+    )
+
+@router.patch("/profile/me", response_model=ApiResponse[CandidateProfileResponse])
+async def update_my_profile(
+    update_data: CandidateDetailUpdate,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Update the current candidate's profile and details."""
+    from ..models.db_models import UserDetail, UserRole
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=403, detail="This endpoint is for candidates only")
+
+    # 1. Update User basic info if provided
+    if update_data.full_name is not None:
+        current_user.full_name = update_data.full_name
+        session.add(current_user)
+
+    # 2. Upsert UserDetail
+    detail = session.exec(select(UserDetail).where(UserDetail.user_id == current_user.id)).first()
+    if not detail:
+        detail = UserDetail(user_id=current_user.id)
+        session.add(detail)
+    
+    update_dict = update_data.model_dump(exclude_unset=True)
+    update_dict.pop("full_name", None)  # handled above
+        
+    for key, value in update_dict.items():
+        setattr(detail, key, value)
+    
+    detail.updated_at = datetime.utcnow()
+    session.add(detail)
+    
+    try:
+        session.commit()
+        session.refresh(current_user)
+        session.refresh(detail)
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Profile update failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update profile")
+        
+    response_data = CandidateProfileResponse(
+        id=current_user.id,
+        email=current_user.email,
+        full_name=current_user.full_name,
+        role=str(current_user.role.value) if hasattr(current_user.role, "value") else str(current_user.role),
+        details=UserDetailBase.model_validate(detail),
+        created_at=detail.created_at,
+        updated_at=detail.updated_at
+    )
+    
+    return ApiResponse(
+        status_code=200,
+        data=response_data,
+        message="Profile updated successfully"
+    )
+
+@router.delete("/profile/me", response_model=ApiResponse[dict])
+async def delete_my_profile(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """Delete the current candidate's account and all associated data."""
+    from ..models.db_models import UserRole
+    if current_user.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=403, detail="This endpoint is for candidates only")
+
+    session.delete(current_user)
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Account deletion failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete account")
+        
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Account deleted successfully"
+    )

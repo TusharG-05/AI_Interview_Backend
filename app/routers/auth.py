@@ -13,6 +13,7 @@ from ..auth.security import (
 )
 from ..schemas.auth.login import LoginRequest, TokenResponse as Token, MeResponse as UserRead
 from ..schemas.auth.registration import RegisterRequest as UserCreate
+from ..schemas.candidate.profile import CandidateSignupRequest
 from ..schemas.shared.api_response import ApiResponse
 from ..schemas.shared.user import serialize_user
 
@@ -261,6 +262,72 @@ async def register(
         status_code=201,
         data=token_data,
         message="User registered successfully"
+    )
+
+@router.post("/signup/candidate", response_model=ApiResponse[dict], status_code=201)
+async def candidate_signup(
+    response: Response, 
+    signup_data: CandidateSignupRequest, 
+    session: Session = Depends(get_session)
+):
+    """
+    Public signup for candidates.
+    - Creates a User with role=CANDIDATE.
+    - Creates an associated UserDetail entry.
+    - Automatically logs in the user and returns a token.
+    """
+    existing_user = session.exec(select(User).where(User.email == signup_data.email.lower())).first()
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
+
+    hashed_password = get_password_hash(signup_data.password)
+
+    # 1. Create User
+    new_user = User(
+        email=signup_data.email.lower(),
+        full_name=signup_data.full_name,
+        password_hash=hashed_password,
+        role=UserRole.CANDIDATE
+    )
+    session.add(new_user)
+    
+    try:
+        session.flush() # Get user ID
+        
+        # 2. Create associated UserDetail
+        from ..models.db_models import UserDetail
+        new_detail = UserDetail(user_id=new_user.id)
+        session.add(new_detail)
+        
+        session.commit()
+        session.refresh(new_user)
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Candidate signup failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to register candidate")
+    
+    # 3. Auto Login
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_access_token(
+        data={"sub": new_user.email}, expires_delta=access_token_expires
+    )
+    
+    set_auth_cookie(response, token)
+    
+    token_data = {
+        "access_token": token, 
+        "token_type": "bearer",
+        "id": new_user.id,
+        "email": new_user.email,
+        "full_name": new_user.full_name,
+        "role": "CANDIDATE",
+        "expires_at": (datetime.now(timezone.utc) + access_token_expires).isoformat()
+    }
+    
+    return ApiResponse(
+        status_code=201,
+        data=token_data,
+        message="Candidate registered successfully"
     )
 
 @router.get("/me", response_model=ApiResponse[dict])
