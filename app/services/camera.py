@@ -1,3 +1,4 @@
+#gaze detectore logic -> 81-87, 113-121, 264 - 270
 import threading
 import time
 import os
@@ -77,13 +78,13 @@ class CameraService:
             except Exception as e:
                 logger.error(f"CameraService: Orchestrator face detector init failed: {e}")
 
-            gaze_path = "app/assets/face_landmarker.task"
-            try:
-                from .gaze import GazeDetector
-                self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
-                logger.info("CameraService: Orchestrator gaze detector ready.")
-            except Exception as e:
-                logger.error(f"CameraService: Orchestrator gaze detector init failed: {e}")
+            # gaze_path = "app/assets/face_landmarker.task"
+            # try:
+            #     from .gaze import GazeDetector
+            #     self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
+            #     logger.info("CameraService: Orchestrator gaze detector ready.")
+            # except Exception as e:
+            #     logger.error(f"CameraService: Orchestrator gaze detector init failed: {e}")
 
             self.running = True
             self._detectors_ready = True
@@ -109,15 +110,15 @@ class CameraService:
             except Exception as e:
                 logger.error(f"Background: FaceDetector failed: {e}", exc_info=True)
             
-            if os.path.exists(gaze_path):
-                try:
-                    from .gaze import GazeDetector
-                    self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
-                    logger.info("Background: GazeDetector ready.")
-                except Exception as e:
-                    logger.error(f"Background: GazeDetector failed: {e}", exc_info=True)
-            else:
-                logger.warning(f"Background: Gaze model not found at {gaze_path}. Checking alternative paths...")
+            # if os.path.exists(gaze_path):
+            #     try:
+            #         from .gaze import GazeDetector
+            #         self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
+            #         logger.info("Background: GazeDetector ready.")
+            #     except Exception as e:
+            #         logger.error(f"Background: GazeDetector failed: {e}", exc_info=True)
+            # else:
+            #     logger.warning(f"Background: Gaze model not found at {gaze_path}. Checking alternative paths...")
             
             # Mark ready even if one detector fails - allows partial proctoring
             self._detectors_ready = True
@@ -261,13 +262,13 @@ class CameraService:
                         logger.error(f"MONITOR: Failed to restart FaceDetector: {e}")
                 
                 # Gaze Detector Check
-                if self.gaze_detector and not self.gaze_detector.worker.is_alive():
-                    logger.warning("MONITOR: GazeDetector worker died. Restarting...")
-                    try:
-                        from .gaze import GazeDetector
-                        self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
-                    except Exception as e:
-                        logger.error(f"MONITOR: Failed to restart GazeDetector: {e}")
+                # if self.gaze_detector and not self.gaze_detector.worker.is_alive():
+                #     logger.warning("MONITOR: GazeDetector worker died. Restarting...")
+                #     try:
+                #         from .gaze import GazeDetector
+                #         self.gaze_detector = GazeDetector(model_path="app/assets/face_landmarker.task", max_faces=1)
+                #     except Exception as e:
+                #         logger.error(f"MONITOR: Failed to restart GazeDetector: {e}")
 
                 # Cleanup stale sessions (TTL: 10 minutes)
                 STALE_TTL = 600
