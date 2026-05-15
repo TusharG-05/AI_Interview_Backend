@@ -745,15 +745,20 @@ def compute_dashboard_metrics(target_date: Optional[date] = None) -> Dict[str, A
             ).all()
             interviews_today_count = len(interviews_today)
 
-            # distinct interviews with violations today
-            violation_rows = session.exec(
-                select(distinct(ProctoringEvent.interview_id)).where(
-                    ProctoringEvent.timestamp >= start,
-                    ProctoringEvent.timestamp < end
-                )
-            ).all()
-            violation_interview_ids = {r[0] if isinstance(r, tuple) else r for r in violation_rows}
-            violations_today_count = len(violation_interview_ids)
+            # distinct interviews with violations today (only for interviews started today)
+            today_interview_ids = [i.id for i in interviews_today]
+            if today_interview_ids:
+                violation_rows = session.exec(
+                    select(distinct(ProctoringEvent.interview_id)).where(
+                        ProctoringEvent.timestamp >= start,
+                        ProctoringEvent.timestamp < end,
+                        ProctoringEvent.interview_id.in_(today_interview_ids)
+                    )
+                ).all()
+                violation_interview_ids = {r[0] if isinstance(r, tuple) else r for r in violation_rows}
+                violations_today_count = len(violation_interview_ids)
+            else:
+                violations_today_count = 0
 
             # results completed today
             results_today = session.exec(
