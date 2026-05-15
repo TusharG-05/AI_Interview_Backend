@@ -31,6 +31,7 @@ from ..schemas.admin.dashboard import GetCandidateStatusResponse, LiveStatusItem
 InterviewSessionDetail = AdminInterviewSessionDetail
 from ..schemas.shared.api_response import ApiResponse, PaginatedResponse
 from ..schemas.shared.user import UserNested, serialize_user
+from ..schemas.candidate.profile import CandidateDetailUpdate, CandidateProfileResponse, UserDetailBase
 
 
 
@@ -723,6 +724,121 @@ async def delete_question(
         status_code=200,
         data={},
         message="Question deleted successfully"
+    )
+
+@router.get("/candidates/{user_id}", response_model=ApiResponse[CandidateProfileResponse])
+async def admin_get_candidate_profile(
+    user_id: int,
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
+):
+    """Admin: Get any candidate's profile and details."""
+    user = session.get(User, user_id)
+    if not user or user.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+        
+    from ..models.db_models import UserDetail
+    detail = session.exec(select(UserDetail).where(UserDetail.user_id == user.id)).first()
+    
+    response_data = CandidateProfileResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=str(user.role.value) if hasattr(user.role, "value") else str(user.role),
+        details=UserDetailBase.model_validate(detail) if detail else None,
+        created_at=detail.created_at if detail else None,
+        updated_at=detail.updated_at if detail else None
+    )
+    
+    return ApiResponse(
+        status_code=200,
+        data=response_data,
+        message="Candidate profile retrieved successfully"
+    )
+
+@router.patch("/candidates/{user_id}", response_model=ApiResponse[CandidateProfileResponse])
+async def admin_update_candidate_profile(
+    user_id: int,
+    update_data: CandidateDetailUpdate,
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
+):
+    """Admin: Update any candidate's profile and details."""
+    user = session.get(User, user_id)
+    if not user or user.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+        
+    from ..models.db_models import UserDetail
+    
+    # 1. Update User basic info
+    if update_data.full_name is not None:
+        user.full_name = update_data.full_name
+        session.add(user)
+
+    # 2. Update UserDetail
+    detail = session.exec(select(UserDetail).where(UserDetail.user_id == user.id)).first()
+    if not detail:
+        detail = UserDetail(user_id=user.id)
+        session.add(detail)
+    
+    update_dict = update_data.model_dump(exclude_unset=True)
+    if "full_name" in update_dict:
+        del update_dict["full_name"]
+        
+    for key, value in update_dict.items():
+        setattr(detail, key, value)
+    
+    detail.updated_at = datetime.utcnow()
+    session.add(detail)
+    
+    try:
+        session.commit()
+        session.refresh(user)
+        session.refresh(detail)
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Admin candidate update failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update candidate profile")
+        
+    response_data = CandidateProfileResponse(
+        id=user.id,
+        email=user.email,
+        full_name=user.full_name,
+        role=str(user.role.value) if hasattr(user.role, "value") else str(user.role),
+        details=UserDetailBase.model_validate(detail),
+        created_at=detail.created_at,
+        updated_at=detail.updated_at
+    )
+    
+    return ApiResponse(
+        status_code=200,
+        data=response_data,
+        message="Candidate profile updated successfully"
+    )
+
+@router.delete("/candidates/{user_id}", response_model=ApiResponse[dict])
+async def admin_delete_candidate(
+    user_id: int,
+    current_user: Annotated[User, Depends(get_admin_user)],
+    session: Annotated[Session, Depends(get_session)]
+):
+    """Admin: Delete any candidate's account."""
+    user = session.get(User, user_id)
+    if not user or user.role != UserRole.CANDIDATE:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+        
+    session.delete(user)
+    try:
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Admin candidate deletion failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete candidate account")
+        
+    return ApiResponse(
+        status_code=200,
+        data={},
+        message="Candidate account deleted successfully"
     )
 
 @router.get("/questions", response_model=ApiResponse[PaginatedResponse[Questions]])
