@@ -546,22 +546,30 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            // 🔥 DEPLOYMENT FIX: Wait for ICE gathering to complete
-            // This ensures that all network candidates (STUN/TURN) are included in the SDP
-            // sent to the server, which is critical for cloud deployments like Render.
+            // 🔥 DEPLOYMENT FIX: Wait for ICE gathering to complete (with 5s timeout)
+            // This ensures that all network candidates (STUN/TURN) are included in the SDP.
+            // A timeout prevents the page from hanging if the TURN server is unreachable.
             log('Step 4: Gathering ICE candidates…', '#94a3b8');
             await new Promise((resolve) => {
                 if (pc.iceGatheringState === 'complete') {
                     resolve();
-                } else {
-                    function checkState() {
-                        if (pc.iceGatheringState === 'complete') {
-                            pc.removeEventListener('icegatheringstatechange', checkState);
-                            resolve();
-                        }
-                    }
-                    pc.addEventListener('icegatheringstatechange', checkState);
+                    return;
                 }
+                // Timeout: proceed after 5 seconds even if gathering isn't complete
+                const timeout = setTimeout(() => {
+                    log('ICE gathering timed out — proceeding with available candidates.', '#f59e0b');
+                    pc.removeEventListener('icegatheringstatechange', checkState);
+                    resolve();
+                }, 5000);
+
+                function checkState() {
+                    if (pc.iceGatheringState === 'complete') {
+                        clearTimeout(timeout);
+                        pc.removeEventListener('icegatheringstatechange', checkState);
+                        resolve();
+                    }
+                }
+                pc.addEventListener('icegatheringstatechange', checkState);
             });
 
             log('Step 5: Sending offer to API…');

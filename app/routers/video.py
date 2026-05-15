@@ -116,19 +116,27 @@ async def get_webrtc_credentials():
     Returns the ICE/TURN server configuration from environment variables.
     This allows the client to avoid hardcoding sensitive credentials.
     """
-    from ..core.config import TURN_URL, TURN_USERNAME, TURN_PASSWORD
+    from ..core.config import TURN_USERNAME, TURN_PASSWORD
     
     ice_servers = [
         {"urls": "stun:stun.l.google.com:19302"},
-        {"urls": "stun:stun1.l.google.com:19302"},
+        {"urls": "stun:stun.relay.metered.ca:80"},
     ]
     
-    if TURN_URL and TURN_USERNAME and TURN_PASSWORD:
-        ice_servers.append({
-            "urls": TURN_URL,
-            "username": TURN_USERNAME,
-            "credential": TURN_PASSWORD
-        })
+    if TURN_USERNAME and TURN_PASSWORD:
+        # Return all Metered TURN variants so the browser can use whichever is fastest
+        turn_urls = [
+            "turn:global.relay.metered.ca:80",
+            "turn:global.relay.metered.ca:80?transport=tcp",
+            "turn:global.relay.metered.ca:443",
+            "turns:global.relay.metered.ca:443?transport=tcp",
+        ]
+        for url in turn_urls:
+            ice_servers.append({
+                "urls": url,
+                "username": TURN_USERNAME,
+                "credential": TURN_PASSWORD
+            })
         
     return ApiResponse(
         status_code=200,
