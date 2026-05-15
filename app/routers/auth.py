@@ -3,6 +3,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Response
 import logging
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
+from sqlalchemy import func
 from ..core.database import get_db as get_session
 from ..models.db_models import User
 from ..auth.security import (
@@ -45,7 +47,7 @@ def set_auth_cookie(response: Response, token: str):
 @router.post("/login", response_model=ApiResponse[dict])
 async def login(response: Response, login_data: LoginRequest, session: Session = Depends(get_session)):
     """JSON-based login. Sets secure HttpOnly cookie and returns token."""
-    user = session.exec(select(User).where(User.email == login_data.email.lower())).first()
+    user = session.exec(select(User).options(selectinload(User.team)).where(User.email == login_data.email.lower())).first()
     if not user or not verify_password(login_data.password, user.password_hash):
         logger.error(f"Login failed for user: {login_data.email}")
         raise HTTPException(
@@ -64,7 +66,9 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         # Verify the interview session token matches the candidate
         
         interview = session.exec(
-            select(InterviewSession).where(
+            select(InterviewSession)
+            .options(selectinload(InterviewSession.paper), selectinload(InterviewSession.coding_paper))
+            .where(
                 InterviewSession.access_token == login_data.access_token,
                 InterviewSession.candidate_id == user.id
             )
@@ -114,7 +118,6 @@ async def login(response: Response, login_data: LoginRequest, session: Session =
         "profile_image" : user.profile_image,
         "team": team_data
     }
-    print(token_data)
     return ApiResponse(
         status_code=200,
         data=token_data,
@@ -186,7 +189,7 @@ async def register(
     - Subsequent users must be registered by an Admin.
     """
     # Bootstrap Check - first user can register freely
-    all_user_count = len(session.exec(select(User)).all())
+    all_user_count = session.exec(select(func.count(User.id))).one()
     
     if all_user_count > 0:
         # Require Admin Auth

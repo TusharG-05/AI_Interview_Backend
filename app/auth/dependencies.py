@@ -3,6 +3,7 @@ from fastapi import Depends, HTTPException, status, Request, WebSocket, Query
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlmodel import Session
+from sqlalchemy.orm import selectinload
 from ..core.database import get_db as get_session
 from ..models.db_models import User, UserRole
 from .security import SECRET_KEY, ALGORITHM
@@ -41,14 +42,14 @@ def get_current_user(
         # Fallback: some tests and legacy clients pass a raw access_token (not a JWT).
         # Support that by looking up `User.access_token` directly.
         try:
-            user_by_token = session.query(User).filter(User.access_token == token).first()
+            user_by_token = session.query(User).options(selectinload(User.team)).filter(User.access_token == token).first()
             if user_by_token:
                 return user_by_token
         except Exception:
             pass
         raise credentials_exception
     
-    user = session.query(User).filter(User.email == email).first()
+    user = session.query(User).options(selectinload(User.team)).filter(User.email == email).first()
     if user is None:
         raise credentials_exception
     return user
@@ -93,7 +94,7 @@ def get_current_user_optional(
     except JWTError:
         return None
     
-    user = session.query(User).filter(User.email == email).first()
+    user = session.query(User).options(selectinload(User.team)).filter(User.email == email).first()
     return user
 
 async def get_current_user_ws(
@@ -130,7 +131,7 @@ async def get_current_user_ws(
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     
-    user = session.query(User).filter(User.email == email).first()
+    user = session.query(User).options(selectinload(User.team)).filter(User.email == email).first()
     if user is None:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)

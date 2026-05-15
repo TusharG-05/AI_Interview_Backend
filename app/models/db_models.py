@@ -1,6 +1,8 @@
 from typing import Optional, List
 from datetime import datetime, timedelta
 from sqlmodel import Field, SQLModel, Relationship, Column, ForeignKey, Integer
+from sqlalchemy import LargeBinary, Text
+from sqlalchemy.orm import deferred
 from enum import Enum
 import uuid
 import random
@@ -55,11 +57,17 @@ class User(SQLModel, table=True):
     full_name: str = Field(default="")
     password_hash: str = Field(default="")
     role: UserRole = Field(default=UserRole.CANDIDATE)
-    access_token: Optional[str] = Field(default_factory=lambda: uuid.uuid4().hex)
+    access_token: Optional[str] = Field(default_factory=lambda: uuid.uuid4().hex, index=True)
     resume_path: Optional[str] = Field(default=None)
     profile_image: Optional[str] = Field(default=None) # Path to uploaded selfie (Legacy)
-    profile_image_bytes: Optional[bytes] = Field(default=None) # Binary store for selfie
-    face_embedding: Optional[str] = Field(default=None) # JSON/CSV string of the ArcFace/Sface vector
+    profile_image_bytes: Optional[bytes] = Field(
+        default=None, 
+        sa_column=deferred(Column(LargeBinary, nullable=True))
+    ) # Binary store for selfie
+    face_embedding: Optional[str] = Field(
+        default=None,
+        sa_column=deferred(Column(Text, nullable=True))
+    ) # JSON/CSV string of the ArcFace/Sface vector
     
     # Relationships
     team_id: Optional[int] = Field(
