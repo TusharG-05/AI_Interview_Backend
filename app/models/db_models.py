@@ -89,7 +89,7 @@ class UserDetail(SQLModel, table=True):
     # Personal Info
     date_of_birth: Optional[date] = Field(default=None)
     gender: Optional[str] = Field(default=None, max_length=20)
-    blood_group: Optional[str] = Field(default=None, max_length=5)
+    blood_group: Optional[str] = Field(default=None, max_length=10)
     nationality: Optional[str] = Field(default=None, max_length=60)
     religion: Optional[str] = Field(default=None, max_length=60)
     marital_status: Optional[str] = Field(default=None, max_length=20)  # single, married, divorced, widowed
