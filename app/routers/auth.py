@@ -356,3 +356,37 @@ async def read_users_me(current_user: User = Depends(get_current_user), session:
         data=user_data,
         message="User profile retrieved successfully"
     )
+
+from pydantic import BaseModel
+
+class FCMTokenRequest(BaseModel):
+    fcm_token: str
+
+@router.put("/fcm-token", response_model=ApiResponse[dict])
+async def update_fcm_token(
+    payload: FCMTokenRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session)
+):
+    """
+    Registers or updates the user's Firebase Cloud Messaging token.
+    Enables targeted push notifications for browser events.
+    """
+    try:
+        current_user.fcm_token = payload.fcm_token
+        session.add(current_user)
+        session.commit()
+        session.refresh(current_user)
+        
+        return ApiResponse(
+            status_code=200,
+            data={"fcm_token": current_user.fcm_token},
+            message="FCM device token registered successfully"
+        )
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Failed to register token for user {current_user.email}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to register token: {str(e)}"
+        )

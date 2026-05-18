@@ -68,6 +68,7 @@ class User(SQLModel, table=True):
         default=None,
         sa_column=deferred(Column(Text, nullable=True))
     ) # JSON/CSV string of the ArcFace/Sface vector
+    fcm_token: Optional[str] = Field(default=None, nullable=True)
     
     # Relationships
     team_id: Optional[int] = Field(
