@@ -1,15 +1,26 @@
 # Frontend WebSocket API Reference
 
-This document provides a clean reference of all WebSocket request and response bodies for both the **Candidate** and **Admin Dashboard** streams.
+This document provides a clean, comprehensive reference of all WebSocket request and response bodies, query parameters, authentication formats, and exact URL routing for both the **Candidate** and **Admin Dashboard** streams.
 
 ---
 
-## 1. Candidate WebSocket (`/ws/api/interview/{id}`)
+## Overview of WebSocket Endpoints
 
-### 📥 Client → Server (Requests)
+| Endpoint Stream | Protocol Path | Auth Requirement | Purpose |
+|-----------------|---------------|------------------|---------|
+| **1. Candidate WS** | `ws://localhost:8000/ws/api/interview/{interview_id}?token={token}` | JWT Query Param | Client-side violations, login, start, and finish |
+| **2. Admin Dashboard WS** | `ws://localhost:8000/api/admin/dashboard/ws?token={token}` | JWT Query Param / Cookie | Real-time monitoring across all active interviews |
+
+*Note: Replace `ws://` with `wss://` in production secure environments.*
+
+---
+
+## 1. Candidate WebSocket (`/ws/api/interview/{interview_id}`)
+
+### 📥 Client → Server (Requests / Triggers)
 
 #### **Candidate Login**
-Sent immediately after connection to identify the candidate.
+Sent immediately after establishing a WebSocket connection to identify the candidate.
 ```json
 {
     "type": "login",
@@ -17,30 +28,23 @@ Sent immediately after connection to identify the candidate.
 }
 ```
 
-#### **Start Interview**
-Sent when the candidate clicks "Start Interview" in the UI.
+#### **Start / Resume Interview**
+Sent when the candidate starts the interview or resumes after a disconnection. This transitions the interview session to a `LIVE` state in the database.
 ```json
 {
     "type": "start_interview",
     "interview_id": 62
 }
 ```
+#### **Proctoring Violation (Client-Side Detection)**
+Sent by the frontend if on-device AI/ML models (e.g. MediaPipe or face-api.js) detect facial, gaze, tab-switch, or tab-return violations.
 
-#### **Tab Switch**
-Sent when the candidate switches tabs or leaves the window.
+For `tab-switch` and `tab-return`, the server manages warning accumulation and a **30-second grace window** validation before session termination.
 ```json
 {
-    "type": "tab_switch",
-    "interview_id": 62
-}
-```
-
-#### **Tab Return**
-Sent when the candidate returns to the interview tab.
-```json
-{
-    "type": "tab_return",
-    "interview_id": 62
+    "event_type": "violation_detected",
+    "violation_type": "no_face", // Acceptable: "no_face", "multiple_faces", "gaze_away", "unauthorized_person", "tab-switch", "tab-return"
+    "details": "No face detected in video feed" // Human-readable description
 }
 ```
 
@@ -55,34 +59,19 @@ Sent when the candidate manually finishes the interview.
 
 ---
 
-### 📤 Server → Client (Responses)
+### 📤 Server → Client (Responses / Confirmations)
 
-#### **Violation Detected** (Real-time warning)
+#### **Violation Detected** (Real-time warning flat format)
+Sent instantly to warn the candidate whenever a soft or hard violation accumulates.
 ```json
 {
     "event_type": "violation_detected",
     "interview_id": 62,
-    "data": {
-        "violation_type": "tab_switch",
-        "violation_count": 1,
-        "timestamp": "2026-05-06T13:20:15.123Z",
-        "details": "Tab switch detected (Attempt 1)"
-    }
-}
-```
-
-#### **Interview Suspended** (Auto-termination)
-```json
-{
-    "event_type": "interview_suspended",
-    "interview_id": 62,
-    "data": {
-        "reason": "multiple_tab_switch",
-        "warning_count": 3,
-        "max_warnings": 3,
-        "last_violation": "tab_switch",
-        "suspended_at": "2026-05-06T13:21:00.000Z"
-    }
+    "violation_type": "tab_switch", // Possible: "tab_switch", "multiple_faces", "no_face", "wrong_candidate"
+    "details": "Tab switch detected (Attempt 1)",
+    "warning_count": 1,
+    "max_warnings": 3,
+    "timestamp": "2026-05-19T05:03:35.123Z"
 }
 ```
 
@@ -105,107 +94,54 @@ Sent when the candidate manually finishes the interview.
 
 ---
 
-## 2. Admin WebSocket (`/api/admin/dashboard/ws`)
+## 2. Admin Dashboard WebSocket (`/api/admin/dashboard/ws`)
 
-All Admin events now use a **Standardized Enriched Format**. The `interview_id` is always located inside the `data` object.
+The Admin dashboard feed uses a **Standardized Enriched Format** where nested `proctoring_events` include complete count thresholds, and `dashboard_data` holds aggregated daily state.
 
 ### 📤 Server → Client (Enriched Events)
 
-#### **Format Template**
+#### **Standard Payload Format Template**
 ```json
 {
     "event_type": "EVENT_NAME",
     "data": {
         "interview_id": 62,
-        "interview_status": "CONNECTED", // Possible: SCHEDULED, CONNECTED, LIVE, DISCONNECTED, COMPLETED, EXPIRED
+        "interview_status": "LIVE", // Possible: CONNECTED, LIVE, DISCONNECTED, COMPLETED, EXPIRED
         "candidate": {
             "candidate_id": 123,
             "candidate_name": "John Doe",
             "candidate_email": "john@example.com"
         },
         "proctoring_events": {
-            "tab_switch_count": 0
+            "tab_switch_count": 1,
+            "warning_count": 1,
+            "max_warnings": 3
         },
         "dashboard_data": {
             "live": 1,
-            "proctoring_activity": "5.00%",
+            "proctoring_activity": "5.00%", // Percentage string of sessions with violations today
             "failed_today": 0,
             "passed_today": 0
         },
-        // ... event specific fields below ...
-        "timestamp": "2026-05-06T13:15:00Z"
+        "timestamp": "2026-05-19T05:03:35.123Z",
+        
+        // ... Event Specific Payload Fields (Listed Below) ...
+        "started_at": "2026-05-19T05:03:35.123Z",
+        "violation_type": "tab_switch",
+        "details": "Tab switch detected (Attempt 1)"
     }
 }
 ```
 
-#### **Event Names & Specific Fields**
+#### **Event Types & Specific Fields**
 
-| `event_type` | Trigger | Extra Fields in `data` |
-|--------------|---------|------------------------|
-| `candidate_connected` | Candidate WS connects | `timestamp` |
-| `candidate_logged_in` | Candidate sends `login` | `timestamp` |
-| `interview_started` | Candidate sends `start_interview` | `started_at` |
-| `violation_detected` | Any proctoring violation | `violation_type`, `details`, `timestamp` |
-| `interview_suspended` | Candidate is suspended | `reason`, `warning_count`, `suspended_at` |
-| `interview_completed` | Candidate finishes | `result_status`, `completed_at` |
-| `interview_expired` | Time limit exceeded | `expired_at` |
-| `candidate_disconnected` | Candidate WS disconnects | `timestamp` |
-
----
-
-## 3. Video Proctoring WebSocket (`/video/stream/{id}`)
-
-This is a high-frequency **Binary WebSocket** used for real-time AI proctoring (face detection, gaze tracking, and authentication).
-
-### 📥 Client → Server (Binary Data)
-
-The client should send raw video frames as binary data (`Blob` or `ArrayBuffer`). Frames are typically captured from a `<video>` element or `MediaStreamTrack` and sent at a rate of 1-5 frames per second.
-
-- **Format**: `Binary (JPEG/PNG)`
-- **Endpoint**: `/video/stream/{interview_id}?token=ACCESS_TOKEN`
-
-### 📤 Server → Client (Proctoring Updates)
-
-The server returns a JSON object for **every** frame processed.
-
-#### **Proctoring Update**
-```json
-{
-    "type": "proctoring_update",
-    "interview_id": 62,
-    "timestamp": 1715422800.123,
-    "data": {
-        "auth": true,               // Whether the face matches the registered candidate
-        "auth_dist": 0.42,          // Confidence score (lower is better for matching)
-        "faces": 1,                 // Number of faces detected in the frame
-        "gaze": "Gazing Center",    // Gaze direction or "WARNING: Gazing Away"
-        "warning": "",              // "MULTIPLE FACES DETECTED", "NO FACE DETECTED", etc.
-        "box": [100, 200, 300, 150] // [top, right, bottom, left] of the detected face
-    }
-}
-```
-
-#### **Possible Warnings**
-- `""` (Empty string means no issues)
-- `INITIALIZING AI...` (Models are still loading on the server)
-- `MULTIPLE FACES DETECTED`
-- `NO FACE DETECTED`
-- `SECURITY ALERT: UNAUTHORIZED PERSON` (Face does not match the candidate)
-- `WARNING: Gazing Away`
-- `Bad Frame` (Frame decoding failed)
-
----
-
-## 4. System Status WebSocket (`/status/ws`)
-
-A lightweight feed purely for real-time proctoring warnings (without the full AI coordinate data).
-
-### 📤 Server → Client (JSON)
-
-#### **Warning Feed**
-```json
-{
-    "warning": "NO FACE DETECTED"
-}
-```
-Possible values match the `warning` field in the Video Proctoring stream.
+| `event_type` | Trigger Condition | Extra Fields in `data` |
+|--------------|-------------------|------------------------|
+| `candidate_connected` | Candidate WebSocket establishes connection | `timestamp` |
+| `candidate_logged_in` | Candidate client successfully sends `login` event | `timestamp` |
+| `interview_started` | Candidate sends `start_interview` and state goes LIVE | `started_at` |
+| `violation_detected` | Proctoring violation is added | `violation_type`, `details`, `timestamp` |
+| `interview_suspended` | Candidate is auto-suspended (warnings threshold exceeded) | `reason`, `warning_count`, `max_warnings`, `last_violation`, `suspension_metadata: { auto_suspended: bool, suspended_at: datetime }` |
+| `interview_completed` | Candidate manually finishes or is completed | `result_status` (Pass/Fail), `completed_at` |
+| `interview_expired` | Session timer exceeds limit | `expired_at` |
+| `candidate_disconnected` | Candidate WebSocket loses connection | `timestamp` |

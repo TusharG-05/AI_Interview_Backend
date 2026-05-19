@@ -85,22 +85,30 @@ async def process_candidate_message(interview_id: int, websocket: WebSocket, ses
         log_warning(interview_id, f"Received non-dict message: {data}")
         return
 
+    # Check event formats
+    event_type = data.get("event_type")
     msg_type = data.get("type")
     
+    # 1. New Format: event_type = "violation_detected"
+    if event_type == "violation_detected":
+        violation_type = data.get("violation_type")
+        if violation_type in ("tab-switch", "tab_switch"):
+            await handle_tab_switch_event(interview_id, session, data)
+        elif violation_type in ("tab-return", "tab_return"):
+            await handle_tab_return_event(interview_id, session, data)
+        else:
+            await handle_proctoring_violation_event(interview_id, session, data)
+        return
+
+    # 2. Other events (lifecycle)
     if msg_type == "login":
         await handle_login_event(interview_id, session, data)
-    elif msg_type == "tab_switch":
-        await handle_tab_switch_event(interview_id, session, data)
-    elif msg_type == "tab_return":
-        await handle_tab_return_event(interview_id, session, data)
-    elif msg_type == "proctoring_violation":
-        await handle_proctoring_violation_event(interview_id, session, data)
     elif msg_type == "finish_interview":
         await handle_finish_interview_event(interview_id, websocket, session, data)
     elif msg_type == "start_interview":
         await handle_start_interview_event(interview_id, websocket, data)
     else:
-        log_debug(interview_id, f"Unhandled message type: {msg_type}")
+        log_debug(interview_id, f"Unhandled message type: {msg_type} / event_type: {event_type}")
 
 async def handle_login_event(interview_id: int, session: Session, data: dict):
     try:
