@@ -29,7 +29,20 @@ class FirebaseNotificationService:
 
         json_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
         
-        # Look for default names if env var is missing but the file exists
+        # 1. First, check if the env variable itself is a raw JSON string
+        if json_path and json_path.strip().startswith("{"):
+            try:
+                cred_dict = json.loads(json_path)
+                cred = credentials.Certificate(cred_dict)
+                firebase_admin.initialize_app(cred)
+                cls._initialized = True
+                logger.info("🔥 Firebase Admin SDK initialized successfully from Raw JSON String!")
+                return
+            except Exception as e:
+                logger.error(f"❌ Failed to parse raw Firebase JSON from environment: {e}")
+                return
+
+        # 2. Fall back to treating it as a file path
         if not json_path:
             if os.path.exists("firebase-adminsdk.json"):
                 json_path = "firebase-adminsdk.json"
@@ -47,7 +60,7 @@ class FirebaseNotificationService:
             cred = credentials.Certificate(json_path)
             firebase_admin.initialize_app(cred)
             cls._initialized = True
-            logger.info("🔥 Firebase Admin SDK initialized successfully!")
+            logger.info("🔥 Firebase Admin SDK initialized successfully from file path!")
         except Exception as e:
             logger.error(f"❌ Failed to initialize Firebase Admin SDK: {e}")
 
