@@ -4,9 +4,10 @@ from ..services import interview as interview_service
 from ..models.db_models import InterviewSession, InterviewResult, Answers, Questions, CandidateStatus, User, CodingAnswers, CodingQuestions, InterviewStatus
 from ..services.email import EmailService
 from ..services.interview_access import evaluate_interview_access
+from ..services.firebase import FirebaseNotificationService
 from ..core.database import engine
 from ..core.logger import get_logger
-from ..core.config import LINK_VALIDITY_MINUTES
+from ..core.config import LINK_VALIDITY_MINUTES, FRONTEND_URL
 from ..services.status_manager import complete_interview_session
 from ..utils import format_iso_datetime, calculate_total_score, calculate_total_marks
 from sqlmodel import Session, select
@@ -178,6 +179,68 @@ def send_result_email_util(db: Session, session: InterviewSession, result_obj: I
         logger.error(f"Failed to send result email for session {session.id}: {email_err}")
 
 
+def send_result_push_notification(db: Session, session: InterviewSession):
+    """
+    Sends a Firebase push notification to the admin when an interview result is ready.
+    Notification format:
+      Title: "Interview is completed for candidate <candidate-name>."
+      Body:  "Your result is calculated successfully.\nclick to view result - <FRONTEND_URL>/result/{interview_id}"
+    """
+    try:
+        # Fetch the admin who owns this interview session
+        admin_user = db.get(User, session.admin_id)
+        if not admin_user:
+            logger.warning(f"No admin found for session {session.id}, skipping push notification.")
+            return
+
+        admin_fcm_token = admin_user.fcm_token
+        if not admin_fcm_token:
+            logger.info(
+                f"Admin (id={session.admin_id}) has no FCM token stored. "
+                "Push notification skipped."
+            )
+            return
+
+        # Resolve candidate name
+        candidate_user = db.get(User, session.candidate_id)
+        candidate_name = candidate_user.full_name if candidate_user else "Unknown Candidate"
+
+        # Build notification payload
+        result_url = f"{FRONTEND_URL.rstrip('/')}/result/{session.id}"
+        title = f"Interview is completed for candidate {candidate_name}."
+        body = (
+            f"Your result is calculated successfully.\n"
+            f"click to view result - {result_url}"
+        )
+        data = {
+            "screen": "result",
+            "interview_id": str(session.id),
+            "result_url": result_url,
+        }
+
+        success = FirebaseNotificationService.send_push_notification(
+            token=admin_fcm_token,
+            title=title,
+            body=body,
+            data=data,
+        )
+
+        if success:
+            logger.info(
+                f"Push notification sent to admin (id={session.admin_id}) "
+                f"for completed interview {session.id}."
+            )
+        else:
+            logger.warning(
+                f"Push notification failed for admin (id={session.admin_id}), "
+                f"interview {session.id}."
+            )
+    except Exception as notif_err:
+        logger.error(
+            f"Failed to send push notification for session {session.id}: {notif_err}"
+        )
+
+
 def process_session_results(interview_id: int, db: Session = None):
     """
     Plain function: handles heavy AI processing (Whisper, LLM) after an interview finishes.
@@ -207,8 +270,9 @@ def process_session_results(interview_id: int, db: Session = None):
             _process_answer_evaluation(db, resp)
             db.commit()
 
-        score, total, theory, coding = _calculate_and_save_final_results(db, session, result_obj)
+        _calculate_and_save_final_results(db, session, result_obj)
         # _send_result_email(db, session, result_obj, score, total, len(theory), len(coding))  # Auto-send disabled by USER
+        send_result_push_notification(db, session)
 
     except Exception as e:
         logger.error(f"Session {interview_id} processing failed: {e}", exc_info=True)
