@@ -158,7 +158,7 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
         )
         
         admin_payload = {
-            "event_type": "violation_detected",
+            "event_type": "violation_messages",
             "data": {
                 **enriched_data,
                 "violation_type": violation_event.violation_type,

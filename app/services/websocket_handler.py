@@ -89,8 +89,8 @@ async def process_candidate_message(interview_id: int, websocket: WebSocket, ses
     event_type = data.get("event_type")
     msg_type = data.get("type")
     
-    # 1. New Format: event_type = "violation_detected"
-    if event_type == "violation_detected":
+    # 1. New Format: event_type = "violation_messages"
+    if event_type == "violation_messages":
         violation_type = data.get("violation_type")
         if violation_type in ("tab-switch", "tab_switch"):
             await handle_tab_switch_event(interview_id, session, data)

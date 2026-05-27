@@ -26,7 +26,7 @@ class ViolationEvent(BaseModel):
     - no_face
     - wrong_candidate
     """
-    event_type: str = "violation_detected"
+    event_type: str = "violation_messages"
     interview_id: int
     violation_type: str  # 'tab_switch', 'multiple_faces', 'no_face', 'wrong_candidate'
     details: Optional[str] = None
@@ -83,7 +83,7 @@ class InterviewStartedEvent(BaseModel):
 
 class ViolationDetectedEvent(BaseModel):
     """Legacy: Use ViolationEvent"""
-    event_type: Literal["violation_detected"] = "violation_detected"
+    event_type: Literal["violation_messages"] = "violation_messages"
     interview_id: int
     data: Dict[str, Any]
 
