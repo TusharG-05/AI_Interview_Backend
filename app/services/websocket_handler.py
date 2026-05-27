@@ -145,12 +145,36 @@ async def handle_tab_switch_event(interview_id: int, session: Session, data: dic
             session_obj.tab_switch_count += 1
             session_obj.tab_switch_timestamp = now
             session_obj.tab_warning_active = True
-            
+
+            # Build a context-aware message.
+            # At this point tab_switch_count is already incremented;
+            # add_violation will also increment warning_count by 1.
+            new_warning_count = session_obj.warning_count + 1
+            max_w = session_obj.max_warnings
+
+            if new_warning_count >= max_w:
+                details_msg = (
+                    f"Tab switch limit reached ({new_warning_count}/{max_w}). "
+                    f"Your interview is being suspended due to repeated tab switching."
+                )
+            elif new_warning_count == max_w - 1:
+                details_msg = (
+                    f"⚠️ Final warning ({new_warning_count}/{max_w}): You switched tabs. "
+                    f"One more tab switch will immediately suspend your interview."
+                )
+            else:
+                remaining = max_w - new_warning_count
+                details_msg = (
+                    f"Warning {new_warning_count}/{max_w}: You switched tabs. "
+                    f"Return to the interview page now. "
+                    f"{remaining} more tab switch(es) allowed before suspension."
+                )
+
             add_violation(
                 session=session,
                 interview_session=session_obj,
                 event_type="tab_switch",
-                details=f"Tab switch detected (Attempt {session_obj.tab_switch_count})",
+                details=details_msg,
                 force_severity="warning"
             )
             
@@ -229,6 +253,14 @@ async def handle_proctoring_violation_event(interview_id: int, session: Session,
         "unauthorized_person": "SECURITY ALERT: UNAUTHORIZED PERSON",
     }
 
+    # Human-readable messages shown to the candidate for each violation type
+    VIOLATION_HUMAN_MESSAGES = {
+        "no_face":             "No face detected. Please stay visible in front of the camera.",
+        "multiple_faces":      "Multiple faces detected. Only the candidate should be visible in the frame.",
+        "gaze_away":           "Looking away from the screen detected. Please keep your eyes on the interview screen.",
+        "unauthorized_person": "Unrecognized face detected. Please ensure you are the registered candidate.",
+    }
+
     try:
         raw_type = data.get("violation_type", "")
         event_type = VIOLATION_TYPE_MAP.get(raw_type)
@@ -241,7 +273,8 @@ async def handle_proctoring_violation_event(interview_id: int, session: Session,
             )
             return
 
-        details = data.get("details") or raw_type
+        # Use meaningful human-readable message; fall back to frontend-supplied details
+        details = VIOLATION_HUMAN_MESSAGES.get(raw_type) or data.get("details") or raw_type
 
         session_obj = session.exec(
             select(InterviewSession).where(InterviewSession.id == interview_id)

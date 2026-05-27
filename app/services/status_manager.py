@@ -133,12 +133,20 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
         
         violation_type = violation_type_map.get(event_type, event_type.lower())
         
+        # Resolve the most informative details string available.
+        # Priority: caller-supplied details > VIOLATION_CANDIDATE_MESSAGES > raw event_type.
+        canonical_details = (
+            details
+            or VIOLATION_CANDIDATE_MESSAGES.get(event_type)
+            or event_type
+        )
+
         # Create violation event for candidate
         violation_event = ViolationEvent(
             violation_type=violation_type,
             interview_id=interview_id,
             timestamp=datetime.now(timezone.utc),
-            details=details,
+            details=canonical_details,
             warning_count=warning_count,
             max_warnings=max_warnings
         )
@@ -345,20 +353,51 @@ def _fire_async_broadcast(coro):
     except Exception as e:
         logger.error(f"Failed to fire async broadcast: {e}")
 
+# ---------------------------------------------------------------------------
 # Violation severity mapping
+#
+# Only "tab_switch" carries "warning" severity — it is the SOLE trigger for
+# the warning counter and automatic interview suspension.
+#
+# All face / gaze / proctoring violations are "info": they are recorded in
+# the DB and shown as alert messages to the candidate, but they will NEVER
+# increment the warning counter or cause suspension.
+# ---------------------------------------------------------------------------
 VIOLATION_SEVERITY = {
-    # Soft violations - accumulate warnings
-    "gaze_away": "warning",
-    "brief_disconnect": "warning",
-    "low_audio": "info",
-    "connection_unstable": "info",
-    
-    # Hard violations - accumulate warnings
-    "MULTIPLE FACES DETECTED": "warning",
-    "NO FACE DETECTED": "info",
+    # ── Tab switch ────────────────────────────────────────────────────────
+    # Only violation that accumulates warnings and can suspend the interview.
     "tab_switch": "warning",
+
+    # ── Face & gaze violations ────────────────────────────────────────────
+    # Recorded + alerted to candidate, but never cause suspension.
+    "gaze_away":                           "info",
+    "MULTIPLE FACES DETECTED":             "info",
+    "NO FACE DETECTED":                    "info",
     "SECURITY ALERT: UNAUTHORIZED PERSON": "info",
+
+    # ── Connection / device issues ────────────────────────────────────────
+    "brief_disconnect":    "info",
+    "low_audio":           "info",
+    "connection_unstable": "info",
     "unauthorized_device": "info",
+}
+
+# ---------------------------------------------------------------------------
+# Human-readable messages sent to the candidate for each violation type.
+# Used as the canonical `details` string in ViolationEvent payloads.
+# Handlers may override these with context-specific messages
+# (e.g. tab-switch messages include the current count / remaining warnings).
+# ---------------------------------------------------------------------------
+VIOLATION_CANDIDATE_MESSAGES = {
+    "tab_switch":                           "Tab switch detected. Stay on the interview page.",
+    "NO FACE DETECTED":                     "No face detected. Please stay visible in front of the camera.",
+    "MULTIPLE FACES DETECTED":              "Multiple faces detected. Only the candidate should be in view.",
+    "gaze_away":                            "Looking away from the screen detected. Please keep your eyes on the interview screen.",
+    "SECURITY ALERT: UNAUTHORIZED PERSON":  "Unrecognized face detected. Ensure you are the registered candidate.",
+    "brief_disconnect":                     "Brief connection interruption detected.",
+    "connection_unstable":                  "Unstable connection detected. Please check your internet.",
+    "low_audio":                            "Low audio level detected. Please check your microphone.",
+    "unauthorized_device":                  "Unauthorized device usage detected.",
 }
 
 
