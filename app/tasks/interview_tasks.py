@@ -208,10 +208,7 @@ def send_result_push_notification(db: Session, session: InterviewSession):
         # Build notification payload
         result_url = f"{FRONTEND_URL.rstrip('/')}/result/{session.id}"
         title = f"{candidate_name}'s interview completed"
-        body = (
-            f"Your result is calculated successfully.\n"
-            f"click to view result - {result_url}"
-        )
+        body = "Your result is calculated successfully."
         data = {
             "screen": "result",
             "interview_id": str(session.id),
