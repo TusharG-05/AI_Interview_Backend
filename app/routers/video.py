@@ -85,7 +85,114 @@ async def websocket_video_stream(
             pass
 
 
-# --- WebRTC Signaling ---
+# ─────────────────────────────────────────────────────────────────────────────
+# Hybrid Snapshot Proctoring Endpoint
+#
+# Called by the frontend every 30-90 seconds with a single JPEG captured from
+# the webcam canvas.  No live video stream is needed — all 30fps face/gaze
+# detection runs in the browser (MediaPipe JS); this endpoint handles the
+# heavyweight server-side ArcFace identity verification that the browser
+# cannot do on its own.
+#
+# Flow:
+#   1. Frontend captures a JPEG snapshot via canvas.toBlob() or equivalent.
+#   2. Frontend POSTs the image to this endpoint (multipart/form-data).
+#   3. Backend loads the candidate's enrolled face embedding from the DB.
+#   4. Backend passes the frame through CameraService → FaceRecognizer.
+#   5. CameraService auto-persists violations and broadcasts WS events if
+#      the person in frame does not match the enrolled candidate.
+#
+# Branch: feat/hybrid-snapshot-proctoring
+# ─────────────────────────────────────────────────────────────────────────────
+
+from fastapi import UploadFile, File
+from ..auth.dependencies import get_current_user
+
+
+@router.post("/snapshot/{interview_id}", response_model=ApiResponse[dict])
+async def proctoring_snapshot(
+    interview_id: int,
+    file: UploadFile = File(..., description="JPEG/PNG snapshot captured from candidate webcam"),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    **Hybrid Snapshot Proctoring** — Periodic identity verification.
+
+    The frontend sends a single webcam snapshot (JPEG/PNG) every 30-90
+    seconds while the interview is active.  The backend runs ArcFace /
+    SFace identity verification against the candidate's enrolled selfie.
+
+    Returns:
+    - `is_authorized`  – whether the face matches the enrolled candidate.
+    - `faces_detected` – number of faces found in the snapshot.
+    - `warning`        – any proctoring warning generated (empty string = OK).
+    """
+    from sqlmodel import Session, select
+    from ..core.database import engine
+    from ..models.db_models import InterviewSession
+
+    # 1. Validate content type
+    if not file.content_type or not file.content_type.startswith("image/"):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="File must be an image (JPEG/PNG)")
+
+    image_bytes = await file.read()
+
+    # 2. Load the camera service (initializes detectors lazily if not already running)
+    camera_service = CameraService()
+    if not camera_service.running:
+        camera_service.start()
+
+    # 3. Ensure the candidate's enrolled face embedding is registered for this session
+    try:
+        with Session(engine) as db_session:
+            interview_session = db_session.exec(
+                select(InterviewSession).where(InterviewSession.id == interview_id)
+            ).first()
+
+            if not interview_session:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404, detail=f"Interview session {interview_id} not found")
+
+            # Only register embedding if the face detector is ready and embedding exists
+            if camera_service.face_detector:
+                from ..models.db_models import User as UserModel
+                candidate = db_session.get(UserModel, interview_session.candidate_id)
+                if candidate and getattr(candidate, "face_embedding", None):
+                    camera_service.face_detector.register_session_identity(
+                        interview_id, candidate.face_embedding
+                    )
+                    logger.debug(f"Snapshot: Face embedding registered for session {interview_id}")
+                else:
+                    logger.warning(
+                        f"Snapshot: No enrolled face embedding for session {interview_id}; "
+                        "identity verification skipped."
+                    )
+    except Exception as e:
+        logger.error(f"Snapshot: Failed to load embedding for session {interview_id}: {e}")
+
+    # 4. Process snapshot through AI pipeline (face detection + identity verification)
+    #    CameraService.process_external_frame() handles:
+    #      - Decoding the image bytes
+    #      - Running MediaPipe face detection
+    #      - Running ArcFace / SFace cosine similarity check
+    #      - Persisting violations to DB (with grace period + cooldown throttling)
+    #      - Broadcasting violation_messages WebSocket events to candidate + admin
+    result = camera_service.process_external_frame(image_bytes, interview_id=interview_id)
+
+    return ApiResponse(
+        status_code=200,
+        data={
+            "interview_id": interview_id,
+            "is_authorized": bool(result.get("auth", False)),
+            "faces_detected": int(result.get("faces", 0)),
+            "warning": result.get("warning", ""),
+        },
+        message="Snapshot processed successfully",
+    )
+
+
+
 # aiortc requires native system libs (libsrtp2, libav) that are unavailable on some
 # platforms (e.g. HF Spaces). Import it conditionally so startup never crashes.
 try:
