@@ -201,9 +201,13 @@ def send_result_push_notification(db: Session, session: InterviewSession):
             )
             return
 
+        # Resolve candidate name
+        candidate_user = db.get(User, session.candidate_id)
+        candidate_name = candidate_user.full_name if candidate_user else "Candidate"
+
         # Build notification payload
         result_url = f"{FRONTEND_URL.rstrip('/')}/result/{session.id}"
-        title = "Interview Complete"
+        title = f"{candidate_name}'s interview completed"
         body = (
             f"Your result is calculated successfully.\n"
             f"click to view result - {result_url}"
