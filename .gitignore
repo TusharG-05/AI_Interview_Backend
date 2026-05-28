@@ -37,7 +37,12 @@ env.bak/
 venv.bak/
 .python-version
 .env*
-! .env.example
+!.env.example
+
+# === DB Backups & Coverage ===
+*.sql
+.coverage
+tmp/
 
 # === IDEs & Editors ===
 .idea/
