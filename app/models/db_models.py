@@ -22,6 +22,7 @@ class InterviewStatus(str, Enum):
     CANCELLED = "CANCELLED"
 
 class InterviewRound(str, Enum):
+    HR_ROUND = "HR_ROUND"
     ROUND_1 = "ROUND_1"
     ROUND_2 = "ROUND_2"
     ROUND_3 = "ROUND_3"
