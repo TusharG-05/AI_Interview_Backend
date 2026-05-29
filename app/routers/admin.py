@@ -2591,6 +2591,7 @@ async def update_user(
     role: Optional[str] = Form(None),
     team_id: Optional[int] = Form(None),
     resume: Optional[UploadFile] = File(None),
+    profile_image: Optional[UploadFile] = File(None),
     current_user: User = Depends(get_admin_user),
     session: Session = Depends(get_session)
 ):
@@ -2657,6 +2658,59 @@ async def update_user(
         except Exception as e:
             logger.error(f"Failed to update resume on Cloudinary: {e}")
             raise HTTPException(status_code=500, detail="Failed to save resume")
+
+    # Handle optional profile image upload (update selfie/profile picture)
+    if profile_image:
+        if profile_image.content_type and not (
+            profile_image.content_type.startswith("image/") or 
+            profile_image.content_type == "application/octet-stream"
+        ):
+            raise HTTPException(status_code=400, detail="Invalid image format")
+
+        try:
+            image_bytes = await profile_image.read()
+            if image_bytes:
+                user.profile_image_bytes = image_bytes
+
+                # Attempt to generate face embeddings (best-effort)
+                if not IS_ORCHESTRATOR:
+                    try:
+                        from deepface import DeepFace
+                        import tempfile
+                        embeddings_map = {}
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                            tmp.write(image_bytes)
+                            tmp_path = tmp.name
+                        try:
+                            arc_objs = DeepFace.represent(img_path=tmp_path, model_name="ArcFace", enforce_detection=False)
+                            if arc_objs:
+                                embeddings_map["ArcFace"] = arc_objs[0].get("embedding")
+                        finally:
+                            try:
+                                os.remove(tmp_path)
+                            except Exception:
+                                pass
+
+                        if embeddings_map:
+                            import json as _json
+                            user.face_embedding = _json.dumps(embeddings_map)
+                    except Exception as e:
+                        logger.warning(f"Profile embedding generation failed: {e}")
+
+                # Upload profile image to Cloudinary (best-effort)
+                try:
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(get_cloudinary_service().upload_image, image_bytes, folder="profile_pictures")
+                        cloudinary_url = future.result(timeout=15)
+                        if cloudinary_url:
+                            user.profile_image = cloudinary_url
+                except Exception as e:
+                    logger.error(f"Cloudinary upload failed: {e}")
+
+        except Exception as e:
+            logger.error(f"Failed to update profile image: {e}")
+            raise HTTPException(status_code=500, detail="Failed to save profile image")
 
     session.add(user)
     try:
