@@ -1286,7 +1286,7 @@ async def list_interviews(
                 "max_warnings": s.max_warnings or 3,
                 "is_suspended": s.is_suspended or False,
                 "suspension_reason": s.suspension_reason,
-                "suspended_at": s.suspended_at,
+                "suspended_at": format_iso_datetime(s.suspended_at),
                 "allow_copy_paste": s.allow_copy_paste or False,
                 "allow_question_navigate": s.allow_question_navigate or False,
                 "allow_proctoring": s.allow_proctoring if s.allow_proctoring is not None else True,
