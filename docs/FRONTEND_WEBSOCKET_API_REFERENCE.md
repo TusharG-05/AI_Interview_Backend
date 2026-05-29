@@ -1,26 +1,45 @@
 # Frontend WebSocket API Reference
 
-This document provides a clean, comprehensive reference of all WebSocket request and response bodies, query parameters, authentication formats, and exact URL routing for both the **Candidate** and **Admin Dashboard** streams.
+This document provides a clean, comprehensive reference of all WebSocket request and response bodies, query parameters, authentication formats, and exact URL routing for the **Candidate** and **Admin Dashboard** real-time streams.
 
 ---
 
-## Overview of WebSocket Endpoints
+## 🏗️ Overview of WebSocket Streams
 
-| Endpoint Stream | Protocol Path | Auth Requirement | Purpose |
-|-----------------|---------------|------------------|---------|
-| **1. Candidate WS** | `ws://localhost:8000/ws/api/interview/{interview_id}?token={token}` | JWT Query Param | Client-side violations, login, start, and finish |
-| **2. Admin Dashboard WS** | `ws://localhost:8000/api/admin/dashboard/ws?token={token}` | JWT Query Param / Cookie | Real-time monitoring across all active interviews |
+The system orchestrates **two distinct WebSocket streams** to handle real-time candidate actions, proctoring events, and admin monitoring.
 
-*Note: Replace `ws://` with `wss://` in production secure environments.*
+| Stream Endpoint | Protocol Path | Auth Requirement | Transport Format | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| **1. Candidate Event Stream** | `ws://localhost:8000/ws/api/interview/{id}?token={token}` | JWT Query or Cookie | JSON Text | Login, start/resume, client-side violations, and finish. |
+| **2. Global Admin Stream** | `ws://localhost:8000/api/admin/dashboard/ws?token={token}` | JWT Query or Cookie | JSON Text | Aggregated real-time monitoring across all active interviews. |
+
+> [!NOTE]
+> Replace `ws://` with `wss://` in production secure environments to enforce SSL/TLS encryption.
 
 ---
 
-## 1. Candidate WebSocket (`/ws/api/interview/{interview_id}`)
+## 🔐 Authentication & Handshake Policy
 
-### 📥 Client → Server (Requests / Triggers)
+All WebSocket connections undergo instant JWT validation before connection acceptance. 
+
+1.  **Token Extraction Order**:
+    *   **Priority 1**: Query parameter `token` (e.g., `/ws?token=eyJhbGci...`)
+    *   **Priority 2**: `access_token` Cookie parsed from the connection headers.
+2.  **Handshake Rejection Codes**:
+    *   `1008 Policy Violation`: Missing or invalid token.
+    *   `4003 Forbidden`: Authenticated candidate attempting to stream/access another candidate's session ID.
+    *   `1011 Server Error`: Internal state or connection failures.
+
+---
+
+## 👥 1. Candidate Event Stream (`/ws/api/interview/{interview_id}`)
+
+Binds the candidate to the active interview session, processing status transitions and client-side warnings.
+
+### 📥 Client → Server (Requests)
 
 #### **Candidate Login**
-Sent immediately after establishing a WebSocket connection to identify the candidate.
+Sent immediately after establishing the WebSocket connection to identify and register the candidate session.
 ```json
 {
     "type": "login",
@@ -29,27 +48,30 @@ Sent immediately after establishing a WebSocket connection to identify the candi
 ```
 
 #### **Start / Resume Interview**
-Sent when the candidate starts the interview or resumes after a disconnection. This transitions the interview session to a `LIVE` state in the database.
+Sent when the candidate clicks the "Start Interview" button or recovers from a connection drop. This sets the database state to `LIVE` and registers the candidate's `start_time`.
 ```json
 {
     "type": "start_interview",
     "interview_id": 62
 }
 ```
-#### **Proctoring Violation (Client-Side Detection)**
-Sent by the frontend if on-device AI/ML models (e.g. MediaPipe or face-api.js) detect facial, gaze, tab-switch, or tab-return violations.
 
-For `tab-switch` and `tab-return`, the server manages warning accumulation and a **30-second grace window** validation before session termination.
+#### **Proctoring Violation (Client-Side Detection)**
+Sent by the frontend if on-device model libraries (e.g. MediaPipe or face-api.js) detect structural cheating attempts.
 ```json
 {
     "event_type": "violation_detected",
-    "violation_type": "no_face", // Acceptable: "no_face", "multiple_faces", "gaze_away", "unauthorized_person", "tab-switch", "tab-return"
-    "details": "No face detected in video feed" // Human-readable description
+    "violation_type": "no_face", 
+    // Accepted: "no_face", "multiple_faces", "gaze_away", "unauthorized_person", "tab-switch", "tab-return"
+    "details": "No face detected in webcam feed"
 }
 ```
 
+> [!IMPORTANT]
+> **Tab Switch Grace Period**: When `violation_type` is `"tab-switch"`, a stateful warning is registered. If the candidate does not return (i.e. send `"tab-return"`) within a **30-second grace window**, the server automatically terminates and suspends the session.
+
 #### **Finish Interview**
-Sent when the candidate manually finishes the interview.
+Sent when the candidate manually completes the questionnaire. Triggers background evaluation.
 ```json
 {
     "type": "finish_interview",
@@ -59,19 +81,18 @@ Sent when the candidate manually finishes the interview.
 
 ---
 
-### 📤 Server → Client (Responses / Confirmations)
+### 📤 Server → Client (Confirmations / Notifications)
 
-#### **Violation Detected** (Real-time warning flat format)
-Sent instantly to warn the candidate whenever a soft or hard violation accumulates.
+#### **Violation Acknowledged (Warning Alert)**
+Sent back to warn the candidate whenever a violation registers. It indicates how close they are to suspension.
 ```json
 {
-    "event_type": "violation_detected",
+    "violation_type": "no_face",
     "interview_id": 62,
-    "violation_type": "tab_switch", // Possible: "tab_switch", "multiple_faces", "no_face", "wrong_candidate"
-    "details": "Tab switch detected (Attempt 1)",
+    "timestamp": "2026-05-19T05:03:35.123Z",
+    "details": "No face detected in webcam feed",
     "warning_count": 1,
-    "max_warnings": 3,
-    "timestamp": "2026-05-19T05:03:35.123Z"
+    "max_warnings": 3
 }
 ```
 
@@ -94,19 +115,19 @@ Sent instantly to warn the candidate whenever a soft or hard violation accumulat
 
 ---
 
-## 2. Admin Dashboard WebSocket (`/api/admin/dashboard/ws`)
+## 🌍 2. Global Admin Stream (`/api/admin/dashboard/ws`)
 
-The Admin dashboard feed uses a **Standardized Enriched Format** where nested `proctoring_events` include complete count thresholds, and `dashboard_data` holds aggregated daily state.
+Enables real-time monitoring across **all active interview sessions**. It utilizes a **Standardized Enriched Format** containing `proctoring_events` counters and day-aggregated aggregate `dashboard_data`.
 
-### 📤 Server → Client (Enriched Events)
+### 📤 Server → Client (Enriched Event Broadcaster)
 
-#### **Standard Payload Format Template**
+#### **Standard Enriched Payload Schema**
 ```json
 {
     "event_type": "EVENT_NAME",
     "data": {
         "interview_id": 62,
-        "interview_status": "LIVE", // Possible: CONNECTED, LIVE, DISCONNECTED, COMPLETED, EXPIRED
+        "interview_status": "LIVE", // CONNECTED, LIVE, DISCONNECTED, COMPLETED, EXPIRED
         "candidate": {
             "candidate_id": 123,
             "candidate_name": "John Doe",
@@ -118,14 +139,14 @@ The Admin dashboard feed uses a **Standardized Enriched Format** where nested `p
             "max_warnings": 3
         },
         "dashboard_data": {
-            "live": 1,
-            "proctoring_activity": "5.00%", // Percentage string of sessions with violations today
+            "live": 2,                     // Total active interviews currently running
+            "proctoring_activity": "5.00%", // Daily percentage of interviews with violations
             "failed_today": 0,
-            "passed_today": 0
+            "passed_today": 1
         },
         "timestamp": "2026-05-19T05:03:35.123Z",
         
-        // ... Event Specific Payload Fields (Listed Below) ...
+        // ... Event Specific Payload Fields (Dynamically Appended Below) ...
         "started_at": "2026-05-19T05:03:35.123Z",
         "violation_type": "tab_switch",
         "details": "Tab switch detected (Attempt 1)"
@@ -133,15 +154,32 @@ The Admin dashboard feed uses a **Standardized Enriched Format** where nested `p
 }
 ```
 
-#### **Event Types & Specific Fields**
+#### **Trigger Event Scenarios & Dynamic Fields**
 
-| `event_type` | Trigger Condition | Extra Fields in `data` |
-|--------------|-------------------|------------------------|
-| `candidate_connected` | Candidate WebSocket establishes connection | `timestamp` |
-| `candidate_logged_in` | Candidate client successfully sends `login` event | `timestamp` |
-| `interview_started` | Candidate sends `start_interview` and state goes LIVE | `started_at` |
-| `violation_detected` | Proctoring violation is added | `violation_type`, `details`, `timestamp` |
-| `interview_suspended` | Candidate is auto-suspended (warnings threshold exceeded) | `reason`, `warning_count`, `max_warnings`, `last_violation`, `suspension_metadata: { auto_suspended: bool, suspended_at: datetime }` |
-| `interview_completed` | Candidate manually finishes or is completed | `result_status` (Pass/Fail), `completed_at` |
-| `interview_expired` | Session timer exceeds limit | `expired_at` |
-| `candidate_disconnected` | Candidate WebSocket loses connection | `timestamp` |
+The backend appends specific attributes to the `data` block based on the type of event:
+
+| `event_type` | Trigger Scenario | Dynamic Fields Appended to `data` |
+| :--- | :--- | :--- |
+| **`candidate_connected`** | Candidate event stream handshake completes. | `timestamp` |
+| **`candidate_logged_in`** | Candidate client successfully sends `login` event. | `timestamp` |
+| **`interview_started`** | Candidate sends `start_interview` and session goes LIVE. | `started_at` |
+| **`violation_detected`** | A soft or hard proctoring violation is saved. | `violation_type`, `details`, `timestamp` |
+| **`interview_suspended`** | Candidate warnings exceed threshold (session terminated). | `reason`, `warning_count`, `max_warnings`, `last_violation`, `suspension_metadata: { auto_suspended: true, suspended_at: datetime }` |
+| **`interview_completed`** | Candidate manually completes interview or finishes. | `result_status` (Pass/Fail), `completed_at` |
+| **`interview_expired`** | Session scheduler time windows expire. | `expired_at` |
+| **`candidate_disconnected`**| Candidate closes/drops WebSocket connection. | `timestamp` |
+
+---
+
+## ⚠️ Proctoring Violation Classifications
+
+When presenting or integrating the proctoring stream, keep in mind how the backend classifies and reacts to different incoming violation types:
+
+| Violation Code | Default Severity | Action Taken |
+| :--- | :--- | :--- |
+| **`tab_switch`** | `warning` | Increments session `warning_count`. Triggers auto-suspension if threshold reached. |
+| **`MULTIPLE FACES DETECTED`** | `warning` | Increments session `warning_count`. Triggers auto-suspension if threshold reached. |
+| **`NO FACE DETECTED`** | `info` | Logs event in proctoring audit trail. Does NOT increment warnings. |
+| **`SECURITY ALERT: UNAUTHORIZED PERSON`**| `info` | Logs event in proctoring audit trail (Face mismatch). |
+| **`gaze_away`** | `warning` | Increments session `warning_count` (Looks away from screen). |
+| **`low_audio`** | `info` | Logs microphone state warning. |

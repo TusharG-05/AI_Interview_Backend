@@ -193,14 +193,15 @@ async def _broadcast_interview_suspended_event(interview_id: int, violation_type
         
         # Create suspension event payload and include enriched data
         enriched_data = get_enriched_admin_data(interview_id)
+        proctoring_data = enriched_data.get("proctoring_events", {})
 
         suspension_payload = {
             "event_type": "interview_suspended",
             "data": {
                 **enriched_data,
                 "reason": "max_warnings_exceeded",
-                "warning_count": tab_switch_count,
-                "max_warnings": tab_switch_count,
+                "warning_count": proctoring_data.get("warning_count", tab_switch_count),
+                "max_warnings": proctoring_data.get("max_warnings", tab_switch_count),
                 "last_violation": violation_type,
                 "suspension_metadata": {
                     "auto_suspended": True,

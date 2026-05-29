@@ -1279,7 +1279,18 @@ async def list_interviews(
             interview_round=s.interview_round.value if s.interview_round else None,
             result_status=(s.result.result_status if s.result else "PENDING"),
             allow_proctoring=s.allow_proctoring if s.allow_proctoring is not None else True,
-            proctoring_event={"tab_switch_count": s.tab_switch_count or 0}
+            proctoring_event={
+                "id": s.id,
+                "warning_count": s.warning_count or 0,
+                "tab_switch_count": s.tab_switch_count or 0,
+                "max_warnings": s.max_warnings or 3,
+                "is_suspended": s.is_suspended or False,
+                "suspension_reason": s.suspension_reason,
+                "suspended_at": s.suspended_at,
+                "allow_copy_paste": s.allow_copy_paste or False,
+                "allow_question_navigate": s.allow_question_navigate or False,
+                "allow_proctoring": s.allow_proctoring if s.allow_proctoring is not None else True,
+            }
         ))
     return ApiResponse(
         status_code=200,

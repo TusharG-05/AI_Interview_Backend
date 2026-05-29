@@ -25,7 +25,16 @@ class ProgressInfo(BaseModel):
     current_question_id: Optional[int] = None
 
 class ProctoringEventResponse(BaseModel):
-    tab_switch_count: int
+    id: Optional[int] = None
+    warning_count: int = 0
+    tab_switch_count: int = 0
+    max_warnings: int = 3
+    is_suspended: bool = False
+    suspension_reason: Optional[str] = None
+    suspended_at: Optional[str] = None
+    allow_copy_paste: bool = False
+    allow_question_navigate: bool = False
+    allow_proctoring: bool = True
 
 class AdminInterviewsList(BaseModel):
     id: int
