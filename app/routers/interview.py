@@ -513,6 +513,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,
         tab_warning_active=session.tab_warning_active or False,
+        warning_count=session.warning_count or 0,
+        max_warnings=session.max_warnings or 3,
         allow_proctoring=getattr(session, "allow_proctoring", True),
         curr_interview_timer=curr_interview_timer,
         curr_question_timer=curr_question_timer,
@@ -774,7 +776,7 @@ async def access_interview(
             interview_session=session,
             new_status=CandidateStatus.LINK_ACCESSED
         )
-    
+
     return_msg = "Access Granted"
     schedule_time = session.schedule_time
     if schedule_time.tzinfo is None:

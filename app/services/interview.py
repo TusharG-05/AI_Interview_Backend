@@ -137,7 +137,12 @@ def _is_pronoun_definition(sentence_lower: str) -> bool:
 
 
 def _sanitize_feedback_no_answer_leak(feedback: str, score_out_of_10: Any, question: str) -> str:
-    """Keep dynamic feedback but remove answer-revealing statements."""
+    """Keep dynamic feedback but remove answer-revealing statements.
+
+    Additionally, ensure the feedback addresses the user directly by replacing any
+    occurrence of "The Candidate response" (case‑insensitive) with "Your response".
+    We also replace generic "the candidate" mentions with "you" where appropriate.
+    """
     if not feedback or not str(feedback).strip():
         return _safe_feedback_from_score(score_out_of_10)
 
@@ -185,9 +190,31 @@ def _sanitize_feedback_no_answer_leak(feedback: str, score_out_of_10: Any, quest
         return _safe_feedback_from_score(score_out_of_10)
 
     sanitized = " ".join(safe_sentences).strip()
+    # Replace third‑person candidate phrasing with second‑person wording
+    sanitized = re.sub(r"(?i)\bthe candidate response\b", "Your response", sanitized)
+    sanitized = re.sub(r"(?i)\bthe candidate\b", "you", sanitized)
     if len(sanitized) > 500:
         sanitized = sanitized[:500].rsplit(" ", 1)[0].rstrip(".,;: ") + "."
     return sanitized
+
+
+def _augment_feedback(parsed: dict, answer: str, question: str) -> dict:
+    """Append a gentle hint about missing key concepts without revealing solution.
+
+    The hint is added only when the extracted target term from the question is
+    not present in the user's answer (checked via `_contains_target_keyword`).
+    This keeps feedback constructive while avoiding direct answer leakage.
+    """
+    if not parsed:
+        return parsed
+    feedback = parsed.get("feedback", "")
+    target_term = _extract_target_term(question)
+    if target_term and not _contains_target_keyword(answer.lower(), target_term):
+        hint = f" You missed mentioning the key concept '{target_term}'."
+        if hint.strip() not in feedback:
+            feedback = feedback.rstrip('.') + '.' + hint
+        parsed["feedback"] = feedback
+    return parsed
 
 
 def evaluate_answer_content(
@@ -276,6 +303,8 @@ def evaluate_answer_content(
                 )
                 parsed = _parse_llm_result(completion.choices[0].message.content)
                 if parsed:
+                    # Add hint about missing key concept if applicable
+                    parsed = _augment_feedback(parsed, answer, question)
                     logger.info(f"✅ Groq evaluation successful on attempt {attempt + 1}")
                     return parsed
             except Exception as e:
@@ -298,7 +327,10 @@ def evaluate_answer_content(
                         temperature=0.1
                     )
                     parsed = _parse_llm_result(response.choices[0].message.content)
-                    if parsed: return parsed
+                    if parsed:
+                        # Add hint about missing key concept if applicable
+                        parsed = _augment_feedback(parsed, answer, question)
+                        return parsed
                 except Exception as e:
                     logger.warning(f"HF attempt {attempt + 1} failed: {e}")
 
@@ -307,7 +339,10 @@ def evaluate_answer_content(
                 evaluation_chain = evaluation_prompt | local_llm
                 response = evaluation_chain.invoke({"question": question, "answer": answer})
                 parsed = _parse_llm_result(response.content)
-                if parsed: return parsed
+                if parsed:
+                    # Add hint about missing key concept if applicable
+                    parsed = _augment_feedback(parsed, answer, question)
+                    return parsed
             else:
                 logger.warning("Orchestrator mode: Skipping local LLM fallback.")
 
@@ -328,6 +363,28 @@ def evaluate_answer_content(
 # Code Submission Evaluation
 # ---------------------------------------------------------------------------
 
+
+def _chain_invoke_code(chain, vars_: dict) -> dict:
+    """Run a LangChain chain and parse JSON response for code evaluation."""
+    import json as _json
+    raw = chain.invoke(vars_).content.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        lines = [l for l in lines if not l.startswith("```")]
+        raw = "\n".join(lines).strip()
+    try:
+        return _json.loads(raw)
+    except _json.JSONDecodeError:
+        return {
+            "feedback": raw,
+            "score": 0.0,
+            "correctness": "unknown",
+            "time_complexity": "unknown",
+            "space_complexity": "unknown",
+            "issues": [],
+        }
+
+
 def evaluate_code_submission(
     problem_title: str,
     problem_statement: str,
@@ -335,16 +392,15 @@ def evaluate_code_submission(
     question_marks: float = 10.0,
 ) -> Dict[str, Union[str, float]]:
     """Evaluate a candidate's code submission for a coding problem.
-    
+
     Returns a dict with: feedback, score, correctness, time_complexity,
     space_complexity, issues.
     """
     import json as _json
 
     def _scale_code_result(result_dict: dict) -> dict:
-        """Helper to scale score and ensure all keys exist."""
+        """Scale score and ensure all keys exist."""
         score_raw = result_dict.get("score", 0.0)
-        # Assuming code LLM returns score out of 10 by default
         result_dict["score"] = calculate_scaled_score(score_raw, question_marks)
         result_dict.setdefault("correctness", "unknown")
         result_dict.setdefault("time_complexity", "unknown")
@@ -352,24 +408,33 @@ def evaluate_code_submission(
         result_dict.setdefault("issues", [])
         return result_dict
 
-    def _chain_invoke(chain, vars_: dict) -> dict:
-        """Run chain and parse JSON response."""
-        raw = chain.invoke(vars_).content.strip()
-        if raw.startswith("```"):
-            lines = raw.split("\n")
-            lines = [l for l in lines if not l.startswith("```")]
-            raw = "\n".join(lines).strip()
-        try:
-            return _json.loads(raw)
-        except _json.JSONDecodeError:
-            return {
-                "feedback": raw,
-                "score": 0.0,
-                "correctness": "unknown",
-                "time_complexity": "unknown",
-                "space_complexity": "unknown",
-                "issues": [],
-            }
+    def _augment_code_feedback(parsed: dict, submitted_code: str) -> dict:
+        """Append hints about missing semicolons/line-endings to LLM feedback.
+
+        Uses a simple heuristic: statement-like lines in C/Java/JS-style
+        languages that don't end with ';' are flagged as potentially missing
+        a terminating semicolon.
+        """
+        if not parsed:
+            return parsed
+        feedback = parsed.get("feedback", "")
+        missing_semicolons = []
+        for i, ln in enumerate(submitted_code.splitlines(), start=1):
+            stripped = ln.strip()
+            if not stripped or stripped.startswith("//") or stripped.startswith("#"):
+                continue
+            if ("(" in stripped or "=" in stripped) and not stripped.endswith(";"):
+                missing_semicolons.append(i)
+        if missing_semicolons:
+            hint = (
+                f" It looks like line(s) {', '.join(map(str, missing_semicolons))}"
+                " may be missing a terminating semicolon."
+            )
+            if hint.strip() not in feedback:
+                feedback = feedback.rstrip(".") + "." + hint
+            parsed["feedback"] = feedback
+        return parsed
+
 
     chain_vars = {
         "title": problem_title,
@@ -438,7 +503,7 @@ def evaluate_code_submission(
     if not IS_ORCHESTRATOR:
         try:
             logger.info("evaluate_code: Using local Ollama...")
-            result = _chain_invoke(code_eval_chain, chain_vars)
+            result = _chain_invoke_code(code_eval_chain, chain_vars)
             logger.info(f"evaluate_code: Ollama score={result.get('score')}")
             return _scale_code_result(result)
         except Exception as e:
