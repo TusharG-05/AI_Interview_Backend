@@ -289,14 +289,16 @@ def evaluate_answer_content(
                     "Address the user directly as 'You' and 'Your' in your feedback (e.g., 'Your answer is...'). "
                     "Never reveal, quote, paraphrase, or hint at the correct/ideal/expected answer. "
                     "Do not provide model answers, sample answers, exact fixes, final code, or direct solution steps. "
-                    "Provide constructive and high-level coaching feedback. Return a JSON object with "
-                    "'feedback' (string) and 'score_out_of_10' (float 0-10)."
+                    "Provide constructive and high-level coaching feedback. "
+                    "Return a JSON object with 'feedback' (string) and 'score_out_of_10' (float 0-10)."
                 )
                 completion = groq_client.chat.completions.create(
                     model=GROQ_MODEL,
                     messages=[
                         {"role": "system", "content": system_instruction},
-                        {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}"}
+                        {"role": "user", "content": "Question: what is the full form of HTML?\n\nYour Answer: The full form of HTML is HyperText Markup Language."},
+                        {"role": "assistant", "content": "{\"feedback\": \"You provided the correct full form of HTML. Excellent job!\", \"score_out_of_10\": 10.0}"},
+                        {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}\n\nIMPORTANT SCORING CONSTRAINT: If my answer correctly provides the simple fact requested (like a full form), you MUST give me 10.0/10. DO NOT demand extra elaboration."}
                     ],
                     temperature=0.1,
                     response_format={"type": "json_object"},
@@ -320,7 +322,7 @@ def evaluate_answer_content(
                     response = client.chat_completion(
                         model="Qwen/Qwen2.5-7B-Instruct",
                         messages=[
-                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10). Never reveal, quote, paraphrase, or hint at the correct answer. Do not provide model answers, exact fixes, or direct solution steps. Provide high-level coaching feedback only."},
+                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10). Never reveal, quote, paraphrase, or hint at the correct answer. Do not provide model answers, exact fixes, or direct solution steps. Provide high-level coaching feedback only. Scoring Rule: Evaluate strictly based on what the question asks. If the question asks for a simple fact and the user provides it accurately, give full marks (10.0/10) without penalizing for lack of extra explanation."},
                             {"role": "user", "content": f"Q: {question}\nA: {answer}"}
                         ],
                         max_tokens=512,
