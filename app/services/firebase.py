@@ -8,12 +8,14 @@ logger = logging.getLogger("uvicorn")
 # Optional import so the app doesn't crash if the library isn't installed yet
 # but we will recommend installing it in the requirements.
 try:
+    # pyrefly: ignore [missing-import]
     import firebase_admin
+    # pyrefly: ignore [missing-import]
     from firebase_admin import credentials, messaging
     HAS_FIREBASE = True
 except ImportError:
     HAS_FIREBASE = False
-    logger.warning("⚠️ firebase-admin is not installed. All Firebase notifications will be mocked.")
+    logger.warning(" firebase-admin is not installed. All Firebase notifications will be mocked.")
 
 class FirebaseNotificationService:
     _initialized = False

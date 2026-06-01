@@ -246,8 +246,9 @@ Sent by the frontend when the candidate leaves the interview tab.
 
 ```json
 {
-    "type": "tab_switch",
-    "interview_id": 42
+    "event_type": "violation_messages",
+    "violation_type": "tab_switch",
+    "details": "Candidate switched tabs"
 }
 ```
 
@@ -256,10 +257,13 @@ Sent by the frontend when the candidate returns to the interview tab.
 
 ```json
 {
-    "type": "tab_return",
-    "interview_id": 42
+    "event_type": "violation_messages",
+    "violation_type": "tab_return",
+    "details": "Candidate returned to the interview tab"
 }
 ```
+
+The backend responds to `tab_return` with a matching acknowledgement payload and does not close the websocket.
 
 **5. Finish Interview Notification**:
 Sent by the frontend when the candidate manually clicks "Finish Interview". This triggers result processing and notifies the admin.

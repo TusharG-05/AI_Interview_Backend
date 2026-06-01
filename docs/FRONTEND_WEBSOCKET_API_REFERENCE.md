@@ -60,15 +60,36 @@ Sent when the candidate clicks the "Start Interview" button or recovers from a c
 Sent by the frontend if on-device model libraries (e.g. MediaPipe or face-api.js) detect structural cheating attempts.
 ```json
 {
-    "event_type": "violation_detected",
-    "violation_type": "no_face", 
-    // Accepted: "no_face", "multiple_faces", "gaze_away", "unauthorized_person", "tab-switch", "tab-return"
+    "event_type": "violation_messages",
+    "violation_type": "no_face",
     "details": "No face detected in webcam feed"
 }
 ```
 
+Accepted `violation_type` values for this message are `no_face`, `multiple_faces`, `gaze_away`, and `unauthorized_person`.
+
+#### **Tab Switch / Tab Return**
+Use the same envelope shape for tab visibility changes.
+```json
+{
+    "event_type": "violation_messages",
+    "violation_type": "tab_switch",
+    "details": "Candidate switched tabs"
+}
+```
+
+```json
+{
+    "event_type": "violation_messages",
+    "violation_type": "tab_return",
+    "details": "Candidate returned to the interview tab"
+}
+```
+
+The server acknowledges `tab_return` with the same envelope shape and keeps the websocket open.
+
 > [!IMPORTANT]
-> **Tab Switch Grace Period**: When `violation_type` is `"tab-switch"`, a stateful warning is registered. If the candidate does not return (i.e. send `"tab-return"`) within a **30-second grace window**, the server automatically terminates and suspends the session.
+> **Tab Switch Grace Period**: When `violation_type` is `tab_switch`, a stateful warning is registered. If the candidate does not return (i.e. send `tab_return`) within a **30-second grace window**, the server automatically terminates and suspends the session.
 
 #### **Finish Interview**
 Sent when the candidate manually completes the questionnaire. Triggers background evaluation.

@@ -49,7 +49,7 @@ def set_auth_cookie(response: Response, token: str):
 # Initialize services for OTP
 email_service = EmailService()
 
-from pydub import AudioSegment
+
 import logging
 from ..core.logger import get_logger
 
@@ -512,8 +512,6 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,
-        warning_count=session.warning_count or 0,
-        max_warnings=session.max_warnings or 3,
         tab_warning_active=session.tab_warning_active or False,
         allow_proctoring=getattr(session, "allow_proctoring", True),
         curr_interview_timer=curr_interview_timer,
@@ -1107,6 +1105,7 @@ async def upload_selfie_session(
     import json
     import tempfile
     import os
+    # pyrefly: ignore [missing-import]
     from deepface import DeepFace
     
     _logger = get_logger(__name__)
@@ -1196,6 +1195,7 @@ async def upload_selfie_session(
         
         # 2. Local Fallback (Skip in Orchestrator mode to avoid importing DeepFace)
         if arcface_embedding is None and not IS_ORCHESTRATOR:
+            # pyrefly: ignore [missing-import]
             from deepface import DeepFace
             with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
                 tmp.write(image_bytes)

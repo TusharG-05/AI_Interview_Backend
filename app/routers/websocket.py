@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status, Query, Depends
 from sqlmodel import Session
 from ..core.database import get_db as get_session
@@ -31,6 +33,9 @@ async def websocket_candidate_violations(
             try:
                 data = await websocket.receive_json()
                 await handler.process_candidate_message(interview_id, websocket, session, data)
+            except json.JSONDecodeError as e:
+                handler.log_warning(interview_id, f"Malformed candidate WebSocket JSON: {e}")
+                continue
             except WebSocketDisconnect:
                 raise
             except Exception as e:

@@ -65,7 +65,6 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
     schedule_time = to_utc(session_obj.schedule_time)
 
     started = has_started(session_obj)
-    accessed = has_been_accessed(session_obj)
 
     # For started sessions, enforce interview duration.
     if started:
@@ -118,7 +117,7 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
         return InterviewAccessDecision(allowed=True, reason="started")
 
     entry_deadline = schedule_time + timedelta(minutes=LINK_VALIDITY_MINUTES)
-    should_expire_entry = now_utc > entry_deadline and (not accessed) and (not started)
+    should_expire_entry = now_utc > entry_deadline and (not started)
     if should_expire_entry:
         return InterviewAccessDecision(
             allowed=False,

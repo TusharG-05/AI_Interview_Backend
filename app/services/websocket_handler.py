@@ -18,6 +18,12 @@ from ..services.status_manager import (
 
 logger = get_logger(__name__)
 
+
+def _normalize_violation_type(value: str | None) -> str:
+    if not value:
+        return ""
+    return str(value).strip().lower().replace("-", "_")
+
 # Standardized logging helper
 def log_info(interview_id: int, message: str):
     logger.info(f"[Interview ID: {interview_id}] {message}")
@@ -88,18 +94,17 @@ async def process_candidate_message(interview_id: int, websocket: WebSocket, ses
     # Check event formats
     event_type = data.get("event_type")
     msg_type = data.get("type")
-    
-    # 1. New Format: event_type = "violation_messages"
-    if event_type == "violation_messages":
-        violation_type = data.get("violation_type")
-        if violation_type in ("tab-switch", "tab_switch"):
+    violation_type = _normalize_violation_type(data.get("violation_type"))
+
+    if event_type in ("violation_detected", "violation_messages", "proctoring_violation"):
+        if violation_type == "tab_switch":
             await handle_tab_switch_event(interview_id, session, data)
-        elif violation_type in ("tab-return", "tab_return"):
-            await handle_tab_return_event(interview_id, session, data)
+        elif violation_type == "tab_return":
+            await handle_tab_return_event(interview_id, websocket, session, data)
         else:
             await handle_proctoring_violation_event(interview_id, session, data)
         return
-
+    
     # 2. Other events (lifecycle)
     if msg_type == "login":
         await handle_login_event(interview_id, session, data)
@@ -159,7 +164,7 @@ async def handle_tab_switch_event(interview_id: int, session: Session, data: dic
                 )
             elif new_warning_count == max_w - 1:
                 details_msg = (
-                    f"⚠️ Final warning ({new_warning_count}/{max_w}): You switched tabs. "
+                    f" Final warning ({new_warning_count}/{max_w}): You switched tabs. "
                     f"One more tab switch will immediately suspend your interview."
                 )
             else:
@@ -189,14 +194,22 @@ async def handle_tab_switch_event(interview_id: int, session: Session, data: dic
     except Exception as e:
         log_error(interview_id, f"Error processing tab_switch: {e}", exc_info=True)
 
-async def handle_tab_return_event(interview_id: int, session: Session, data: dict):
+async def handle_tab_return_event(interview_id: int, websocket: WebSocket, session: Session, data: dict):
     try:
         session_obj = session.exec(
             select(InterviewSession).where(InterviewSession.id == interview_id)
         ).first()
 
+        now = datetime.now(timezone.utc)
+        acknowledgement = {
+            "event_type": "violation_messages",
+            "interview_id": interview_id,
+            "violation_type": "tab_return",
+            "details": "Tab return received",
+            "timestamp": now.isoformat(),
+        }
+
         if session_obj and session_obj.tab_warning_active and session_obj.tab_switch_timestamp:
-            now = datetime.now(timezone.utc)
             ts = session_obj.tab_switch_timestamp
             if ts.tzinfo is None:
                 ts = ts.replace(tzinfo=timezone.utc)
@@ -228,6 +241,9 @@ async def handle_tab_return_event(interview_id: int, session: Session, data: dic
             
             session.add(session_obj)
             session.commit()
+
+        if websocket is not None:
+            await websocket.send_json(acknowledgement)
     except Exception as e:
         log_error(interview_id, f"Error processing tab_return: {e}", exc_info=True)
 
@@ -240,7 +256,7 @@ async def handle_proctoring_violation_event(interview_id: int, session: Session,
 
     Expected payload:
         {
-            "type": "proctoring_violation",
+            "event_type": "violation_messages",
             "violation_type": "no_face" | "multiple_faces" | "gaze_away" | "unauthorized_person",
             "details": "Optional human-readable description"
         }

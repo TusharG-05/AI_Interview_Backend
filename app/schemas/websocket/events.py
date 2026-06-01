@@ -22,6 +22,7 @@ class ViolationEvent(BaseModel):
     
     Maps violation_type:
     - tab_switch
+    - tab_return
     - multiple_faces
     - no_face
     - wrong_candidate
