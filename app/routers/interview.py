@@ -512,6 +512,8 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
         enrollment_audio_path=session.enrollment_audio_path,
         is_completed=session.is_completed or False,
         tab_switch_count=session.tab_switch_count or 0,
+        warning_count=session.warning_count or 0,
+        max_warnings=session.max_warnings or 3,
         tab_warning_active=session.tab_warning_active or False,
         allow_proctoring=getattr(session, "allow_proctoring", True),
         curr_interview_timer=curr_interview_timer,

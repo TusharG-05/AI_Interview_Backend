@@ -86,6 +86,8 @@ class AccessInterviewResponse(BaseModel):
     enrollment_audio_path: Optional[str] = None
     is_completed: bool = False
     tab_switch_count: int = 0
+    warning_count: int = 0
+    max_warnings: int = 3
     tab_warning_active: bool = False
     allow_proctoring: bool = True
     curr_interview_timer: Optional[int] = None
