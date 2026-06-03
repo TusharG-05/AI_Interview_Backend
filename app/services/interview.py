@@ -55,8 +55,19 @@ def get_modal_evaluator():
     return _modal_evaluator
 
 
-def calculate_scaled_score(llm_score: Any, question_marks: float) -> float:
-    """Scale a 0-10 LLM score to the question's marks with clamping and rounding."""
+# Marks assigned per difficulty level for AI-generated questions
+THEORY_MARKS_BY_DIFFICULTY: dict[str, int] = {"Easy": 1, "Medium": 3, "Hard": 5}
+CODING_MARKS_BY_DIFFICULTY: dict[str, int] = {"Easy": 10, "Medium": 15, "Hard": 20}
+
+
+def calculate_scaled_score(llm_score: Any, question_marks: float) -> int:
+    """Scale a 0-10 LLM score to the question's marks, clamped and returned as int."""
+    if isinstance(llm_score, str):
+        import re
+        match = re.search(r"(\d+(?:\.\d+)?)", llm_score)
+        if match:
+            llm_score = match.group(1)
+            
     try:
         llm_score = float(llm_score)
     except (ValueError, TypeError):
@@ -65,10 +76,10 @@ def calculate_scaled_score(llm_score: Any, question_marks: float) -> float:
     scaling_factor = float(question_marks) / 10.0
     final_score = llm_score * scaling_factor
     
-    # Safeguards: Clamp to [0, marks] and round to 1 decimal place
+    # Clamp to [0, marks] then round to nearest integer
     final_score_float = float(final_score)
     final_score_clamped = max(0.0, min(final_score_float, float(question_marks)))
-    return round(final_score_clamped, 1)
+    return int(round(final_score_clamped))
 
 
 def _safe_feedback_from_score(score_out_of_10: Any) -> str:
@@ -402,7 +413,9 @@ def evaluate_code_submission(
 
     def _scale_code_result(result_dict: dict) -> dict:
         """Scale score and ensure all keys exist."""
-        score_raw = result_dict.get("score", 0.0)
+        score_raw = result_dict.get("score")
+        if score_raw is None:
+            score_raw = result_dict.get("score_out_of_10", 0.0)
         result_dict["score"] = calculate_scaled_score(score_raw, question_marks)
         result_dict.setdefault("correctness", "unknown")
         result_dict.setdefault("time_complexity", "unknown")

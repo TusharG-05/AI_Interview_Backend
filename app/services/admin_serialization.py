@@ -54,12 +54,17 @@ def serialize_user_nested(user: Optional[User]) -> Optional[Dict[str, Any]]:
 
 def serialize_paper_nested(paper: Optional[QuestionPaper]) -> Optional[Dict[str, Any]]:
     if not paper: return None
+    
+    calc_marks = paper.total_marks
+    if not calc_marks and hasattr(paper, "questions") and paper.questions:
+        calc_marks = sum(q.marks or 0 for q in paper.questions)
+        
     return {
         "id": paper.id,
         "name": paper.name,
         "description": paper.description or "",
         "question_count": paper.question_count or 0,
-        "total_marks": float(paper.total_marks or 0),
+        "total_marks": float(calc_marks or 0),
         "created_at": paper.created_at,
         "team_id": None, # Populate if available in model
         "questions": None
@@ -67,12 +72,17 @@ def serialize_paper_nested(paper: Optional[QuestionPaper]) -> Optional[Dict[str,
 
 def serialize_coding_paper_nested(paper: Optional[CodingQuestionPaper]) -> Optional[Dict[str, Any]]:
     if not paper: return None
+    
+    calc_marks = paper.total_marks
+    if not calc_marks and hasattr(paper, "questions") and paper.questions:
+        calc_marks = sum(q.marks or 0 for q in paper.questions)
+        
     return {
         "id": paper.id,
         "name": paper.name,
         "description": paper.description or "",
         "question_count": paper.question_count or 0,
-        "total_marks": float(paper.total_marks or 0),
+        "total_marks": float(calc_marks or 0),
         "created_at": paper.created_at,
         "team_id": None,
         "questions": None

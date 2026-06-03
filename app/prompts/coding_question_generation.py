@@ -16,7 +16,7 @@ Rules:
 - Each problem must be self-contained and solvable without extra context.
 - Starter code must use generic pseudocode-style function signatures (no language-specific imports).
 - Examples must have at least 2 test cases with explanations.
-- Marks: Easy=3, Medium=6, Hard=10.
+- Marks: Easy=10, Medium=15, Hard=20.
 
 Return ONLY a JSON array with exactly {num_questions} objects. Each object must have these keys:
 - "title": short problem name (e.g. "Two Sum", "Valid Parentheses")
@@ -41,7 +41,7 @@ Example format (do not copy this content, just the structure):
     "starter_code": "function twoSum(nums, target):\\n    # Return list of two indices\\n    pass",
     "topic": "Arrays",
     "difficulty": "Easy",
-    "marks": 3,
+    "marks": 10,
     "response_type": "code"
   }}
 ]

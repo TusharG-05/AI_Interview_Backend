@@ -507,7 +507,9 @@ async def generate_paper(
         if not question_text:
             continue  # Skip malformed entries
 
-        marks = int(q.get("marks", 5))
+        from ..services.interview import THEORY_MARKS_BY_DIFFICULTY
+        difficulty = q.get("difficulty", "Medium")
+        marks = THEORY_MARKS_BY_DIFFICULTY.get(difficulty, 3)  # backend overrides AI marks
         total_marks += marks
 
         new_q = Questions(
@@ -635,7 +637,9 @@ async def generate_coding_paper(
         if not title:
             continue
 
-        marks = int(prob.get("marks", 6))
+        from ..services.interview import CODING_MARKS_BY_DIFFICULTY
+        difficulty = prob.get("difficulty", "Medium")
+        marks = CODING_MARKS_BY_DIFFICULTY.get(difficulty, 15)  # backend overrides AI marks
         added_marks += marks
 
         new_q = CodingQuestions(

@@ -577,13 +577,13 @@ def _evaluate_and_update_score(
             if question_obj:
                 resp_type = (question_obj.response_type.value if hasattr(question_obj.response_type, 'value') else str(question_obj.response_type)) if question_obj.response_type else "text"
                 q_title = question_obj.question_text or question_obj.content or question_text
-                q_marks = float(question_obj.marks or 10.0)
+                q_marks = float(question_obj.marks if question_obj.marks is not None else 10.0)
         elif getattr(answer, 'coding_question_id', None):
             question_obj = db.get(CodingQuestions, answer.coding_question_id)
             if question_obj:
                 resp_type = "code"
                 q_title = question_obj.title or question_text
-                q_marks = float(question_obj.marks or 10.0)
+                q_marks = float(question_obj.marks if question_obj.marks is not None else 10.0)
 
         # 3. Call LLM evaluation (routes to code evaluator if response_type='code')
         logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type}, marks={q_marks})...")

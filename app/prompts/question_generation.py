@@ -20,13 +20,13 @@ Return ONLY a JSON array with exactly {num_questions} objects. Each object must 
 - "question_text": the full question string
 - "topic": short topic tag (e.g. "Python", "System Design", "Databases")
 - "difficulty": one of "Easy", "Medium", "Hard"
-- "marks": integer 1-10 based on difficulty (Easy=1-3, Medium=4-6, Hard=7-10)
+- "marks": integer based on difficulty (Easy=1, Medium=3, Hard=5)
 - "response_type": always "text"
 
 Example format (do not copy this content, just the structure):
 [
-  {{"question_text": "Explain the GIL in Python.", "topic": "Python", "difficulty": "Medium", "marks": 5, "response_type": "text"}},
-  {{"question_text": "Design a URL shortener.", "topic": "System Design", "difficulty": "Hard", "marks": 8, "response_type": "text"}}
+  {{"question_text": "Explain the GIL in Python.", "topic": "Python", "difficulty": "Medium", "marks": 3, "response_type": "text"}},
+  {{"question_text": "Design a URL shortener.", "topic": "System Design", "difficulty": "Hard", "marks": 5, "response_type": "text"}}
 ]
 
 Return ONLY the JSON array now:"""),

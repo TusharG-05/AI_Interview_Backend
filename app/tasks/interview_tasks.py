@@ -69,14 +69,14 @@ def _process_answer_evaluation(db: Session, resp: Answers):
             q_text = q.question_text or q.content or "General Question"
             resp_type = q.response_type
             q_title = q.question_text or q.content or ""
-            q_marks = float(q.marks or 10.0)
+            q_marks = float(q.marks if q.marks is not None else 10.0)
     elif resp.coding_question_id:
         cq = db.get(CodingQuestions, resp.coding_question_id)
         if cq:
             q_text = cq.problem_statement or cq.title or "Coding Problem"
             resp_type = "code"
             q_title = cq.title or ""
-            q_marks = float(cq.marks or 10.0)
+            q_marks = float(cq.marks if cq.marks is not None else 10.0)
 
     logger.info(f"  Answer {resp.id}: evaluating (type={resp_type}, marks={q_marks})...")
     evaluation = interview_service.evaluate_answer_content(
