@@ -32,6 +32,7 @@ def get_modal_evaluator():
     global _modal_evaluator, _modal_lookup_error
     if _modal_evaluator is None:
         try:
+            # pyrefly: ignore [missing-import]
             import modal
             # Check for tokens to provide better error messages
             if not os.getenv("MODAL_TOKEN_ID") or not os.getenv("MODAL_TOKEN_SECRET"):
@@ -296,8 +297,6 @@ def evaluate_answer_content(
                     model=GROQ_MODEL,
                     messages=[
                         {"role": "system", "content": system_instruction},
-                        {"role": "user", "content": "Question: what is the full form of HTML?\n\nYour Answer: The full form of HTML is HyperText Markup Language."},
-                        {"role": "assistant", "content": "{\"feedback\": \"You provided the correct full form of HTML. Excellent job!\", \"score_out_of_10\": 10.0}"},
                         {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}\n\nIMPORTANT SCORING CONSTRAINT: If my answer correctly provides the simple fact requested (like a full form), you MUST give me 10.0/10. DO NOT demand extra elaboration."}
                     ],
                     temperature=0.1,

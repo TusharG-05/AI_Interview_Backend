@@ -27,6 +27,9 @@ class CodingQuestionBasic(BaseModel):
 class AnswerRequest(BaseModel):
     question: str
     answer: str
+    question_id: Optional[int] = None          # Standard Questions table ID
+    coding_question_id: Optional[int] = None   # CodingQuestions table ID
+    question_marks: Optional[float] = None     # Fallback: caller can pass marks directly
 
 class QuestionStartRequest(BaseModel):
     sessionId: int

@@ -1830,23 +1830,17 @@ async def submit_answer_audio(
             exc_info=True,
         )
 
-    # Evaluate (uses candidate_answer / transcribed_text set just above)
-    question = session_db.get(Questions, question_id)
-    q_text = ""
-    if question:
-        q_text = question.question_text or question.content or ""
-
-    # Evaluation is now handled by the separate Evaluate API to ensure millisecond response time.
+    # Evaluation is handled by the separate /evaluate-answer API.
 
     return ApiResponse(
         status_code=200,
         data={
             "status": "saved",
             "feedback": answer.feedback,
-            "score": answer.score,
+            "score": answer.score if answer.score is not None else 0.0,
             "transcribed_text": answer.transcribed_text,
         },
-        message="Audio answer submitted and evaluated successfully"
+        message="Audio answer saved successfully"
     )
 
 
@@ -1908,8 +1902,8 @@ async def submit_answer_code(
     question = session_db.get(CodingQuestions, coding_question_id)
     if not question: raise HTTPException(status_code=404, detail="Coding question not found")
 
-    # Evaluation is now handled by the separate Evaluate API.
-    
+    # Evaluation is handled by the separate /evaluate-answer API.
+
     session_db.refresh(answer)
 
     from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
@@ -2014,7 +2008,7 @@ async def submit_answer_text(
         session_db.commit()
         session_db.refresh(answer)
 
-        # Evaluation is now handled by the separate Evaluate API.
+        # Evaluation is handled by the separate /evaluate-answer API.
 
         from ..schemas.interview.access import AnswerShort, CodingQuestionWithAnswer
         import json as _json
@@ -2081,8 +2075,7 @@ async def submit_answer_text(
     session_db.commit()
     session_db.refresh(answer)
 
-    # Evaluation is now handled by the separate Evaluate API.
-    session_db.refresh(answer)
+    # Evaluation is handled by the separate /evaluate-answer API.
 
     from ..schemas.interview.access import AnswerShort, QuestionWithAnswer
     
@@ -2091,7 +2084,7 @@ async def submit_answer_text(
         interview_result_id=answer.interview_result_id,
         candidate_answer=answer.candidate_answer,
         feedback=answer.feedback or "",
-        score=answer.score or 0.0,
+        score=answer.score if answer.score is not None else 0.0,
         audio_path=answer.audio_path or "",
         transcribed_text=answer.transcribed_text or "",
         timestamp=answer.timestamp
@@ -2146,16 +2139,89 @@ async def finish_interview(interview_id: int, background_tasks: BackgroundTasks,
 @router.post("/evaluate-answer", response_model=ApiResponse[dict])
 async def evaluate_answer(request: AnswerRequest, session_db: Session = Depends(get_session), current_user: User = Depends(get_current_user)):
     """
-    Stateless endpoint to evaluate a candidate's answer against a question.
-    Does not save the result to any specific interview session.
+    Evaluates a candidate's answer against a question.
+
+    Automatically resolves the question's actual marks from the database by:
+    1. Using explicit question_id / coding_question_id if provided (fast path).
+    2. Falling back to question_marks field if provided directly.
+    3. Defaulting to 10 if none of the above match.
+
     """
     try:
-        evaluation = interview_service.evaluate_answer_content(request.question, request.answer)
-        
+        q_marks = 10.0  # safe default
+        resp_type = "text"
+
+        # ── Fast path: explicit IDs supplied by caller ────────────────────────
+        if request.question_id:
+            q_obj = session_db.get(Questions, request.question_id)
+            if q_obj:
+                q_marks = float(q_obj.marks if q_obj.marks is not None else 10.0)
+                resp_type = (
+                    q_obj.response_type.value
+                    if hasattr(q_obj.response_type, "value")
+                    else str(q_obj.response_type)
+                ) if q_obj.response_type else "text"
+
+        elif request.coding_question_id:
+            cq_obj = session_db.get(CodingQuestions, request.coding_question_id)
+            if cq_obj:
+                q_marks = float(cq_obj.marks if cq_obj.marks is not None else 10.0)
+                resp_type = "code"
+
+        elif request.question_marks is not None:
+            # Caller supplied marks directly
+            q_marks = float(request.question_marks)
+
+        else:
+            # ── Auto-lookup: match by question text (no frontend change needed) ──
+            q_text = request.question.strip()
+
+            # 1. Try standard Questions table (question_text or content column)
+            q_obj = session_db.exec(
+                select(Questions).where(
+                    (Questions.question_text == q_text) | (Questions.content == q_text)
+                )
+            ).first()
+            if q_obj:
+                q_marks = float(q_obj.marks if q_obj.marks is not None else 10.0)
+                resp_type = (
+                    q_obj.response_type.value
+                    if hasattr(q_obj.response_type, "value")
+                    else str(q_obj.response_type)
+                ) if q_obj.response_type else "text"
+                logger.info(
+                    f"evaluate-answer: auto-matched Questions id={q_obj.id}, marks={q_marks}"
+                )
+            else:
+                # 2. Try CodingQuestions table (problem_statement or title)
+                cq_obj = session_db.exec(
+                    select(CodingQuestions).where(
+                        (CodingQuestions.problem_statement == q_text)
+                        | (CodingQuestions.title == q_text)
+                    )
+                ).first()
+                if cq_obj:
+                    q_marks = float(cq_obj.marks if cq_obj.marks is not None else 10.0)
+                    resp_type = "code"
+                    logger.info(
+                        f"evaluate-answer: auto-matched CodingQuestions id={cq_obj.id}, marks={q_marks}"
+                    )
+                else:
+                    logger.warning(
+                        "evaluate-answer: question text not found in DB, defaulting to 10 marks."
+                    )
+
+        evaluation = interview_service.evaluate_answer_content(
+            request.question,
+            request.answer,
+            response_type=resp_type,
+            question_marks=q_marks,
+        )
+
         # Remove interview_id from response if it existed in the prompt output
         if "interview_id" in evaluation:
             del evaluation["interview_id"]
-            
+
         return ApiResponse(
             status_code=200,
             data=evaluation,
