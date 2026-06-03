@@ -4,6 +4,7 @@ Modal.com app for GPU-accelerated LLM evaluation using Llama 3 8B.
 Deploy: modal deploy app/modal_llm.py
 Test:   modal run app/modal_llm.py --question "What is Python?" --answer "A programming language"
 """
+# pyrefly: ignore [missing-import]
 import modal
 
 app = modal.App("interview-llm-eval")

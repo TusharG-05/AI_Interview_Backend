@@ -34,29 +34,12 @@ def get_local_llm():
     return _local_llm
 
 # Legacy support for existing imports
-# Note: Initializing it as a Proxy-like object OR just updating imports is better.
-# For now, we'll keep the name but wrap it or update usages.
-class LazyLLM:
-    def __getattr__(self, name):
-        return getattr(get_local_llm(), name)
-    
-    def __or__(self, other):
-        # Support LangChain pipe operator (prompt | llm)
-        return other | get_local_llm()
-    
-    def __ror__(self, other):
-        # Support LangChain pipe operator (llm | output_parser)
-        return get_local_llm() | other
-    
-    def invoke(self, input_data, config=None, **kwargs):
-        # Support direct invocation
-        return get_local_llm().invoke(input_data, config=config, **kwargs)
-    
-    def __call__(self, *args, **kwargs):
-        # Support callable interface
-        return get_local_llm()(*args, **kwargs)
-
-local_llm = LazyLLM()
+# We use module-level __getattr__ (PEP 562) to lazily resolve and return the actual
+# ChatOllama instance directly, avoiding proxy/wrapper issues with LangChain's pipe operator.
+def __getattr__(name: str):
+    if name == "local_llm":
+        return get_local_llm()
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 
 
