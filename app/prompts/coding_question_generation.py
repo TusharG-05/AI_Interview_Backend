@@ -26,7 +26,7 @@ Return ONLY a JSON array with exactly {num_questions} objects. Each object must 
 - "starter_code": language-agnostic function signature + docstring hint (e.g. "function twoSum(nums, target):\\n    # Return indices of two numbers that add up to target\\n    pass")
 - "topic": tag (e.g. "Arrays", "Dynamic Programming", "Graphs", "Binary Search")
 - "difficulty": one of "Easy", "Medium", "Hard"
-- "marks": integer (Easy=3, Medium=6, Hard=10)
+- "marks": integer (Easy=10, Medium=15, Hard=20)
 - "response_type": always "code"
 
 Example format (do not copy this content, just the structure):
