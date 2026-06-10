@@ -1680,9 +1680,6 @@ async def list_candidates(
         # Regular admin sees only their own candidates (via interview sessions they created)
         query = query.where(User.role == UserRole.CANDIDATE)
         
-        from sqlmodel import select
-        from ..models.db_models import InterviewSession
-        
         # Subquery to get all candidate IDs that have an interview created by this admin
         admin_candidate_ids = select(InterviewSession.candidate_id).where(
             InterviewSession.admin_id == current_user.id
