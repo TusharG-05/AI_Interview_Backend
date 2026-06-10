@@ -22,8 +22,9 @@ class WebSocketManager:
         # {interview_id: [WebSocket]} - Admin dashboard connections (per-interview)
         self.admin_dashboard_connections: Dict[int, List[WebSocket]] = {}
         
-        # Global admin dashboard connections (all admins receive all events)
-        self.admin_connections: List[WebSocket] = []
+        # Global admin dashboard connections (all admins receive all events, filtered by role)
+        # {WebSocket: {"id": admin_id, "role": role}}
+        self.admin_connections: Dict[WebSocket, Dict[str, Any]] = {}
 
     # ========== CANDIDATE WEBSOCKET ==========
     async def connect_candidate(self, websocket: WebSocket, interview_id: int):
@@ -166,23 +167,30 @@ class WebSocketManager:
         return 0
 
     # ========== GLOBAL ADMIN DASHBOARD ==========
-    # For real-time monitoring across ALL interviews (not per-interview)
-    async def connect_admin(self, websocket: WebSocket):
+    # For real-time monitoring across ALL interviews (filtered by admin role)
+    async def connect_admin(self, websocket: WebSocket, admin_id: int, role: str):
         """Register a global admin dashboard connection"""
         # Already accepted in the endpoint before calling this
-        if websocket not in self.admin_connections:
-            self.admin_connections.append(websocket)
-        logger.info(f"WS: Admin Dashboard connected (Global) - Total: {len(self.admin_connections)}")
+        self.admin_connections[websocket] = {"id": admin_id, "role": role}
+        logger.info(f"WS: Admin Dashboard connected (Global) [{role} {admin_id}] - Total: {len(self.admin_connections)}")
 
     def disconnect_admin(self, websocket: WebSocket):
         """Unregister a global admin dashboard connection"""
         if websocket in self.admin_connections:
-            self.admin_connections.remove(websocket)
+            del self.admin_connections[websocket]
         logger.info(f"WS: Admin Dashboard disconnected (Global) - Total: {len(self.admin_connections)}")
 
     async def broadcast_to_admins(self, message: dict):
-        """Broadcast a message to ALL connected global admin dashboards"""
-        for connection in self.admin_connections[:]:
+        """Broadcast a message to connected global admin dashboards, filtered by role"""
+        # Extract the admin_id who owns this interview session from the payload
+        session_admin_id = message.get("data", {}).get("session_admin_id")
+        
+        for connection, admin_info in list(self.admin_connections.items()):
+            # SUPER_ADMIN sees everything. Regular ADMIN only sees events for their own interviews.
+            if admin_info["role"] != "SUPER_ADMIN" and session_admin_id is not None:
+                if admin_info["id"] != session_admin_id:
+                    continue # Skip sending to this admin
+            
             try:
                 await connection.send_json(message)
             except Exception as e:

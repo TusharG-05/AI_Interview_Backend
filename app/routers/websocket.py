@@ -1,8 +1,6 @@
 import json
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status, Query, Depends
-from sqlmodel import Session
-from ..core.database import get_db as get_session
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status, Query
 from ..core.logger import get_logger
 from ..services import websocket_handler as handler
 
@@ -20,28 +18,67 @@ async def websocket_candidate_violations(
     websocket: WebSocket,
     interview_id: int,
     token: str = Query(...),
-    session: Session = Depends(get_session)
 ):
     """
     WebSocket endpoint for candidates to receive real-time violation events.
+    Token is validated manually to allow accept() before closing on auth failure.
     """
+    from jose import jwt, JWTError
+    from ..auth.security import SECRET_KEY, ALGORITHM
+    from ..models.db_models import User
+    from ..core.database import engine
+    from sqlmodel import Session as DBSession, select as db_select
+
+    logger.debug(f"[WS] Candidate connect attempt for interview {interview_id}")
+
+    # --- AUTH: Validate token before accepting ---
     try:
-        # TODO: Implement token validation here
-        await handler.handle_candidate_connect(interview_id, websocket, session)
-        
-        while True:
-            try:
-                data = await websocket.receive_json()
-                await handler.process_candidate_message(interview_id, websocket, session, data)
-            except json.JSONDecodeError as e:
-                handler.log_warning(interview_id, f"Malformed candidate WebSocket JSON: {e}")
-                continue
-            except WebSocketDisconnect:
-                raise
-            except Exception as e:
-                handler.log_error(interview_id, f"Error receiving message: {e}")
-                break
-            
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if not email:
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+            return
+    except JWTError as e:
+        logger.warning(f"[WS] Invalid token for interview {interview_id}: {e}")
+        await websocket.accept()
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        return
+
+    # --- DB: Fetch user AFTER auth passes, using a short-lived session ---
+    try:
+        with DBSession(engine) as db:
+            user = db.exec(db_select(User).where(User.email == email)).first()
+        if not user:
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found")
+            return
+    except Exception as e:
+        logger.error(f"[WS] DB error during candidate auth for interview {interview_id}: {e}")
+        await websocket.accept()
+        await websocket.close(code=status.WS_1011_SERVER_ERROR, reason="Server error")
+        return
+
+    logger.info(f"[WS] Candidate {email} authenticated for interview {interview_id}")
+
+    # --- MAIN LOOP: open a fresh DB session for the lifetime of the connection ---
+    try:
+        with DBSession(engine) as session:
+            await handler.handle_candidate_connect(interview_id, websocket, session)
+
+            while True:
+                try:
+                    data = await websocket.receive_json()
+                    await handler.process_candidate_message(interview_id, websocket, session, data)
+                except json.JSONDecodeError as e:
+                    handler.log_warning(interview_id, f"Malformed candidate WebSocket JSON: {e}")
+                    continue
+                except WebSocketDisconnect:
+                    raise
+                except Exception as e:
+                    handler.log_error(interview_id, f"Error receiving message: {e}")
+                    break
+
     except WebSocketDisconnect:
         await handler.handle_candidate_disconnect(interview_id, websocket)
 
@@ -60,15 +97,54 @@ async def websocket_candidate_violations(
 async def websocket_admin_dashboard(
     websocket: WebSocket,
     interview_id: int,
-    token: str = Query(...)
+    token: str = Query(...),
 ):
     """
-    WebSocket endpoint for admin dashboard to receive interview events.
+    WebSocket endpoint for admin dashboard to receive per-interview events.
+    Requires Admin or Super Admin role.
     """
+    from jose import jwt, JWTError
+    from ..auth.security import SECRET_KEY, ALGORITHM
+    from ..models.db_models import User, UserRole
+    from ..core.database import engine
+    from sqlmodel import Session as DBSession, select as db_select
+
+    # --- AUTH ---
     try:
-        # TODO: Implement token validation here
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if not email:
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+            return
+    except JWTError as e:
+        logger.warning(f"[WS] Invalid token for admin dashboard interview {interview_id}: {e}")
+        await websocket.accept()
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
+        return
+
+    try:
+        with DBSession(engine) as db:
+            user = db.exec(db_select(User).where(User.email == email)).first()
+        if not user:
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found")
+            return
+        if user.role not in [UserRole.ADMIN, UserRole.SUPER_ADMIN]:
+            await websocket.accept()
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Admin role required")
+            return
+    except Exception as e:
+        logger.error(f"[WS] DB error during admin dashboard auth: {e}")
+        await websocket.accept()
+        await websocket.close(code=status.WS_1011_SERVER_ERROR, reason="Server error")
+        return
+
+    logger.info(f"[WS] Admin {email} connected to dashboard for interview {interview_id}")
+
+    try:
         await handler.handle_admin_connect(interview_id, websocket)
-        
+
         while True:
             try:
                 data = await websocket.receive_text()
@@ -78,7 +154,7 @@ async def websocket_admin_dashboard(
             except Exception as e:
                 handler.log_error(interview_id, f"Error receiving admin message: {e}")
                 break
-            
+
     except WebSocketDisconnect:
         await handler.handle_admin_disconnect(interview_id, websocket)
     except Exception as e:

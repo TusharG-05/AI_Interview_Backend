@@ -112,8 +112,72 @@ async def process_candidate_message(interview_id: int, websocket: WebSocket, ses
         await handle_finish_interview_event(interview_id, websocket, session, data)
     elif msg_type == "start_interview":
         await handle_start_interview_event(interview_id, websocket, data)
+    elif msg_type == "face_verification":
+        await handle_face_verification_frame(interview_id, session, data)
     else:
         log_debug(interview_id, f"Unhandled message type: {msg_type} / event_type: {event_type}")
+
+async def handle_face_verification_frame(interview_id: int, session: Session, data: dict):
+    """
+    Handle periodic face verification frame sent by frontend.
+    Forwards the base64 image directly to Modal (ArcFace) for Identity matching.
+    """
+    image_b64 = data.get("image")
+    if not image_b64:
+        log_warning(interview_id, "face_verification missing 'image' data")
+        return
+
+    # Strip data URI scheme if present
+    if "," in image_b64:
+        image_b64 = image_b64.split(",", 1)[1]
+
+    try:
+        import base64
+        import cv2
+        import numpy as np
+        from sqlmodel import select
+        from ..models.db_models import InterviewSession, User
+        from ..services.face import FaceRecognizer
+
+        img_bytes = base64.b64decode(image_b64)
+        np_arr = np.frombuffer(img_bytes, np.uint8)
+        img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        if img_bgr is None:
+            log_warning(interview_id, "Failed to decode base64 face image")
+            return
+
+        session_obj = session.exec(select(InterviewSession).where(InterviewSession.id == interview_id)).first()
+        if not session_obj:
+            return
+            
+        candidate = session.exec(select(User).where(User.id == session_obj.candidate_id)).first()
+        encoding_json = getattr(candidate, "face_embedding", None)
+        
+        if not encoding_json:
+            log_warning(interview_id, "No enrolled face embedding for candidate. Skipping verification.")
+            return
+
+        recognizer = FaceRecognizer(known_encoding=encoding_json)
+        
+        # Frontend already sends the face crop, so we treat the entire image as the face box
+        h, w = img_bgr.shape[:2]
+        locs = [(0, w, h, 0)] # top, right, bottom, left
+        
+        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        matches = recognizer.recognize(img_rgb, locs)
+        
+        is_authorized = any(matches) if matches else False
+        
+        if not is_authorized:
+            log_warning(interview_id, "Face verification FAILED (Identity Mismatch).")
+            # Optional: Treat identity mismatch as a proctoring violation
+            # add_violation(session, session_obj, "UNAUTHORIZED PERSON", "Identity verification failed. Unrecognized face detected.", "critical")
+        else:
+            log_info(interview_id, "Periodic face verification SUCCESS.")
+
+    except Exception as e:
+        log_error(interview_id, f"Error processing face verification frame: {e}")
 
 async def handle_login_event(interview_id: int, session: Session, data: dict):
     try:

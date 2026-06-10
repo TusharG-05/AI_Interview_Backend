@@ -66,28 +66,17 @@ class CameraService:
         """
         if self.running: return
         
-        # --- Orchestrator Mode: Use inline (in-thread) detectors instead of subprocesses ---
-        # MediaPipe is lightweight enough (~40MB) to run inline without multiprocessing.
-        # This enables real face counting and gaze detection on Render without OOM risk.
+        # --- Orchestrator Mode (Render Free Tier) ---
+        # Face detection is now handled entirely by the frontend JS (MediaPipe JS).
+        # The backend does NOT run any local ML to avoid TensorFlow/MediaPipe OOM crashes.
+        # Violations are sent by the frontend over the data WebSocket.
         if IS_ORCHESTRATOR:
-            logger.info("CameraService: Orchestrator Mode — initializing inline MediaPipe detectors (no subprocess).")
-            try:
-                from .face import FaceDetector
-                self.face_detector = FaceDetector()
-                logger.info("CameraService: Orchestrator face detector ready.")
-            except Exception as e:
-                logger.error(f"CameraService: Orchestrator face detector init failed: {e}")
-
-            # gaze_path = "app/assets/face_landmarker.task"
-            # try:
-            #     from .gaze import GazeDetector
-            #     self.gaze_detector = GazeDetector(model_path=gaze_path, max_faces=1)
-            #     logger.info("CameraService: Orchestrator gaze detector ready.")
-            # except Exception as e:
-            #     logger.error(f"CameraService: Orchestrator gaze detector init failed: {e}")
-
+            logger.info("CameraService: Orchestrator Mode — Skipping local ML detectors. Face detection offloaded to frontend.")
+            # self.face_detector is intentionally left as None — no local AI runs here.
+            # from .face import FaceDetector  <-- DISABLED: causes TF/MediaPipe OOM on Render
+            # self.face_detector = FaceDetector()
             self.running = True
-            self._detectors_ready = True
+            self._detectors_ready = True  # Mark ready immediately so video frames pass through
             return
 
         logger.info("Starting CameraService (Client-Side Streaming Mode)...")
@@ -142,6 +131,21 @@ class CameraService:
         Returns: (annotated_frame, result_dict)
         """
         try:
+            # --- NO-OP FAST PATH: Orchestrator Mode (Render Free Tier) ---
+            # face_detector is None because face detection is handled by frontend JS.
+            # Violations come in via the data WebSocket (handle_proctoring_violation_event).
+            # We just store the frame for Admin Ghost Mode and return a safe result.
+            if not self.face_detector:
+                with self.frame_lock:
+                    success, buffer = cv2.imencode('.jpg', frame)
+                    if success:
+                        self.session_frames[interview_id] = buffer.tobytes()
+                    self.session_frame_ids[interview_id] = self.session_frame_ids.get(interview_id, 0) + 1
+                    self.session_last_active[interview_id] = time.time()
+                    if interview_id not in self.session_start_times:
+                        self.session_start_times[interview_id] = time.time()
+                return frame, {"auth": True, "faces": 1, "gaze": "N/A", "warning": "", "box": None}
+
             # Analyze
             face_status = (False, 1.0, 0, [])
             gaze_status = "No Gaze"

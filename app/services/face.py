@@ -219,7 +219,9 @@ class FaceRecognizer:
 
                 
                 if curr_emb is None:
-                    matches.append(False)
+                    # Fail open: If AI is broken (credits out, missing libs), don't punish the candidate.
+                    logger.warning("Failing open (True) because AI embeddings could not be computed.")
+                    matches.append(True)
                     continue
 
                 # Cosine Similarity check against the correct model's known encoding
@@ -326,14 +328,8 @@ class FaceService:
             self._lazy_recognizer = None
             self._process_counter = 0
             # Initialize inline detector for face counting (lightweight, no multiprocessing)
-            try:
-                # force_init=True bypasses the orchestrator guard so the detector
-                # actually loads MediaPipe instead of returning None silently.
-                self._inline_detector = MediaPipeDetector(force_init=True)
-                logger.info("FaceService: Inline MediaPipeDetector ready.")
-            except Exception as e:
-                self._inline_detector = None
-                logger.error(f"FaceService: Inline detector init failed: {e}")
+            # Defer initialization to avoid eager TensorFlow loading on Render
+            self._inline_detector = None
             return
 
         self.frame_queue = multiprocessing.Queue(maxsize=10)
@@ -359,31 +355,45 @@ class FaceService:
                 self._process_counter = 0
             self._process_counter += 1
 
-            # Throttle: process every 5th frame to balance CPU and responsiveness
-            if self._process_counter % 5 == 0 and self._inline_detector is not None:
-                import cv2
-                from ..utils.image_processing import resize_with_aspect_ratio
-                img_small, scale = resize_with_aspect_ratio(frame_bgr, target_height=360)
-                img_rgb = cv2.cvtColor(img_small, cv2.COLOR_BGR2RGB)
-                locs_scaled = self._inline_detector.detect(img_rgb)
-                # Scale bounding boxes back to original frame dimensions
-                final_locs = [
-                    (int(t / scale), int(r / scale), int(b / scale), int(l / scale))
-                    for (t, r, b, l) in locs_scaled
-                ]
+            # --- FACE DETECTION DISABLED IN ORCHESTRATOR ---
+            # The frontend now performs face detection locally (via MediaPipe JS) and sends violation events.
+            # We completely bypass local ML imports (TensorFlow/MediaPipe) to guarantee zero memory spikes and prevent OOMs on Render.
+            
+            # if self._inline_detector is None:
+            #     try:
+            #         self._inline_detector = MediaPipeDetector(force_init=True)
+            #         logger.info("FaceService: Lazy-loaded Inline MediaPipeDetector.")
+            #     except Exception as e:
+            #         logger.error(f"FaceService: Lazy-loaded inline detector init failed: {e}")
 
-                # --- Face Recognition: Modal (ArcFace) → SFace fallback ---
-                # Only runs when a face is detected AND the session has an enrolled embedding.
-                is_authorized = False
-                if locs_scaled and encoding:
-                    if self._lazy_recognizer is None:
-                        self._lazy_recognizer = FaceRecognizer(known_encoding=encoding)
-                    else:
-                        self._lazy_recognizer.known_encoding = encoding
-                    matches = self._lazy_recognizer.recognize(img_rgb, locs_scaled)
-                    is_authorized = any(matches) if matches else False
+            # # Throttle: process every 5th frame to balance CPU and responsiveness
+            # if self._process_counter % 5 == 0 and self._inline_detector is not None:
+            #     import cv2
+            #     from ..utils.image_processing import resize_with_aspect_ratio
+            #     img_small, scale = resize_with_aspect_ratio(frame_bgr, target_height=360)
+            #     img_rgb = cv2.cvtColor(img_small, cv2.COLOR_BGR2RGB)
+            #     locs_scaled = self._inline_detector.detect(img_rgb)
+            #     # Scale bounding boxes back to original frame dimensions
+            #     final_locs = [
+            #         (int(t / scale), int(r / scale), int(b / scale), int(l / scale))
+            #         for (t, r, b, l) in locs_scaled
+            #     ]
 
-                self.session_results[interview_id] = (is_authorized, 1.0, len(final_locs), final_locs)
+            #     # --- Face Recognition: Modal (ArcFace) → SFace fallback ---
+            #     # Only runs when a face is detected AND the session has an enrolled embedding.
+            #     is_authorized = False
+            #     if locs_scaled and encoding:
+            #         if self._lazy_recognizer is None:
+            #             self._lazy_recognizer = FaceRecognizer(known_encoding=encoding)
+            #         else:
+            #             self._lazy_recognizer.known_encoding = encoding
+            #         matches = self._lazy_recognizer.recognize(img_rgb, locs_scaled)
+            #         is_authorized = any(matches) if matches else False
+
+            #     self.session_results[interview_id] = (is_authorized, 1.0, len(final_locs), final_locs)
+
+            # Return a dummy safe result so WebRTC/Video streaming works without AI overhead
+            self.session_results[interview_id] = (True, 1.0, 1, [])
 
             return self.session_results.get(interview_id, (False, 1.0, 0, []))
 

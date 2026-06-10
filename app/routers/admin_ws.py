@@ -96,7 +96,7 @@ async def admin_dashboard_ws(
     await websocket.accept()
     logger.info(f"✅ WebSocket accepted for admin: {email}")
     
-    await manager.connect_admin(websocket)
+    await manager.connect_admin(websocket, user.id, user.role)
     try:
         while True:
             await websocket.receive_text() # Keep connection alive

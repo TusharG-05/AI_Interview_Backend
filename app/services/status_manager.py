@@ -78,6 +78,7 @@ def get_enriched_admin_data(interview_id: int, session: Optional[Session] = None
         
         return {
             "interview_id": interview_id,
+            "session_admin_id": interview_session.admin_id,
             "interview_status": str(interview_session.status.value) if hasattr(interview_session.status, 'value') else str(interview_session.status),
             "candidate": {
                 "candidate_id": candidate.id,
@@ -85,9 +86,16 @@ def get_enriched_admin_data(interview_id: int, session: Optional[Session] = None
                 "candidate_email": candidate.email
             },
             "proctoring_events": {
+                "id": interview_session.id,
                 "tab_switch_count": interview_session.tab_switch_count,
                 "warning_count": interview_session.warning_count,
-                "max_warnings": interview_session.max_warnings
+                "max_warnings": interview_session.max_warnings,
+                "is_suspended": interview_session.is_suspended,
+                "suspension_reason": interview_session.suspension_reason,
+                "suspended_at": interview_session.suspended_at.isoformat() if interview_session.suspended_at else None,
+                "allow_copy_paste": interview_session.allow_copy_paste,
+                "allow_question_navigate": interview_session.allow_question_navigate,
+                "allow_proctoring": interview_session.allow_proctoring
             },
             "dashboard_data": _get_metrics(session)
         }
@@ -157,24 +165,25 @@ async def _broadcast_violation_event(interview_id: int, event_type: str, details
             violation_event.model_dump(mode='json')
         )
         
-        admin_payload = {
-            "event_type": "violation_messages",
-            "data": {
-                **enriched_data,
-                "violation_type": violation_event.violation_type,
-                "details": violation_event.details,
-                "timestamp": violation_event.timestamp.isoformat()
-            }
-        }
-
-        # Broadcast to per-interview admin dashboards
-        await manager.broadcast_to_admin_dashboard(
-            interview_id,
-            admin_payload
-        )
-        
-        # Broadcast to global admin dashboards
-        await manager.broadcast_to_admins(admin_payload)
+        # --- ADMIN VIOLATION BROADCAST DISABLED ---
+        # Violation events (tab switch, no face, etc.) are only shown to the candidate.
+        # Admin dashboard only receives lifecycle events (interview started, suspended, completed).
+        # Uncomment below to re-enable admin violation notifications.
+        #
+        # admin_payload = {
+        #     "event_type": "violation_messages",
+        #     "data": {
+        #         **enriched_data,
+        #         "violation_type": violation_event.violation_type,
+        #         "details": violation_event.details,
+        #         "timestamp": violation_event.timestamp.isoformat(),
+        #         "warning_count": warning_count,
+        #         "max_warnings": max_warnings,
+        #         "is_suspended": enriched_data.get("proctoring_events", {}).get("is_suspended", False)
+        #     }
+        # }
+        # await manager.broadcast_to_admin_dashboard(interview_id, admin_payload)
+        # await manager.broadcast_to_admins(admin_payload)
         
         logger.debug(f"Violation event broadcast: {event_type} for interview {interview_id}")
         
@@ -194,14 +203,19 @@ async def _broadcast_interview_suspended_event(interview_id: int, violation_type
         # Create suspension event payload and include enriched data
         enriched_data = get_enriched_admin_data(interview_id)
         proctoring_data = enriched_data.get("proctoring_events", {})
+        warning_count = proctoring_data.get("warning_count", tab_switch_count)
+        max_warnings = proctoring_data.get("max_warnings", tab_switch_count)
 
         suspension_payload = {
-            "event_type": "interview_suspended",
+            "event_type": "interview_lifecycle",
+            "lifecycle_status": "interview_suspended",
+            "interview_id": interview_id,
             "data": {
                 **enriched_data,
                 "reason": "max_warnings_exceeded",
-                "warning_count": proctoring_data.get("warning_count", tab_switch_count),
-                "max_warnings": proctoring_data.get("max_warnings", tab_switch_count),
+                "warning_count": warning_count,
+                "max_warnings": max_warnings,
+                "is_suspended": True,
                 "last_violation": violation_type,
                 "suspension_metadata": {
                     "auto_suspended": True,

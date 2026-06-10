@@ -105,8 +105,8 @@ async def get_current_user_ws(
     """
     Validate current user for WebSocket connections.
     
-    In test mode (ALLOW_UNAUTHENTICATED_WEBSOCKET=true), allows anonymous access.
-    Otherwise, requires valid JWT token.
+    IMPORTANT: always call accept() before close() so the browser receives
+    HTTP 101 and then a proper close frame, instead of a connection refused error.
     """
     from ..core.config import ALLOW_UNAUTHENTICATED_WEBSOCKET
     
@@ -118,6 +118,7 @@ async def get_current_user_ws(
         return None
         
     if not token:
+        await websocket.accept()
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Token missing")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
@@ -125,18 +126,22 @@ async def get_current_user_ws(
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         email: str = payload.get("sub")
         if email is None:
+            await websocket.accept()
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     except JWTError:
+        await websocket.accept()
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid token")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     
     user = session.query(User).options(selectinload(User.team)).filter(User.email == email).first()
     if user is None:
+        await websocket.accept()
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User not found")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
     
     return user
+
 
 async def get_admin_user_ws(current_user: User = Depends(get_current_user_ws)) -> User:
     """Ensure the WebSocket user is an admin."""
