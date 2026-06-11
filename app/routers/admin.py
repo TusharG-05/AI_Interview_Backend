@@ -1677,23 +1677,9 @@ async def list_candidates(
         # Super admin sees both candidates and regular admins
         query = query.where(User.role.in_([UserRole.CANDIDATE, UserRole.ADMIN]))
     else:
-        # Regular admin sees only their own candidates (via interview sessions they created)
+        # Regular admin sees all candidates
         query = query.where(User.role == UserRole.CANDIDATE)
-        
-        # Subquery to get all candidate IDs that have an interview created by this admin
-        admin_candidate_ids = select(InterviewSession.candidate_id).where(
-            InterviewSession.admin_id == current_user.id
-        )
-        
-        # If the admin uses teams, they can also see candidates in their team
-        if current_user.team_id:
-            query = query.where(
-                (User.team_id == current_user.team_id) | 
-                (User.id.in_(admin_candidate_ids))
-            )
-        else:
-            query = query.where(User.id.in_(admin_candidate_ids))
-    
+
     if search:
         search_filter = f"%{search}%"
         # Using ilike for case-insensitive search
