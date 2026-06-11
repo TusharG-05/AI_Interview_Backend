@@ -18,6 +18,7 @@ class InterviewStatus(str, Enum):
     LIVE = "LIVE"
     DISCONNECTED = "DISCONNECTED"
     COMPLETED = "COMPLETED"
+    SUSPENDED = "SUSPENDED"
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"
 
@@ -78,6 +79,9 @@ class User(SQLModel, table=True):
     team: Optional["Team"] = Relationship(
         back_populates="users",
         sa_relationship_kwargs={"foreign_keys": "User.team_id"}
+    )
+    created_by_id: Optional[int] = Field(
+        sa_column=Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     )
     question_papers: List["QuestionPaper"] = Relationship(back_populates="admin")
     detail: Optional["UserDetail"] = Relationship(

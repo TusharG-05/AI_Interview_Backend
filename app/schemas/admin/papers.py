@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, AliasChoices
 from datetime import datetime
 
 class AdminQuestionRead(BaseModel):
@@ -27,7 +27,7 @@ class GetPaperResponse(BaseModel):
         from_attributes = True
 
 class CreatePaperRequest(BaseModel):
-    name: str
+    name: str = Field(validation_alias=AliasChoices('name', 'title'))
     description: str = ""
     admin_user: Optional[int] = None
     question_count: int = 0

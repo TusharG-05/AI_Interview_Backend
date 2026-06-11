@@ -1,5 +1,5 @@
 from typing import Optional
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, model_validator, Field, AliasChoices
 from .dashboard import AdminInterviewSessionDetail
 from ..shared.user import UserNested
 from ...models.db_models import InterviewRound
@@ -10,7 +10,7 @@ class ScheduleInterviewRequest(BaseModel):
     paper_id: Optional[int] = None
     coding_paper_id: Optional[int] = None
     interview_round: InterviewRound = InterviewRound.ROUND_1
-    schedule_time: str # ISO format
+    schedule_time: str = Field(validation_alias=AliasChoices('schedule_time', 'scheduled_time')) # ISO format
     duration_minutes: int = 1440
     max_questions: Optional[int] = None
     allow_copy_paste: bool = False

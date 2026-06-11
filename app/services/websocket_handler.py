@@ -13,7 +13,9 @@ from ..services.status_manager import (
     add_violation, 
     record_status_change, 
     complete_interview_session,
-    _broadcast_interview_started_event
+    _broadcast_interview_started_event,
+    _broadcast_interview_suspended_event,
+    get_enriched_admin_data
 )
 
 logger = get_logger(__name__)
@@ -37,6 +39,14 @@ def log_error(interview_id: int, message: str, exc_info=False):
 def log_debug(interview_id: int, message: str):
     logger.debug(f"[Interview ID: {interview_id}] {message}")
 
+# Terminal statuses — interviews in these states cannot be modified
+TERMINAL_STATUSES = [
+    InterviewStatus.COMPLETED,
+    InterviewStatus.SUSPENDED,
+    InterviewStatus.EXPIRED,
+    InterviewStatus.CANCELLED,
+]
+
 # ========== CANDIDATE HANDLERS ==========
 
 async def handle_candidate_connect(interview_id: int, websocket: WebSocket, session: Session):
@@ -49,7 +59,7 @@ async def handle_candidate_connect(interview_id: int, websocket: WebSocket, sess
             select(InterviewSession).where(InterviewSession.id == interview_id)
         ).first()
         
-        if session_obj and session_obj.status not in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
+        if session_obj and session_obj.status not in TERMINAL_STATUSES:
             old_status = session_obj.status
             # On reconnection, we always move back to CONNECTED status.
             # This requires the candidate to explicitly "Start/Resume" to go LIVE.
@@ -60,6 +70,9 @@ async def handle_candidate_connect(interview_id: int, websocket: WebSocket, sess
                 session.commit()
                 session.refresh(session_obj)
                 log_info(interview_id, f"Status updated: {old_status} -> {session_obj.status}")
+        
+        # Broadcast Interview_login to admin dashboard
+        await _broadcast_candidate_lifecycle(interview_id, "Interview_login")
     except Exception as e:
         log_error(interview_id, f"Error in handle_candidate_connect: {e}")
 
@@ -74,7 +87,7 @@ async def handle_candidate_disconnect(interview_id: int, websocket: WebSocket):
                 select(InterviewSession).where(InterviewSession.id == interview_id)
             ).first()
             
-            if session_obj and session_obj.status not in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
+            if session_obj and session_obj.status not in TERMINAL_STATUSES:
                 old_status = session_obj.status
                 session_obj.status = InterviewStatus.DISCONNECTED
                 
@@ -82,40 +95,71 @@ async def handle_candidate_disconnect(interview_id: int, websocket: WebSocket):
                     disconnect_session.add(session_obj)
                     disconnect_session.commit()
                     log_info(interview_id, "Status updated to DISCONNECTED")
+        
+        # Broadcast Interview_disconnected to admin dashboard
+        await _broadcast_candidate_lifecycle(interview_id, "Interview_disconnected")
     except Exception as e:
         log_error(interview_id, f"Error in handle_candidate_disconnect: {e}")
 
+
+async def _broadcast_candidate_lifecycle(interview_id: int, event_type: str):
+    """Broadcast a candidate lifecycle event to the global admin dashboard."""
+    try:
+        enriched_data = get_enriched_admin_data(interview_id)
+        payload = {
+            "event_type": event_type,
+            "data": {
+                **enriched_data,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        }
+        await manager.broadcast_to_admins(payload)
+        log_debug(interview_id, f"Broadcast {event_type} to admin dashboard")
+    except Exception as e:
+        log_error(interview_id, f"Error broadcasting {event_type}: {e}")
+
+
 async def process_candidate_message(interview_id: int, websocket: WebSocket, session: Session, data: dict):
-    """Dispatch candidate messages to specific handlers."""
+    """
+    Dispatch candidate messages to specific handlers.
+    
+    All events use the 'event_type' field per spec:
+    - Interview_login, Interview_started, Interview_disconnected, Interview_finished, Interview_suspended
+    - Proctoring_violation (with violation_type sub-field)
+    """
     if not isinstance(data, dict):
         log_warning(interview_id, f"Received non-dict message: {data}")
         return
 
-    # Check event formats
-    event_type = data.get("event_type")
-    msg_type = data.get("type")
+    # Normalise event_type to lowercase for case-insensitive matching
+    event_type = (data.get("event_type") or "").strip().lower()
     violation_type = _normalize_violation_type(data.get("violation_type"))
 
-    if event_type in ("violation_detected", "violation_messages", "proctoring_violation"):
+    # 1. Proctoring violation events
+    #    Spec: {"event_type": "Proctoring_violation", "violation_type": "tab_switch" | "multiple_faces" | ...}
+    if event_type in ("proctoring_violation", "violation_detected", "violation_messages"):
         if violation_type == "tab_switch":
             await handle_tab_switch_event(interview_id, session, data)
-        elif violation_type == "tab_return":
-            await handle_tab_return_event(interview_id, websocket, session, data)
         else:
             await handle_proctoring_violation_event(interview_id, session, data)
         return
-    
-    # 2. Other events (lifecycle)
-    if msg_type == "login":
+
+    # 2. Lifecycle events
+    #    Spec: {"event_type": "Interview_login" | "Interview_started" | "Interview_finished" | ...}
+    if event_type == "interview_login":
         await handle_login_event(interview_id, session, data)
-    elif msg_type == "finish_interview":
-        await handle_finish_interview_event(interview_id, websocket, session, data)
-    elif msg_type == "start_interview":
+    elif event_type == "interview_started":
         await handle_start_interview_event(interview_id, websocket, data)
-    elif msg_type == "face_verification":
+    elif event_type == "interview_finished":
+        await handle_finish_interview_event(interview_id, websocket, session, data)
+    elif event_type == "interview_disconnected":
+        await handle_explicit_disconnect_event(interview_id, websocket, session, data)
+    elif event_type == "interview_suspended":
+        await handle_explicit_suspend_event(interview_id, websocket, session, data)
+    elif event_type == "face_verification":
         await handle_face_verification_frame(interview_id, session, data)
     else:
-        log_debug(interview_id, f"Unhandled message type: {msg_type} / event_type: {event_type}")
+        log_debug(interview_id, f"Unhandled message: event_type={event_type!r}")
 
 async def handle_face_verification_frame(interview_id: int, session: Session, data: dict):
     """
@@ -171,8 +215,6 @@ async def handle_face_verification_frame(interview_id: int, session: Session, da
         
         if not is_authorized:
             log_warning(interview_id, "Face verification FAILED (Identity Mismatch).")
-            # Optional: Treat identity mismatch as a proctoring violation
-            # add_violation(session, session_obj, "UNAUTHORIZED PERSON", "Identity verification failed. Unrecognized face detected.", "critical")
         else:
             log_info(interview_id, "Periodic face verification SUCCESS.")
 
@@ -180,26 +222,28 @@ async def handle_face_verification_frame(interview_id: int, session: Session, da
         log_error(interview_id, f"Error processing face verification frame: {e}")
 
 async def handle_login_event(interview_id: int, session: Session, data: dict):
+    """
+    Handle Interview_login event.
+    Spec: {"event_type": "Interview_login", "Interview_status": "CONNECTED"}
+    """
     try:
-        email = data.get("email")
-        if not email:
-            log_warning(interview_id, "Login event: No email field provided")
-            return
-            
-        candidate = session.exec(
-            select(User).where(User.email == email.lower())
+        # Look up the candidate from the interview session
+        session_obj = session.exec(
+            select(InterviewSession).where(InterviewSession.id == interview_id)
         ).first()
         
-        if candidate:
-            candidate_info = {
-                "candidate_id": candidate.id,
-                "candidate_name": candidate.full_name,
-                "candidate_email": candidate.email
-            }
-            await manager.broadcast_candidate_login(interview_id, candidate_info)
-            log_info(interview_id, f"Candidate {email} login event broadcasted")
+        if session_obj:
+            candidate = session.exec(
+                select(User).where(User.id == session_obj.candidate_id)
+            ).first()
+            
+            if candidate:
+                log_info(interview_id, f"Candidate {candidate.email} login event processed")
+            else:
+                log_warning(interview_id, "Login event: Candidate not found in DB")
         else:
-            log_warning(interview_id, f"Login event: Candidate with email {email} not found")
+            log_warning(interview_id, "Login event: Session not found")
+            
     except Exception as e:
         log_error(interview_id, f"Error processing login message: {e}", exc_info=True)
 
@@ -258,71 +302,14 @@ async def handle_tab_switch_event(interview_id: int, session: Session, data: dic
     except Exception as e:
         log_error(interview_id, f"Error processing tab_switch: {e}", exc_info=True)
 
-async def handle_tab_return_event(interview_id: int, websocket: WebSocket, session: Session, data: dict):
-    try:
-        session_obj = session.exec(
-            select(InterviewSession).where(InterviewSession.id == interview_id)
-        ).first()
-
-        now = datetime.now(timezone.utc)
-        acknowledgement = {
-            "event_type": "violation_messages",
-            "interview_id": interview_id,
-            "violation_type": "tab_return",
-            "details": "Tab return received",
-            "timestamp": now.isoformat(),
-        }
-
-        if session_obj and session_obj.tab_warning_active and session_obj.tab_switch_timestamp:
-            ts = session_obj.tab_switch_timestamp
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            
-            elapsed = (now - ts).total_seconds()
-            
-            if elapsed > 30:
-                session_obj.is_suspended = True
-                session_obj.status = InterviewStatus.COMPLETED
-                session_obj.is_completed = True
-                session_obj.end_time = now
-                session_obj.suspension_reason = "tab_switch_timeout"
-                session_obj.suspended_at = now
-                session_obj.tab_warning_active = False
-                
-                record_status_change(
-                    session=session,
-                    interview_session=session_obj,
-                    new_status=CandidateStatus.SUSPENDED,
-                    metadata={"reason": "tab_switch_timeout", "elapsed_seconds": elapsed}
-                )
-                
-                from ..tasks.interview_tasks import process_session_results
-                asyncio.create_task(asyncio.to_thread(process_session_results, interview_id))
-                log_warning(interview_id, f"Suspended due to tab-switch timeout ({elapsed}s)")
-            else:
-                session_obj.tab_warning_active = False
-                log_info(interview_id, f"Valid tab return after {elapsed}s")
-            
-            session.add(session_obj)
-            session.commit()
-
-        if websocket is not None:
-            await websocket.send_json(acknowledgement)
-    except Exception as e:
-        log_error(interview_id, f"Error processing tab_return: {e}", exc_info=True)
-
 async def handle_proctoring_violation_event(interview_id: int, session: Session, data: dict):
     """
     Handle a client-side proctoring violation sent by the frontend.
 
-    The frontend JS (using on-device detection e.g. MediaPipe/face-api.js)
-    sends this message when it detects a face or gaze violation.
-
     Expected payload:
         {
-            "event_type": "violation_messages",
-            "violation_type": "no_face" | "multiple_faces" | "gaze_away" | "unauthorized_person",
-            "details": "Optional human-readable description"
+            "event_type": "Proctoring_violation",
+            "violation_type": "no_face" | "multiple_faces" | "gaze_away" | "mobile_phone" | "no_face",
         }
     """
     # Map frontend-friendly names → DB event_type strings used by add_violation / VIOLATION_SEVERITY
@@ -330,14 +317,16 @@ async def handle_proctoring_violation_event(interview_id: int, session: Session,
         "no_face":            "NO FACE DETECTED",
         "multiple_faces":     "MULTIPLE FACES DETECTED",
         "gaze_away":          "gaze_away",
+        "mobile_phone":       "unauthorized_device",
         "unauthorized_person": "SECURITY ALERT: UNAUTHORIZED PERSON",
     }
 
-    # Human-readable messages shown to the candidate for each violation type
+    # Human-readable messages for each violation type
     VIOLATION_HUMAN_MESSAGES = {
         "no_face":             "No face detected. Please stay visible in front of the camera.",
         "multiple_faces":      "Multiple faces detected. Only the candidate should be visible in the frame.",
         "gaze_away":           "Looking away from the screen detected. Please keep your eyes on the interview screen.",
+        "mobile_phone":        "Mobile phone detected. Please remove any unauthorized devices.",
         "unauthorized_person": "Unrecognized face detected. Please ensure you are the registered candidate.",
     }
 
@@ -395,6 +384,10 @@ async def handle_proctoring_violation_event(interview_id: int, session: Session,
 
 
 async def handle_finish_interview_event(interview_id: int, websocket: WebSocket, session: Session, data: dict):
+    """
+    Handle Interview_finished event.
+    Spec: {"event_type": "Interview_finished", "Interview_status": "COMPLETED"}
+    """
     try:
         session_obj = session.exec(
             select(InterviewSession).where(InterviewSession.id == interview_id)
@@ -418,23 +411,22 @@ async def handle_finish_interview_event(interview_id: int, websocket: WebSocket,
             except Exception as cam_err:
                 log_error(interview_id, f"Failed to clear camera session: {cam_err}")
 
-            await websocket.send_json({
-                "type": "interview_finished_confirmation",
-                "status": "success",
-                "message": "Interview finished. Results are being processed."
-            })
             log_info(interview_id, "Interview finished via WebSocket")
         else:
             log_warning(interview_id, "Finish interview: Session not found")
     except Exception as e:
-        log_error(interview_id, f"Error processing finish_interview: {e}", exc_info=True)
+        log_error(interview_id, f"Error processing Interview_finished: {e}", exc_info=True)
 
 async def handle_start_interview_event(interview_id: int, websocket: WebSocket, data: dict):
+    """
+    Handle Interview_started event.
+    Spec: {"event_type": "Interview_started", "Interview_status": "LIVE"}
+    """
     try:
         # Update database status to LIVE
         with Session(engine) as db_session:
             session_obj = db_session.get(InterviewSession, interview_id)
-            if session_obj and session_obj.status not in [InterviewStatus.COMPLETED, InterviewStatus.EXPIRED, InterviewStatus.CANCELLED]:
+            if session_obj and session_obj.status not in TERMINAL_STATUSES:
                 old_status = session_obj.status
                 session_obj.status = InterviewStatus.LIVE
                 
@@ -451,12 +443,70 @@ async def handle_start_interview_event(interview_id: int, websocket: WebSocket, 
         await _broadcast_interview_started_event(interview_id)
         log_info(interview_id, "Interview start event triggered")
         
-        await websocket.send_json({
-            "type": "start_interview_confirmation",
-            "status": "success"
-        })
     except Exception as e:
-        log_error(interview_id, f"Error processing start_interview: {e}", exc_info=True)
+        log_error(interview_id, f"Error processing Interview_started: {e}", exc_info=True)
+
+
+async def handle_explicit_disconnect_event(interview_id: int, websocket: WebSocket, session: Session, data: dict):
+    """
+    Handle Interview_disconnected event sent explicitly by the frontend.
+    Spec: {"event_type": "Interview_disconnected", "Interview_status": "DISCONNECTED"}
+    """
+    try:
+        session_obj = session.exec(
+            select(InterviewSession).where(InterviewSession.id == interview_id)
+        ).first()
+        
+        if session_obj and session_obj.status not in TERMINAL_STATUSES:
+            session_obj.status = InterviewStatus.DISCONNECTED
+            session.add(session_obj)
+            session.commit()
+            log_info(interview_id, "Status updated to DISCONNECTED via explicit event")
+        
+        await _broadcast_candidate_lifecycle(interview_id, "Interview_disconnected")
+    except Exception as e:
+        log_error(interview_id, f"Error processing Interview_disconnected: {e}", exc_info=True)
+
+
+async def handle_explicit_suspend_event(interview_id: int, websocket: WebSocket, session: Session, data: dict):
+    """
+    Handle Interview_suspended event sent by the frontend when max warnings exceeded.
+    Spec: {"event_type": "Interview_suspended", "Interview_status": "SUSPENDED"}
+    """
+    try:
+        session_obj = session.exec(
+            select(InterviewSession).where(InterviewSession.id == interview_id)
+        ).first()
+        
+        if session_obj and not session_obj.is_suspended:
+            session_obj.is_suspended = True
+            session_obj.status = InterviewStatus.SUSPENDED
+            session_obj.is_completed = True
+            session_obj.end_time = datetime.now(timezone.utc)
+            session_obj.suspension_reason = "Client-initiated suspension"
+            session_obj.suspended_at = datetime.now(timezone.utc)
+            
+            record_status_change(
+                session=session,
+                interview_session=session_obj,
+                new_status=CandidateStatus.SUSPENDED,
+                metadata={"reason": "client_initiated", "auto_suspended": False}
+            )
+            
+            session.add(session_obj)
+            session.commit()
+            
+            # Broadcast to admin dashboard
+            from ..services.status_manager import _fire_async_broadcast
+            _fire_async_broadcast(
+                _broadcast_interview_suspended_event(interview_id, "client_initiated", session_obj.warning_count)
+            )
+            
+            log_info(interview_id, "Interview suspended via explicit frontend event")
+        else:
+            log_debug(interview_id, "Interview_suspended received but session already suspended")
+    except Exception as e:
+        log_error(interview_id, f"Error processing Interview_suspended: {e}", exc_info=True)
 
 
 # ========== VIDEO STREAMING HANDLERS ==========
@@ -530,30 +580,3 @@ async def process_video_frame(interview_id: int, websocket: WebSocket, data: byt
 async def handle_video_stream_disconnect(interview_id: int):
     """Handle video stream disconnection."""
     log_info(interview_id, "Video Stream disconnected")
-
-
-# ========== ADMIN HANDLERS ==========
-
-async def handle_admin_connect(interview_id: int, websocket: WebSocket):
-    """Handle initial admin dashboard connection."""
-    try:
-        await manager.connect_admin_dashboard(websocket, interview_id)
-        log_info(interview_id, "Admin Dashboard WebSocket connected")
-    except Exception as e:
-        log_error(interview_id, f"Error in handle_admin_connect: {e}")
-
-async def handle_admin_disconnect(interview_id: int, websocket: WebSocket):
-    """Handle admin dashboard disconnection."""
-    try:
-        manager.disconnect_admin_dashboard(websocket, interview_id)
-        log_info(interview_id, "Admin Dashboard WebSocket disconnected")
-    except Exception as e:
-        log_error(interview_id, f"Error in handle_admin_disconnect: {e}")
-
-async def process_admin_message(interview_id: int, websocket: WebSocket, data: str):
-    """Handle messages received from the admin dashboard."""
-    try:
-        log_debug(interview_id, f"Received from admin dashboard: {data}")
-        # Add future admin-to-backend message handling here
-    except Exception as e:
-        log_error(interview_id, f"Error processing admin message: {e}")

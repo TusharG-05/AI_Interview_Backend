@@ -1677,8 +1677,8 @@ async def list_candidates(
         # Super admin sees both candidates and regular admins
         query = query.where(User.role.in_([UserRole.CANDIDATE, UserRole.ADMIN]))
     else:
-        # Regular admin sees all candidates
-        query = query.where(User.role == UserRole.CANDIDATE)
+        # Regular admin sees all candidates created by them
+        query = query.where(User.role == UserRole.CANDIDATE).where(User.created_by_id == current_user.id)
 
     if search:
         search_filter = f"%{search}%"
@@ -2370,7 +2370,8 @@ async def create_user(
         full_name=full_name,
         password_hash=get_password_hash(password),
         role=role,
-        team_id=team_id
+        team_id=team_id,
+        created_by_id=current_user.id
     )
     session.add(new_user)
     # We will commit everything at once at the end.
