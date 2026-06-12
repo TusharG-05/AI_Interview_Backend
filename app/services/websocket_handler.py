@@ -193,8 +193,15 @@ async def process_candidate_message(
 # Lifecycle handlers
 # ──────────────────────────────────────────────────────────────────────────────
 
+_disconnect_tasks: dict[int, asyncio.Task] = {}
+
 async def _handle_login(interview_id: int, session: Session) -> None:
     """Interview_login — re-broadcast in case of reconnection."""
+    if interview_id in _disconnect_tasks:
+        _disconnect_tasks[interview_id].cancel()
+        del _disconnect_tasks[interview_id]
+        log_info(interview_id, "Reconnected! Cancelled disconnect debounce task.")
+        
     await _broadcast_candidate_lifecycle(interview_id, "Interview_login")
     log_info(interview_id, "Interview_login processed")
 
@@ -256,20 +263,41 @@ async def _handle_finished(interview_id: int, session: Session) -> None:
         log_error(interview_id, f"_handle_finished error: {e}", exc_info=True)
 
 
-async def _handle_disconnected(interview_id: int, session: Session) -> None:
-    """Interview_disconnected — explicit frontend disconnect event."""
+async def _debounce_disconnect(interview_id: int):
+    """Wait a few seconds before marking the session as disconnected."""
     try:
-        session_obj = session.exec(
-            select(InterviewSession).where(InterviewSession.id == interview_id)
-        ).first()
-
-        if session_obj and session_obj.status not in TERMINAL_STATUSES:
-            session_obj.status = InterviewStatus.DISCONNECTED
-            session.add(session_obj)
-            session.commit()
-            log_info(interview_id, "Status: → DISCONNECTED (explicit event)")
+        await asyncio.sleep(5)  # 5-second grace period
+        
+        # If we reach here, the candidate hasn't reconnected
+        from ..core.database import engine
+        from sqlmodel import Session as DBSession
+        with DBSession(engine) as s:
+            session_obj = s.get(InterviewSession, interview_id)
+            if session_obj and session_obj.status not in TERMINAL_STATUSES:
+                session_obj.status = InterviewStatus.DISCONNECTED
+                s.add(session_obj)
+                s.commit()
+                log_info(interview_id, "Grace period expired. Status → DISCONNECTED")
 
         await _broadcast_candidate_lifecycle(interview_id, "Interview_disconnected")
+    except asyncio.CancelledError:
+        # Task was cancelled because candidate reconnected
+        pass
+    finally:
+        _disconnect_tasks.pop(interview_id, None)
+
+async def _handle_disconnected(interview_id: int, session: Session) -> None:
+    """Interview_disconnected — explicit frontend disconnect event or WS drop."""
+    try:
+        # Cancel any existing debounce task
+        if interview_id in _disconnect_tasks:
+            _disconnect_tasks[interview_id].cancel()
+            
+        # Start a new debounce task
+        task = asyncio.create_task(_debounce_disconnect(interview_id))
+        _disconnect_tasks[interview_id] = task
+        log_info(interview_id, "Started 5s disconnect debounce grace period")
+        
     except Exception as e:
         log_error(interview_id, f"_handle_disconnected error: {e}", exc_info=True)
 

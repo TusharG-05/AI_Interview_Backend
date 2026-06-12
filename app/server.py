@@ -165,6 +165,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("Lifespan: Running in ORCHESTRATOR mode (ML Services disabled).")
         service = None
+        
+    try:
+        from .services.websocket_manager import manager
+        await manager.start_pubsub()
+    except Exception as e:
+        logger.error(f"Lifespan: Failed to start websocket pubsub: {e}")
     
     logger.info("Lifespan: Startup Complete.")
     yield
@@ -183,6 +189,12 @@ async def lifespan(app: FastAPI):
     if service is not None:
         service.stop()
     engine.dispose()
+    
+    try:
+        from .services.websocket_manager import manager
+        await manager.stop_pubsub()
+    except Exception as e:
+        logger.error(f"Lifespan: Error stopping websocket pubsub: {e}")
     
     # CLEANUP: Close Redis connection explicitly to avoid event loop error
     if redis_conn is not None:

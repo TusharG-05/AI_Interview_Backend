@@ -307,7 +307,13 @@ def evaluate_answer_content(
             traceback.print_exc()
             return None
 
+    import time
     for attempt in range(2):
+        if attempt > 0:
+            sleep_time = 2 ** attempt
+            logger.info(f"Retrying evaluation in {sleep_time} seconds (attempt {attempt + 1}/2)...")
+            time.sleep(sleep_time)
+            
         logger.info(f"Evaluation attempt {attempt + 1}/2 for question: {question[:50]}...")
         
         # 1. Try Modal if enabled
