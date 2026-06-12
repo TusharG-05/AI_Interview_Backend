@@ -394,6 +394,7 @@ def _serialize_interview_access_detail(session: InterviewSession) -> InterviewAc
     proctoring_event = ProctoringEvent(
         id=session.id,
         warning_count=session.warning_count or 0,
+        tab_switch_count=session.tab_switch_count or 0,
         max_warnings=session.max_warnings or 3,
         is_suspended=session.is_suspended or False,
         suspension_reason=session.suspension_reason,

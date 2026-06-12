@@ -3,18 +3,21 @@ from langchain_core.prompts import ChatPromptTemplate
 # Question Generation Prompt
 question_generation_prompt = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an expert technical interviewer who creates high-quality interview question papers. "
+     "You are an expert technical interviewer and parser. "
      "You MUST respond with ONLY a valid JSON array. No markdown, no explanation, no surrounding text."),
     ("user",
-     """Generate exactly {num_questions} interview questions for the following role/topic.
+     """You have been provided with a topic, job description, OR a list of explicit questions.
 
-Topic / Job Description: {ai_prompt}
-Years of Experience Required: {years_of_experience}
+Input: {ai_prompt}
+Years of Experience: {years_of_experience}
+Requested Number of Questions: {num_questions}
 
 Rules:
-- Tailor difficulty to the experience level (junior 0-2 yrs = Easy/Medium, mid 3-5 yrs = Medium, senior 6+ yrs = Medium/Hard).
-- Vary topics and difficulty across the set.
-- Each question must be answerable verbally in an interview setting.
+1. VERBATIM EXTRACTION: IF the input contains a list of specific questions, you MUST extract and format them exactly as written. Do not alter their core meaning, summarize, or drop them.
+2. If the input has fewer questions than requested, generate additional relevant ones to meet the exact `{num_questions}` total.
+3. IF the input is just a topic or job description, generate {num_questions} interview questions tailored to the experience level.
+4. Tailor difficulty to the experience level (junior 0-2 yrs = Easy/Medium, mid 3-5 yrs = Medium, senior 6+ yrs = Medium/Hard).
+5. Each question must be answerable verbally in an interview setting.
 
 Return ONLY a JSON array with exactly {num_questions} objects. Each object must have these keys:
 - "question_text": the full question string

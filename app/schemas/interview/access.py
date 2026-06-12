@@ -101,6 +101,7 @@ class AccessInterviewResponse(BaseModel):
 class ProctoringEvent(BaseModel):
     id: int
     warning_count: int = 0
+    tab_switch_count: int = 0
     max_warnings: int = 3
     is_suspended: bool = False
     suspension_reason: Optional[str] = None
