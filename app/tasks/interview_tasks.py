@@ -311,8 +311,12 @@ def finalize_session_results_task(results, interview_id: int):
 
 @celery_app.task(name="app.tasks.interview_tasks.process_session_results_task")
 def process_session_results_task(interview_id: int):
-    """Celery wrapper utilizing Chords for parallel processing."""
+    """Celery wrapper utilizing Chords for parallel processing, or synchronous loop if Celery is disabled."""
     from celery import chord
+    import os
+    from ..core.config import IS_ORCHESTRATOR
+    
+    use_celery = not IS_ORCHESTRATOR and os.getenv("DISABLE_CELERY", "false").lower() == "false"
     
     with Session(engine) as db:
         result_obj = _get_or_create_result_obj(db, interview_id)
@@ -320,12 +324,23 @@ def process_session_results_task(interview_id: int):
         answer_ids = [a.id for a in answers]
         
     if not answer_ids:
-        finalize_session_results_task.delay([], interview_id)
+        if use_celery:
+            finalize_session_results_task.delay([], interview_id)
+        else:
+            finalize_session_results_task([], interview_id)
         return
         
-    logger.info(f"Spawning {len(answer_ids)} parallel evaluation tasks for Session {interview_id}")
-    tasks = [process_single_answer_task.s(aid, interview_id) for aid in answer_ids]
-    chord(tasks)(finalize_session_results_task.s(interview_id))
+    if use_celery:
+        logger.info(f"Spawning {len(answer_ids)} parallel evaluation tasks for Session {interview_id}")
+        tasks = [process_single_answer_task.s(aid, interview_id) for aid in answer_ids]
+        chord(tasks)(finalize_session_results_task.s(interview_id))
+    else:
+        logger.info(f"Celery disabled: Executing {len(answer_ids)} evaluation tasks synchronously for Session {interview_id}")
+        results = []
+        for aid in answer_ids:
+            res = process_single_answer_task(aid, interview_id)
+            results.append(res)
+        finalize_session_results_task(results, interview_id)
 
 
 def _expire_session(db: Session, session_obj: InterviewSession):
