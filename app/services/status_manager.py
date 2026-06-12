@@ -264,7 +264,14 @@ def _fire_async_broadcast(coro):
             loop = _main_loop
             
         if loop and loop.is_running():
-            asyncio.run_coroutine_threadsafe(coro, loop)
+            try:
+                current_loop = asyncio.get_running_loop()
+                if current_loop is loop:
+                    loop.create_task(coro)
+                else:
+                    asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                asyncio.run_coroutine_threadsafe(coro, loop)
         else:
             # Fallback for synchronous scripts or if loop is not yet running
             try:

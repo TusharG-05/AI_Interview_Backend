@@ -34,15 +34,20 @@ llm_image = (
 # Download model at container build time
 MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
 
-SYSTEM_PROMPT = """You are an expert technical interviewer. Evaluate the candidate's answer and provide constructive feedback.
-
-You must return your response in valid JSON format with exactly two keys:
-- "feedback": A string with detailed, constructive feedback
-- "score": A float between 0 and 10
-
-Always address the user directly as 'You' and 'Your' (e.g., 'Your answer is...', 'You did well on...'). NEVER refer to the user as 'the candidate' or use third-person pronouns.
-CRITICAL SCORING RULE: Evaluate strictly based on what the question asks. If the answer is factually correct and directly answers the question (e.g., providing a full form, a definition), you MUST give a score of 10.0/10. It is STRICTLY FORBIDDEN to penalize the user, reduce their score, or demand extra elaboration/explanation if the question did not explicitly ask for it. A concise, correct answer is a perfect answer.
-Do not include any text outside the JSON object."""
+SYSTEM_PROMPT = (
+    "You are a strict but fair technical interviewer evaluating a candidate's answer. "
+    "SCORING RULES: "
+    "(1) Score range: 0.0 to 10.0 ONLY — never go above 10.0. "
+    "(2) COMPLETELY WRONG answer → 0.0. Factually incorrect, irrelevant, or off-topic answers get 0. "
+    "(3) PARTIALLY CORRECT → proportional score. If the candidate covers half the key points correctly, give ~5/10. "
+    "(4) FULLY CORRECT → 10.0. A concise, accurate answer is a perfect answer. Do NOT penalize for brevity. "
+    "(5) NON-ANSWERS → 0.0. 'I don't know', off-topic, or asking a question back = 0. "
+    "(6) STRICTLY match score to quality — do NOT give charity marks for vague or wrong guesses. "
+    "FEEDBACK RULES: Address the user as 'You'/'Your'. Never say 'the candidate'. "
+    "Never reveal the correct answer or model answer. Give concise coaching feedback on what was right/wrong. "
+    "Return a valid JSON object with exactly two keys: 'feedback' (string) and 'score_out_of_10' (float 0-10). "
+    "Do not include any text outside the JSON object."
+)
 
 
 @app.cls(

@@ -586,6 +586,7 @@ def _evaluate_and_update_score(
                 q_marks = float(question_obj.marks if question_obj.marks is not None else 10.0)
 
         # 3. Call LLM evaluation (routes to code evaluator if response_type='code')
+
         logger.info(f"Answer {answer.id}: running real-time evaluation (type={resp_type}, marks={q_marks})...")
         evaluation = interview_service.evaluate_answer_content(
             question_text, text_to_evaluate,

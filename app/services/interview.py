@@ -14,6 +14,21 @@ from huggingface_hub import InferenceClient
 
 logger = get_logger(__name__)
 
+# Single source of truth for the evaluation system prompt used across all LLM backends.
+STRICT_EVAL_SYSTEM_PROMPT = (
+    "You are a strict but fair technical interviewer evaluating a candidate's answer. "
+    "SCORING RULES: "
+    "(1) Score range: 0.0 to 10.0 ONLY — never go above 10.0. "
+    "(2) COMPLETELY WRONG answer → 0.0. Factually incorrect, irrelevant, or off-topic answers get 0. "
+    "(3) PARTIALLY CORRECT → proportional score. If the candidate covers half the key points correctly, give ~5/10. "
+    "(4) FULLY CORRECT → 10.0. A concise, accurate answer is a perfect answer. Do NOT penalize for brevity. "
+    "(5) NON-ANSWERS → 0.0. 'I don't know', off-topic, or asking a question back = 0. "
+    "(6) STRICTLY match score to quality — do NOT give charity marks for vague or wrong guesses. "
+    "FEEDBACK RULES: Address the user as 'You'/'Your'. Never say 'the candidate'. "
+    "Never reveal the correct answer or model answer. Give concise coaching feedback on what was right/wrong. "
+    "Return a valid JSON object with exactly two keys: 'feedback' (string) and 'score_out_of_10' (float 0-10). "
+    "Do not include any text outside the JSON object."
+)
 
 # Initialize Groq Client lazily via centralized ai_clients
 def get_interview_groq():
@@ -61,8 +76,13 @@ THEORY_MARKS_BY_DIFFICULTY: dict[str, int] = {"Easy": 1, "Medium": 3, "Hard": 5}
 CODING_MARKS_BY_DIFFICULTY: dict[str, int] = {"Easy": 10, "Medium": 15, "Hard": 20}
 
 
+
 def calculate_scaled_score(llm_score: Any, question_marks: float) -> int:
-    """Scale a 0-10 LLM score to the question's marks, clamped and returned as int."""
+    """Scale a 0-10 LLM score to the question's marks, clamped and returned as int.
+    
+    The rounding happens BEFORE the final clamp to prevent any rounding artifact
+    from pushing the score above the question's maximum marks.
+    """
     if isinstance(llm_score, str):
         import re
         match = re.search(r"(\d+(?:\.\d+)?)", llm_score)
@@ -74,13 +94,15 @@ def calculate_scaled_score(llm_score: Any, question_marks: float) -> int:
     except (ValueError, TypeError):
         llm_score = 0.0
     
+    # Clamp LLM score to [0, 10] first (guards against hallucinated scores like 13/10)
+    llm_score = max(0.0, min(llm_score, 10.0))
+    
     scaling_factor = float(question_marks) / 10.0
     final_score = llm_score * scaling_factor
     
-    # Clamp to [0, marks] then round to nearest integer
-    final_score_float = float(final_score)
-    final_score_clamped = max(0.0, min(final_score_float, float(question_marks)))
-    return int(round(final_score_clamped))
+    # Round first, then clamp — this prevents int(round()) from ever exceeding question_marks
+    rounded = int(round(final_score))
+    return max(0, min(rounded, int(question_marks)))
 
 
 def _safe_feedback_from_score(score_out_of_10: Any) -> str:
@@ -296,26 +318,17 @@ def evaluate_answer_content(
         groq_client = get_interview_groq()
         if groq_client:
             try:
-                system_instruction = (
-                    "You are an expert technical interviewer. Evaluate the answer. "
-                    "Address the user directly as 'You' and 'Your' in your feedback (e.g., 'Your answer is...'). "
-                    "Never reveal, quote, paraphrase, or hint at the correct/ideal/expected answer. "
-                    "Do not provide model answers, sample answers, exact fixes, final code, or direct solution steps. "
-                    "Provide constructive and high-level coaching feedback. "
-                    "Return a JSON object with 'feedback' (string) and 'score_out_of_10' (float 0-10)."
-                )
                 completion = groq_client.chat.completions.create(
                     model=GROQ_MODEL,
                     messages=[
-                        {"role": "system", "content": system_instruction},
-                        {"role": "user", "content": f"Question: {question}\n\nYour Answer: {answer}\n\nIMPORTANT SCORING CONSTRAINT: If my answer correctly provides the simple fact requested (like a full form), you MUST give me 10.0/10. DO NOT demand extra elaboration."}
+                        {"role": "system", "content": STRICT_EVAL_SYSTEM_PROMPT},
+                        {"role": "user", "content": f"Question: {question}\n\nCandidate's Answer: {answer}"}
                     ],
                     temperature=0.1,
                     response_format={"type": "json_object"},
                 )
                 parsed = _parse_llm_result(completion.choices[0].message.content)
                 if parsed:
-                    # Add hint about missing key concept if applicable
                     parsed = _augment_feedback(parsed, answer, question)
                     logger.info(f"✅ Groq evaluation successful on attempt {attempt + 1}")
                     return parsed
@@ -332,15 +345,14 @@ def evaluate_answer_content(
                     response = client.chat_completion(
                         model="Qwen/Qwen2.5-7B-Instruct",
                         messages=[
-                            {"role": "system", "content": "Return JSON with 'feedback' and 'score_out_of_10' (0-10). Never reveal, quote, paraphrase, or hint at the correct answer. Do not provide model answers, exact fixes, or direct solution steps. Provide high-level coaching feedback only. Scoring Rule: Evaluate strictly based on what the question asks. If the question asks for a simple fact and the user provides it accurately, give full marks (10.0/10) without penalizing for lack of extra explanation."},
-                            {"role": "user", "content": f"Q: {question}\nA: {answer}"}
+                            {"role": "system", "content": STRICT_EVAL_SYSTEM_PROMPT},
+                            {"role": "user", "content": f"Question: {question}\n\nCandidate's Answer: {answer}"}
                         ],
                         max_tokens=512,
                         temperature=0.1
                     )
                     parsed = _parse_llm_result(response.choices[0].message.content)
                     if parsed:
-                        # Add hint about missing key concept if applicable
                         parsed = _augment_feedback(parsed, answer, question)
                         return parsed
                 except Exception as e:
