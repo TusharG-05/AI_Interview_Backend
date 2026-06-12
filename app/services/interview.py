@@ -27,7 +27,7 @@ STRICT_EVAL_SYSTEM_PROMPT = (
     "FEEDBACK RULES: Address the user as 'You'/'Your'. Never say 'the candidate'. "
     "Never reveal the correct answer or model answer. Give concise coaching feedback on what was right/wrong. "
     "Return a valid JSON object with exactly two keys: 'feedback' (string) and 'score_out_of_10' (float 0-10). "
-    "Do not include any text outside the JSON object."
+    "Respond ONLY with a valid JSON object. Do not include any text or explanations outside the JSON object."
 )
 
 # Initialize Groq Client lazily via centralized ai_clients
@@ -284,7 +284,11 @@ def evaluate_answer_content(
             
             data = json.loads(clean_content)
             # Normalize keys
-            feedback_raw = data.get("feedback") or data.get("reason") or ""
+            feedback_raw = str(data.get("feedback") or data.get("reason") or "").strip()
+            
+            # Clean up hallucinated prefixes/suffixes
+            feedback_raw = re.sub(r"^feedback:\s*", "", feedback_raw, flags=re.IGNORECASE)
+            feedback_raw = re.sub(r"\s*score_out_of_10:\s*\d+(\.\d+)?\s*$", "", feedback_raw, flags=re.IGNORECASE)
             score_raw = data.get("score_out_of_10")
             if score_raw is None:
                 score_raw = data.get("score", 5.0)
@@ -295,9 +299,12 @@ def evaluate_answer_content(
             
             return {
                 "feedback": safe_feedback,
-                "score": calculate_scaled_score(score_raw, question_marks)
+                "score": calculate_scaled_score(score_raw, question_marks),
+                "score_out_of_10": float(score_raw)
             }
-        except Exception:
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
             return None
 
     for attempt in range(2):
@@ -428,6 +435,7 @@ def evaluate_code_submission(
         if score_raw is None:
             score_raw = result_dict.get("score_out_of_10", 0.0)
         result_dict["score"] = calculate_scaled_score(score_raw, question_marks)
+        result_dict["score_out_of_10"] = float(score_raw)
         result_dict.setdefault("correctness", "unknown")
         result_dict.setdefault("time_complexity", "unknown")
         result_dict.setdefault("space_complexity", "unknown")

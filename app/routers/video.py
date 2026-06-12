@@ -7,7 +7,6 @@ from ..schemas.shared.api_response import ApiResponse
 from ..core.logger import get_logger
 from ..auth.dependencies import get_current_user_ws
 from ..models.db_models import User
-from ..services import websocket_handler as handler
 
 # Proctoring/Heartbeat Limit (Rate limiting handled per-endpoint when needed)
 heavy_throttle = []
@@ -50,39 +49,90 @@ async def proctoring_status(interview_id: int = Query(0)):
 
 @router.websocket("/stream/{interview_id}")
 async def websocket_video_stream(
-    websocket: WebSocket, 
+    websocket: WebSocket,
     interview_id: int,
-    current_user: User = Depends(get_current_user_ws)
+    current_user: User = Depends(get_current_user_ws),
 ):
     """
     Binary WebSocket Fallback for Video Proctoring.
+    Accepts raw video frames and returns AI proctoring results.
     """
-    connected = await handler.handle_video_stream_connect(interview_id, websocket, current_user)
-    if not connected:
+    import time
+    from ..models.db_models import UserRole, InterviewSession
+    from ..core.database import engine
+    from sqlmodel import Session as DBSession
+
+    # Security: candidate can only stream for their own session
+    if current_user is None:
         return
-    
+
+    if current_user.role == UserRole.CANDIDATE:
+        with DBSession(engine) as db:
+            session_obj = db.get(InterviewSession, interview_id)
+            if not session_obj or session_obj.candidate_id != current_user.id:
+                await websocket.close(code=4003, reason="Forbidden: Not your session")
+                logger.warning(
+                    f"[Video] Security: {current_user.email} attempted to stream "
+                    f"for unauthorized interview {interview_id}"
+                )
+                return
+
+    await websocket.accept()
+
+    camera_service = CameraService()
+    if not camera_service.running:
+        camera_service.start()
+
+    # Register candidate face embedding for identity matching
+    if camera_service.face_detector and current_user.role == UserRole.CANDIDATE:
+        try:
+            with DBSession(engine) as db:
+                session_obj = db.get(InterviewSession, interview_id)
+                if session_obj:
+                    from ..models.db_models import User as UserModel
+                    candidate = db.get(UserModel, session_obj.candidate_id)
+                    if candidate and getattr(candidate, "face_embedding", None):
+                        camera_service.face_detector.register_session_identity(
+                            interview_id, candidate.face_embedding
+                        )
+                        logger.info(f"[Video] Face identity registered for interview {interview_id}")
+                    else:
+                        logger.warning(f"[Video] No enrolled face embedding for interview {interview_id}")
+        except Exception as e:
+            logger.error(f"[Video] Failed to register face identity: {e}")
+
+    logger.info(f"[Video] Stream connected — interview={interview_id} user={current_user.email}")
+
     try:
         while True:
             try:
                 data = await websocket.receive_bytes()
                 if not data:
                     break
-                await handler.process_video_frame(interview_id, websocket, data)
+                # Process frame via AI
+                results = camera_service.process_external_frame(data, interview_id=interview_id)
+                await websocket.send_json({
+                    "type": "proctoring_update",
+                    "interview_id": interview_id,
+                    "data": results,
+                    "timestamp": time.time(),
+                })
             except WebSocketDisconnect:
                 raise
             except Exception as e:
-                handler.log_error(interview_id, f"Error receiving video bytes: {e}")
+                logger.error(f"[Video] Error receiving frame for interview {interview_id}: {e}")
                 break
-                
+
     except WebSocketDisconnect:
-        await handler.handle_video_stream_disconnect(interview_id)
+        logger.info(f"[Video] Stream disconnected — interview={interview_id}")
     except Exception as e:
-        handler.log_error(interview_id, f"Critical Video Stream error: {e}")
+        logger.error(f"[Video] Critical stream error for interview {interview_id}: {e}")
     finally:
         try:
             await websocket.close()
         except Exception:
             pass
+
 
 
 # --- WebRTC Signaling ---

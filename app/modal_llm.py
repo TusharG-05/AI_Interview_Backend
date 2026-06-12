@@ -46,7 +46,7 @@ SYSTEM_PROMPT = (
     "FEEDBACK RULES: Address the user as 'You'/'Your'. Never say 'the candidate'. "
     "Never reveal the correct answer or model answer. Give concise coaching feedback on what was right/wrong. "
     "Return a valid JSON object with exactly two keys: 'feedback' (string) and 'score_out_of_10' (float 0-10). "
-    "Do not include any text outside the JSON object."
+    "Respond ONLY with a valid JSON object. Do not include any text or explanations outside the JSON object."
 )
 
 

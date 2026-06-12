@@ -1,83 +1,93 @@
-from typing import Dict, List, Any, Set, Optional
+from typing import Dict, List, Any
 from fastapi import WebSocket
 from ..core.logger import get_logger
-import json
-from datetime import datetime, timezone
 
 logger = get_logger(__name__)
+
 
 class WebSocketManager:
     """
     Centralized manager for all WebSocket connections.
-    Handles:
-    1. Candidate WebSocket connections per interview
-    2. Global Admin Dashboard connections (real-time metrics)
+
+    Tracks:
+    1. Candidate WebSocket connections per interview (one per active session).
+    2. Global Admin Dashboard connections that receive real-time broadcast events.
     """
-    
+
     def __init__(self):
-        # {interview_id: [WebSocket]} - Candidate connections
-        self.candidate_connections: Dict[int, List[WebSocket]] = {}
-        
-        # Global admin dashboard connections (all admins receive all events, filtered by role)
-        # {WebSocket: {"id": admin_id, "role": role}}
+        # {interview_id: WebSocket} — one candidate connection per interview
+        self.candidate_connections: Dict[int, WebSocket] = {}
+
+        # {WebSocket: {"id": admin_id, "role": role_str}}
         self.admin_connections: Dict[WebSocket, Dict[str, Any]] = {}
 
-    # ========== CANDIDATE WEBSOCKET ==========
-    async def connect_candidate(self, websocket: WebSocket, interview_id: int):
-        """Register a candidate WebSocket connection for an interview"""
-        await websocket.accept()
-        if interview_id not in self.candidate_connections:
-            self.candidate_connections[interview_id] = []
-        self.candidate_connections[interview_id].append(websocket)
-        logger.info(f"WS: Candidate connected to Interview {interview_id}")
+    # ──────────────────────────────────────────
+    # CANDIDATE WEBSOCKET
+    # ──────────────────────────────────────────
 
-    async def disconnect_candidate(self, websocket: WebSocket, interview_id: int):
-        """Unregister a candidate WebSocket connection"""
-        if interview_id in self.candidate_connections:
-            if websocket in self.candidate_connections[interview_id]:
-                self.candidate_connections[interview_id].remove(websocket)
-            if not self.candidate_connections[interview_id]:
-                del self.candidate_connections[interview_id]
-        logger.info(f"WS: Candidate disconnected from Interview {interview_id}")
+    def register_candidate(self, websocket: WebSocket, interview_id: int) -> None:
+        """Register an already-accepted candidate WebSocket."""
+        self.candidate_connections[interview_id] = websocket
+        logger.info(f"WS: Candidate registered for Interview {interview_id}")
 
-    # ========== GLOBAL ADMIN DASHBOARD ==========
-    async def connect_admin(self, websocket: WebSocket, admin_id: int, role: str):
-        """Register a global admin dashboard connection"""
-        # Already accepted in the endpoint before calling this
+    def unregister_candidate(self, interview_id: int) -> None:
+        """Remove a candidate WebSocket registration."""
+        self.candidate_connections.pop(interview_id, None)
+        logger.info(f"WS: Candidate unregistered from Interview {interview_id}")
+
+    def has_candidate(self, interview_id: int) -> bool:
+        return interview_id in self.candidate_connections
+
+    # ──────────────────────────────────────────
+    # GLOBAL ADMIN DASHBOARD
+    # ──────────────────────────────────────────
+
+    async def connect_admin(self, websocket: WebSocket, admin_id: int, role: str) -> None:
+        """Register an already-accepted admin dashboard WebSocket."""
         self.admin_connections[websocket] = {"id": admin_id, "role": role}
-        logger.info(f"WS: Admin Dashboard connected (Global) [{role} {admin_id}] - Total: {len(self.admin_connections)}")
+        logger.info(
+            f"WS: Admin Dashboard connected [{role} id={admin_id}] "
+            f"— Total admins: {len(self.admin_connections)}"
+        )
 
-    def disconnect_admin(self, websocket: WebSocket):
-        """Unregister a global admin dashboard connection"""
-        if websocket in self.admin_connections:
-            del self.admin_connections[websocket]
-        logger.info(f"WS: Admin Dashboard disconnected (Global) - Total: {len(self.admin_connections)}")
+    def disconnect_admin(self, websocket: WebSocket) -> None:
+        """Unregister an admin dashboard WebSocket."""
+        self.admin_connections.pop(websocket, None)
+        logger.info(f"WS: Admin Dashboard disconnected — Total admins: {len(self.admin_connections)}")
 
-    async def broadcast_to_admins(self, message: dict):
-        """Broadcast a message to connected global admin dashboards, filtered by role"""
-        # Extract the admin_id who owns this interview session from the payload
+    async def broadcast_to_admins(self, message: dict) -> None:
+        """
+        Broadcast a message to all connected admin dashboards.
+
+        Security filter:
+        - SUPER_ADMIN receives every event.
+        - ADMIN only receives events where session_admin_id matches their own id.
+        """
         session_admin_id = message.get("data", {}).get("session_admin_id")
-        
-        for connection, admin_info in list(self.admin_connections.items()):
-            # SUPER_ADMIN sees everything. Regular ADMIN only sees events for their own interviews.
-            if admin_info["role"] != "SUPER_ADMIN" and session_admin_id is not None:
-                if admin_info["id"] != session_admin_id:
-                    continue # Skip sending to this admin
-            
+
+        dead: list[WebSocket] = []
+        for ws, info in list(self.admin_connections.items()):
+            # Role-based filtering
+            if info["role"] != "SUPER_ADMIN" and session_admin_id is not None:
+                if info["id"] != session_admin_id:
+                    continue
+
             try:
-                await connection.send_json(message)
+                await ws.send_json(message)
             except Exception as e:
-                logger.error(f"WS Error sending to admin: {e}")
-                self.disconnect_admin(connection)
+                logger.error(f"WS: Failed to send to admin id={info['id']}: {e}")
+                dead.append(ws)
 
-    # ========== UTILITY METHODS ==========
-    def has_candidate_connection(self, interview_id: int) -> bool:
-        """Check if there are any candidate connections for an interview"""
-        return interview_id in self.candidate_connections and len(self.candidate_connections[interview_id]) > 0
+        for ws in dead:
+            self.disconnect_admin(ws)
 
-    def get_admin_connection_count(self) -> int:
-        """Get count of connected global admin dashboards"""
+    # ──────────────────────────────────────────
+    # UTILITY
+    # ──────────────────────────────────────────
+
+    def get_admin_count(self) -> int:
         return len(self.admin_connections)
 
-# Global Singleton
+
+# Global singleton
 manager = WebSocketManager()
