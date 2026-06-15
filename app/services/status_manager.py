@@ -461,39 +461,44 @@ def add_violation(
         
         logger.info(
             f"Warning added to session {interview_session.id}. "
-            f"Count: {interview_session.warning_count}/{interview_session.max_warnings}"
+            f"Count: {interview_session.warning_count}"
         )
         
-        # Check if warnings exceeded
-        if interview_session.warning_count >= interview_session.max_warnings:
-            interview_session.is_suspended = True
-            interview_session.status = InterviewStatus.SUSPENDED
-            interview_session.is_completed = True
-            interview_session.end_time = datetime.now(timezone.utc)
-            interview_session.suspension_reason = f"Exceeded maximum warnings ({interview_session.max_warnings})"
-            interview_session.suspended_at = datetime.now(timezone.utc)
-            
-            # Record status change to SUSPENDED
-            record_status_change(
-                session=session,
-                interview_session=interview_session,
-                new_status=CandidateStatus.SUSPENDED,
-                metadata={
-                    "reason": "max_warnings_exceeded",
-                    "warning_count": interview_session.warning_count,
-                    "last_violation": event_type
-                }
+        # Check if tab switches exceeded limit (ONLY for tab_switch events)
+        if event_type == "tab_switch":
+            logger.info(
+                f"Tab switch warning added to session {interview_session.id}. "
+                f"Tab Switch Count: {interview_session.tab_switch_count}/{interview_session.max_warnings}"
             )
-            
-            logger.warning(
-                f"Session {interview_session.id} AUTO-SUSPENDED: "
-                f"Exceeded {interview_session.max_warnings} warnings"
-            )
-            
-            # Trigger result calculation for the suspended session
-            from ..core.tasks import run_background_task
-            from ..tasks.interview_tasks import process_session_results_task
-            run_background_task(process_session_results_task, interview_session.id)
+            if interview_session.tab_switch_count >= interview_session.max_warnings:
+                interview_session.is_suspended = True
+                interview_session.status = InterviewStatus.SUSPENDED
+                interview_session.is_completed = True
+                interview_session.end_time = datetime.now(timezone.utc)
+                interview_session.suspension_reason = f"Exceeded maximum tab switches ({interview_session.max_warnings})"
+                interview_session.suspended_at = datetime.now(timezone.utc)
+                
+                # Record status change to SUSPENDED
+                record_status_change(
+                    session=session,
+                    interview_session=interview_session,
+                    new_status=CandidateStatus.SUSPENDED,
+                    metadata={
+                        "reason": "max_warnings_exceeded",
+                        "tab_switch_count": interview_session.tab_switch_count,
+                        "last_violation": event_type
+                    }
+                )
+                
+                logger.warning(
+                    f"Session {interview_session.id} AUTO-SUSPENDED: "
+                    f"Exceeded {interview_session.max_warnings} tab switches"
+                )
+                
+                # Trigger result calculation for the suspended session
+                from ..core.tasks import run_background_task
+                from ..tasks.interview_tasks import process_session_results_task
+                run_background_task(process_session_results_task, interview_session.id)
     
     session.add(event)
     session.add(interview_session)
@@ -515,7 +520,7 @@ def add_violation(
             _broadcast_interview_suspended_event(
                 interview_session.id,
                 event_type,
-                interview_session.warning_count
+                interview_session.tab_switch_count
             )
         )
     

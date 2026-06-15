@@ -334,7 +334,7 @@ async def _handle_suspended(interview_id: int, session: Session) -> None:
             from ..services.status_manager import _fire_async_broadcast
             _fire_async_broadcast(
                 _broadcast_interview_suspended_event(
-                    interview_id, "client_initiated", session_obj.warning_count
+                    interview_id, "client_initiated", session_obj.tab_switch_count
                 )
             )
             log_info(interview_id, "Interview suspended via explicit frontend event")
@@ -363,23 +363,23 @@ async def _handle_tab_switch(interview_id: int, session: Session, data: dict) ->
         session_obj.tab_switch_timestamp = now
         session_obj.tab_warning_active = True
 
-        new_warning_count = session_obj.warning_count + 1
+        new_tab_switch_count = session_obj.tab_switch_count
         max_w = session_obj.max_warnings
 
-        if new_warning_count >= max_w:
+        if new_tab_switch_count >= max_w:
             details = (
-                f"Tab switch limit reached ({new_warning_count}/{max_w}). "
+                f"Tab switch limit reached ({new_tab_switch_count}/{max_w}). "
                 "Your interview is being suspended due to repeated tab switching."
             )
-        elif new_warning_count == max_w - 1:
+        elif new_tab_switch_count == max_w - 1:
             details = (
-                f"Final warning ({new_warning_count}/{max_w}): You switched tabs. "
+                f"Final warning ({new_tab_switch_count}/{max_w}): You switched tabs. "
                 "One more tab switch will immediately suspend your interview."
             )
         else:
-            remaining = max_w - new_warning_count
+            remaining = max_w - new_tab_switch_count
             details = (
-                f"Warning {new_warning_count}/{max_w}: You switched tabs. "
+                f"Tab switch {new_tab_switch_count}/{max_w} detected. "
                 f"Return to the interview page now. "
                 f"{remaining} more tab switch(es) allowed before suspension."
             )
@@ -457,7 +457,6 @@ async def _handle_proctoring_violation(interview_id: int, session: Session, data
             interview_session=session_obj,
             event_type=event_type,
             details=details,
-            force_severity="warning",
         )
 
         if session_obj.is_suspended:
@@ -470,7 +469,7 @@ async def _handle_proctoring_violation(interview_id: int, session: Session, data
         log_info(
             interview_id,
             f"Proctoring violation '{raw_type}' handled "
-            f"(warnings: {session_obj.warning_count}/{session_obj.max_warnings})",
+            f"(warnings: {session_obj.warning_count}, tab switches: {session_obj.tab_switch_count}/{session_obj.max_warnings})",
         )
     except Exception as e:
         log_error(interview_id, f"_handle_proctoring_violation error: {e}", exc_info=True)
