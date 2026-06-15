@@ -2313,51 +2313,6 @@ async def log_tab_switch(
         else:
             return_msg = "Tab switch detected. Please return to the interview tab within 30 seconds."
             
-    elif event_type == "TAB_RETURN":
-        if not session_obj.tab_warning_active or not session_obj.tab_switch_timestamp:
-            return_msg = "Tab return recorded."
-        else:
-            ts = session_obj.tab_switch_timestamp
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            elapsed = (now - ts).total_seconds()
-            
-            if elapsed > 30:
-                # Terminate
-                session_obj.is_suspended = True
-                session_obj.status = InterviewStatus.COMPLETED
-                session_obj.is_completed = True
-                session_obj.end_time = now
-                session_obj.suspension_reason = "tab_switch_timeout"
-                session_obj.suspended_at = now
-                session_obj.tab_warning_active = False
-                
-                record_status_change(
-                    session=session_db,
-                    interview_session=session_obj,
-                    new_status=CandidateStatus.SUSPENDED,
-                    metadata={"reason": "tab_switch_timeout", "elapsed_seconds": elapsed}
-                )
-                # Ensure database is committed before raising exception
-                session_db.add(session_obj)
-                session_db.commit()
-
-                from ..core.tasks import run_background_task
-                from ..tasks.interview_tasks import process_session_results_task
-                run_background_task(process_session_results_task, session_obj.id)
-
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "is_suspended": True,
-                        "reason": "tab_switch_timeout",
-                        "message": "Interview terminated due to tab-switch timeout."
-                    }
-                )
-            else:
-                # Valid return
-                session_obj.tab_warning_active = False
-                return_msg = "Tab return within time limit."
     else:
         raise HTTPException(status_code=400, detail=f"Invalid event_type: {event_type}")
 
@@ -2365,78 +2320,8 @@ async def log_tab_switch(
     session_db.commit()
     session_db.refresh(session_obj)
 
-    # Build InterviewAccessResponse for consistent response
-    # candidate_data = None
-    # if session_obj.candidate:
-    #     candidate_data = UserNested(
-    #         id=session_obj.candidate.id,
-    #         email=session_obj.candidate.email,
-    #         full_name=session_obj.candidate.full_name,
-    #         role=session_obj.candidate.role.value if hasattr(session_obj.candidate.role, 'value') else str(session_obj.candidate.role),
-    #         access_token=session_obj.candidate.access_token
-    #     )
-
-    # admin_data = None
-    # if session_obj.admin:
-    #     admin_data = UserNested(
-    #         id=session_obj.admin.id,
-    #         email=session_obj.admin.email,
-    #         full_name=session_obj.admin.full_name,
-    #         role=session_obj.admin.role.value if hasattr(session_obj.admin.role, 'value') else str(session_obj.admin.role),
-    #         access_token=session_obj.admin.access_token
-    #     )
-
-    # paper_data = None
-    # if session_obj.paper:
-    #     paper_questions = []
-    #     if hasattr(session_obj.paper, 'questions') and session_obj.paper.questions:
-    #         for q in session_obj.paper.questions:
-    #             paper_questions.append(QuestionData(
-    #                 id=q.id, paper_id=q.paper_id, content=q.content or "", question_text=q.question_text or "",
-    #                 topic=q.topic or "", difficulty=q.difficulty.value if hasattr(q.difficulty, 'value') else str(q.difficulty),
-    #                 marks=q.marks, response_type=q.response_type.value if hasattr(q.response_type, 'value') else str(q.response_type)
-    #             ))
-    #     paper_data = QuestionPaperData(
-    #         id=session_obj.paper.id,
-    #         name=session_obj.paper.name,
-    #         description=session_obj.paper.description or "",
-    #         admin_user=admin_data if admin_data else None,
-    #         question_count=len(paper_questions),
-    #         questions=paper_questions,
-    #         total_marks=session_obj.paper.total_marks,
-    #         created_at=session_obj.paper.created_at or datetime.now(timezone.utc)
-    #     )
-
-    # result_data = InterviewAccessResponse(
-    #     id=session_obj.id,
-    #     access_token=session_obj.access_token,
-    #     admin_user=serialize_user(session_obj.admin) if session_obj.admin else None,  # ← Always UserNested
-    #     candidate_user=candidate_data,
-    #     paper=paper_data,
-    #     schedule_time=session_obj.schedule_time,
-    #     duration_minutes=session_obj.duration_minutes,
-    #     max_questions=session_obj.max_questions,
-    #     start_time=session_obj.start_time,
-    #     end_time=session_obj.end_time,
-    #     status=session_obj.status.value if hasattr(session_obj.status, 'value') else str(session_obj.status),
-    #     total_score=session_obj.total_score,
-    #     current_status=session_obj.current_status.value if hasattr(session_obj.current_status, 'value') else str(session_obj.current_status),
-    #     last_activity=session_obj.last_activity or datetime.now(timezone.utc),
-    #     warning_count=session_obj.warning_count or 0,
-    #     max_warnings=session_obj.max_warnings or 3,
-    #     is_suspended=session_obj.is_suspended or False,
-    #     suspension_reason=session_obj.suspension_reason,
-    #     suspended_at=session_obj.suspended_at,
-    #     enrollment_audio_path=session_obj.enrollment_audio_path,
-    #     is_completed=session_obj.is_completed or False,
-    #     allow_copy_paste=session_obj.allow_copy_paste,
-    #     tab_switch_count=session_obj.tab_switch_count,
-    #     tab_switch_timestamp=session_obj.tab_switch_timestamp,
-    #     tab_warning_active=session_obj.tab_warning_active
-    # )
-
     return ApiResponse(
-        status_code=200 if not session_obj.is_suspended else 403,
+        status_code=200,
         data=_serialize_interview_access_detail(session_obj),
         message=return_msg
     )
@@ -2444,41 +2329,9 @@ async def log_tab_switch(
 
 def enforce_tab_timeout(db: Session, session_obj: InterviewSession) -> None:
     """
-    Checks if there is an active tab-switch warning that has exceeded 30 seconds.
-    If so, terminates the interview immediately.
+    Checks if the session is suspended and raises 403 if it is.
+    (Legacy 30-second tab switch timeout logic has been removed).
     """
-    if session_obj.tab_warning_active and session_obj.tab_switch_timestamp:
-        now = datetime.now(timezone.utc)
-        ts = session_obj.tab_switch_timestamp
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        elapsed = (now - ts).total_seconds()
-        
-        if elapsed > 30:
-            logger.warning(f"Session {session_obj.id}: Proactive termination due to tab-switch timeout ({elapsed}s)")
-            session_obj.is_suspended = True
-            session_obj.status = InterviewStatus.COMPLETED
-            session_obj.is_completed = True
-            session_obj.end_time = now
-            session_obj.suspension_reason = "tab_switch_timeout"
-            session_obj.suspended_at = now
-            session_obj.tab_warning_active = False
-            
-            # Record status change
-            record_status_change(
-                session=db,
-                interview_session=session_obj,
-                new_status=CandidateStatus.SUSPENDED,
-                metadata={"reason": "tab_switch_timeout", "proactive": True, "elapsed_seconds": elapsed}
-            )
-            db.add(session_obj)
-            db.commit()
-            db.refresh(session_obj)
-
-            from ..core.tasks import run_background_task
-            from ..tasks.interview_tasks import process_session_results_task
-            run_background_task(process_session_results_task, session_obj.id)
-            
     if session_obj.is_suspended:
         raise HTTPException(
             status_code=403, 
