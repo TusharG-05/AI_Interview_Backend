@@ -73,6 +73,19 @@ async def admin_dashboard_ws(
     await websocket.accept()
     await manager.connect_admin(websocket, user.id, user.role)
     
+    # Send initial dashboard metrics right away
+    try:
+        from ..services.status_manager import compute_dashboard_metrics
+        dashboard_metrics = compute_dashboard_metrics()
+        await websocket.send_json({
+            "event_type": "Initial_dashboard_data",
+            "data": {
+                "dashboard_data": dashboard_metrics
+            }
+        })
+    except Exception as e:
+        logger.error(f"Admin WS: Failed to send initial metrics: {e}")
+    
     try:
         while True:
             await websocket.receive_text()  # Keep connection alive

@@ -750,6 +750,7 @@ def compute_dashboard_metrics(target_date: Optional[date] = None) -> Dict[str, A
             proctoring_activity = f"{pct:.2f}%"
 
             return {
+                "today_total_interviews": len(interviews_today),
                 "live": live_count,
                 "proctoring_activity": proctoring_activity,
                 "failed_today": failed,
