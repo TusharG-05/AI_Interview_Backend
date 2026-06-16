@@ -102,6 +102,10 @@ def calculate_scaled_score(llm_score: Any, question_marks: float) -> int:
     
     # Round first, then clamp — this prevents int(round()) from ever exceeding question_marks
     rounded = int(round(final_score))
+    logger.info(f"rounded score is: {rounded}")
+    logger.info(f"FINAL SCORE IS : {final_score}")
+    logger.info(f"final answer: {max(0, min(rounded, int(question_marks)))}")
+    print(f"--- DEBUG --- rounded: {rounded}, final_score: {final_score}, ans: {question_marks}")
     return max(0, min(rounded, int(question_marks)))
 
 

@@ -715,22 +715,15 @@ def compute_dashboard_metrics(target_date: Optional[date] = None) -> Dict[str, A
                     InterviewSession.start_time < end
                 )
             ).all()
-            interviews_today_count = len(interviews_today)
 
-            # distinct interviews with violations today (only for interviews started today)
-            today_interview_ids = [i.id for i in interviews_today]
-            if today_interview_ids:
-                violation_rows = session.exec(
-                    select(distinct(ProctoringEvent.interview_id)).where(
-                        ProctoringEvent.timestamp >= start,
-                        ProctoringEvent.timestamp < end,
-                        ProctoringEvent.interview_id.in_(today_interview_ids)
-                    )
-                ).all()
-                violation_interview_ids = {r[0] if isinstance(r, tuple) else r for r in violation_rows}
-                violations_today_count = len(violation_interview_ids)
-            else:
-                violations_today_count = 0
+            # distinct interviews with violations today (tab switch > 1)
+            proctoring_enabled_interviews = [
+                i for i in interviews_today if i.allow_proctoring
+            ]
+            proctoring_enabled_count = len(proctoring_enabled_interviews)
+            violations_today_count = sum(
+                1 for i in proctoring_enabled_interviews if i.tab_switch_count > 1
+            )
 
             # results completed today
             results_today = session.exec(
@@ -749,8 +742,8 @@ def compute_dashboard_metrics(target_date: Optional[date] = None) -> Dict[str, A
                     failed += 1
 
             # proctoring activity percentage
-            if interviews_today_count > 0:
-                pct = (violations_today_count / float(interviews_today_count)) * 100.0
+            if proctoring_enabled_count > 0:
+                pct = (violations_today_count / float(proctoring_enabled_count)) * 100.0
             else:
                 pct = 0.0
 
