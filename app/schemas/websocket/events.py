@@ -27,6 +27,7 @@ class AdminDashboardEvent(BaseModel):
     - Proctoring_violation
     """
     event_type: Literal[
+        "Initial_dashboard_data",
         "Interview_login", 
         "Interview_started", 
         "Interview_disconnected",
@@ -55,6 +56,7 @@ class AdminDashboardResponse(BaseModel):
 
 class DashboardData(BaseModel):
     """Aggregated dashboard metrics included in admin websocket payloads."""
+    today_total_interviews: int
     live: int
     proctoring_activity: str  # percentage string, e.g. "12.34%"
     failed_today: int
