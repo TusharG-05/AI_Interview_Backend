@@ -22,7 +22,7 @@ Evaluation Instructions:
 1. **Sanity Check**: Is this actual code? If the submission is just a single word, random characters, or the starter code with no changes, it is a FAIL.
 2. **Logic Check**: Does the code implement a valid algorithm for the specific problem?
 3. **JSON Output**: Return a JSON object with exactly these keys:
-- "feedback": (string) If the code is junk, state "No valid code provided." Otherwise, explicitly tell the user exactly what is wrong with their logic and what edge cases they missed. Provide actionable hints on how to fix it, but NEVER reveal the exact full code solution.
+- "feedback": (string) If the code is junk, state "No valid code provided." Otherwise, explicitly tell the user exactly what is wrong with their logic and what edge cases they missed. NEVER provide actionable hints on how to fix it, and NEVER reveal the code solution. You may point out the mistake but NOT the correction.
 - "score": (float) 0 to 10.
 - "correctness": one of "correct", "partially_correct", "incorrect"
 - "time_complexity": Big-O or "unknown"

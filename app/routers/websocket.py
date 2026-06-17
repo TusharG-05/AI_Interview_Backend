@@ -96,6 +96,12 @@ async def candidate_interview_ws(
         return
 
     # ── 5. Accept & register ──────────────────────────────────────────────
+    if manager.has_candidate(interview_id):
+        logger.warning(f"[WS] Interview {interview_id} already has an active connection. Rejecting new connection for {email}.")
+        await websocket.accept()
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Interview is already active on another device.")
+        return
+
     await websocket.accept()
     manager.register_candidate(websocket, interview_id)
     logger.info(f"[WS] Candidate {email} connected to interview {interview_id}")

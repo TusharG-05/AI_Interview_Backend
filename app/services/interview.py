@@ -25,7 +25,8 @@ STRICT_EVAL_SYSTEM_PROMPT = (
     "(5) NON-ANSWERS → 0.0. 'I don't know', off-topic, or asking a question back = 0. "
     "(6) STRICTLY match score to quality — do NOT give charity marks for vague or wrong guesses. "
     "FEEDBACK RULES: Address the user as 'You'/'Your'. Never say 'the candidate'. "
-    "Never reveal the correct answer or model answer. Give concise coaching feedback on what was right/wrong. "
+    "NEVER reveal the correct answer or model answer. You may point out where the mistake is, but you MUST NOT tell them what the correct answer should be or how to correct it. "
+    "Give concise coaching feedback focused only on what they got wrong or what was missing, without providing the actual solution. "
     "Return a valid JSON object with exactly two keys: 'feedback' (string) and 'score_out_of_10' (float 0-10). "
     "Respond ONLY with a valid JSON object. Do not include any text or explanations outside the JSON object."
 )
