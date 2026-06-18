@@ -14,10 +14,11 @@ Requested Number of Questions: {num_questions}
 
 Rules:
 1. VERBATIM EXTRACTION: IF the input contains a list of specific questions, you MUST extract and format them exactly as written. Do not alter their core meaning, summarize, or drop them.
-2. If the input has fewer questions than requested, generate additional relevant ones to meet the exact `{num_questions}` total.
-3. IF the input is just a topic or job description, generate {num_questions} interview questions tailored to the experience level.
-4. Tailor difficulty to the experience level (junior 0-2 yrs = Easy/Medium, mid 3-5 yrs = Medium, senior 6+ yrs = Medium/Hard).
-5. Each question must be answerable verbally in an interview setting.
+2. PRESERVE OPTIONS: IF a question contains multiple-choice options (e.g., A, B, C, D), you MUST include all the options verbatim inside the "question_text" string. DO NOT strip them out.
+3. If the input has fewer questions than requested, generate additional relevant ones to meet the exact `{num_questions}` total.
+4. IF the input is just a topic or job description, generate {num_questions} interview questions tailored to the experience level.
+5. Tailor difficulty to the experience level (junior 0-2 yrs = Easy/Medium, mid 3-5 yrs = Medium, senior 6+ yrs = Medium/Hard).
+6. Each question must be answerable verbally in an interview setting (if it has options, they will just verbally say the option).
 
 Return ONLY a JSON array with exactly {num_questions} objects. Each object must have these keys:
 - "question_text": the full question string

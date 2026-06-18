@@ -756,6 +756,7 @@ def generate_questions_from_prompt(
             logger.info("generate_questions: Attempting Groq API...")
             system_instruction = (
                 "You are an expert technical interviewer. Generate interview questions in JSON format. "
+                "If the user provides multiple-choice options (A, B, C, D), you MUST preserve them verbatim inside the 'question_text'. DO NOT strip them out. "
                 "Return a JSON array of objects where each object has: "
                 "'question_text' (string), 'topic' (string), 'difficulty' (string: Easy/Medium/Hard), "
                 "'marks' (int), and 'response_type' (string: text)."
