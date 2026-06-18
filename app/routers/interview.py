@@ -1091,6 +1091,69 @@ async def start_session_logic(
         message="Session synchronized successfully"
     )
 
+@router.post("/{interview_id}/upload-captured-images", response_model=ApiResponse[dict])
+async def upload_captured_images(
+    interview_id: int,
+    images: List[UploadFile] = File(...),
+    session_db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Candidate frontend occasionally uploads captured images (e.g. from webcam/screen)
+    during the interview. Uploads them to Cloudinary and saves URLs to InterviewResult.
+    """
+    from ..models.db_models import InterviewResult
+    from ..services.cloudinary_service import CloudinaryService
+
+    session = session_db.get(InterviewSession, interview_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+
+    # Get or create result
+    result = session_db.exec(select(InterviewResult).where(InterviewResult.interview_id == interview_id)).first()
+    if not result:
+        result = InterviewResult(interview_id=interview_id)
+        session_db.add(result)
+        session_db.commit()
+        session_db.refresh(result)
+
+    from datetime import datetime, timezone
+    
+    cloudinary_service = CloudinaryService()
+    uploaded_data = []
+    
+    # Existing captured images might be stored as a list
+    current_images = result.captured_images or []
+
+    for img in images:
+        try:
+            content = await img.read()
+            url = cloudinary_service.upload_image(content, folder="captured_images")
+            if url:
+                image_record = {
+                    "url": url,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+                uploaded_data.append(image_record)
+                current_images.append(image_record)
+        except Exception as e:
+            get_logger(__name__).error(f"Failed to upload captured image to Cloudinary: {e}")
+            
+    # Save back to database
+    result.captured_images = current_images
+    session_db.add(result)
+    try:
+        session_db.commit()
+    except Exception as e:
+        session_db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save image URLs to database")
+
+    return ApiResponse(
+        status_code=200,
+        data={"uploaded_images": uploaded_data, "total_images": len(current_images)},
+        message=f"Successfully uploaded {len(uploaded_data)} images"
+    )
+
 @router.post("/upload-selfie", response_model=ApiResponse[dict])
 async def upload_selfie_session(
     candidate_id: int = Form(...),

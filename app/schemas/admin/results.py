@@ -157,6 +157,7 @@ class GetInterviewResultResponse(BaseModel):
     is_completed: bool = False
     allow_proctoring: bool = True
     proctoring_event: Optional[AdminProctoringEvent] = None
+    captured_images: List[dict] = Field(default_factory=list)
 
     class Config:
         from_attributes = True

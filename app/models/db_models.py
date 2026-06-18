@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, timedelta, date
 from sqlmodel import Field, SQLModel, Relationship, Column, ForeignKey, Integer
-from sqlalchemy import LargeBinary, Text
+from sqlalchemy import LargeBinary, Text, JSON
 from sqlalchemy.orm import deferred
 from enum import Enum
 import uuid
@@ -392,6 +392,7 @@ class InterviewResult(SQLModel, table=True):
     )
     result_status: str = Field(default="PENDING", title="Status: PENDING, PASS, or FAIL")
     total_score: float = Field(default=0.0)
+    captured_images: List[dict] = Field(default=[], sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     session: "InterviewSession" = Relationship(back_populates="result")
