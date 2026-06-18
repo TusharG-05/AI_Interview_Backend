@@ -69,10 +69,20 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
     # For started sessions, enforce interview duration.
     if started:
         if session_obj.start_time is not None:
+            # Calculate total paused time including current ongoing disconnection
+            ongoing_pause_secs = 0
+            if session_obj.last_disconnected_at:
+                ongoing_pause_secs = max(0, (now_utc - to_utc(session_obj.last_disconnected_at)).total_seconds())
+            
+            total_pause_secs = (session_obj.paused_seconds or 0) + ongoing_pause_secs
+            bounded_pause_secs = min(3600, total_pause_secs) # 1 hour max buffer
+            paused_delta = timedelta(seconds=bounded_pause_secs)
+
             # 1. GLOBAL TIMER MODE: Enforce strict duration from start_time.
             if session_obj.allow_question_navigate:
                 start_time = to_utc(session_obj.start_time)
-                duration_deadline = start_time + timedelta(minutes=session_obj.duration_minutes)
+                
+                duration_deadline = start_time + timedelta(minutes=session_obj.duration_minutes) + paused_delta
                 if now_utc > duration_deadline:
                     return InterviewAccessDecision(
                         allowed=False,
@@ -81,7 +91,7 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
                     )
             # 2. SEQUENTIAL MODE: Relaxation.
             # Candidates get their full expected budget (sum of question times) 
-            # plus a 1-hour wall-clock buffer for disconnections/breaks.
+            # plus a 60-minute static transition buffer, plus up to a 1-hour wall-clock buffer tracked dynamically during disconnections.
             else:
                 # Calculate total expected duration based on budgets
                 # Theory: 5m each, Coding: 20m each
@@ -105,9 +115,10 @@ def evaluate_interview_access(session_obj: InterviewSession, now: datetime | Non
                 # Use max of calculated budget or duration_minutes (legacy support)
                 base_duration = max(total_budget_mins, session_obj.duration_minutes or 0)
                 
-                # Safety limit = Total Duration + 60 minute buffer
+                # Safety limit = Total Duration + 60 minute transition buffer + paused_delta buffer
                 start_time = to_utc(session_obj.start_time)
-                if now_utc > start_time + timedelta(minutes=base_duration + 60):
+                
+                if now_utc > start_time + timedelta(minutes=base_duration + 60) + paused_delta:
                     return InterviewAccessDecision(
                         allowed=False,
                         reason="duration_expired_safety",
@@ -152,7 +163,15 @@ def get_timer_sync_data(
         if session_obj.status in (InterviewStatus.LIVE, InterviewStatus.DISCONNECTED) and session_obj.start_time:
             # Re-use to_utc helper from this module
             start_t = to_utc(session_obj.start_time)
-            elapsed_secs = (now - start_t).total_seconds()
+            
+            ongoing_pause_secs = 0
+            if session_obj.last_disconnected_at:
+                ongoing_pause_secs = max(0, (now - to_utc(session_obj.last_disconnected_at)).total_seconds())
+            
+            total_pause_secs = (session_obj.paused_seconds or 0) + ongoing_pause_secs
+            bounded_pause_secs = min(3600, total_pause_secs)
+
+            elapsed_secs = (now - start_t).total_seconds() - bounded_pause_secs
             time_remaining = max(0, int(duration_secs - elapsed_secs))
             is_expired = time_remaining <= 0
         
@@ -223,7 +242,15 @@ def get_timer_sync_data(
             
         # Calculate remaining time for the attempt
         start_t = to_utc(attempt.start_time)
-        elapsed = (now - start_t).total_seconds()
+        
+        ongoing_pause_secs = 0
+        if attempt.last_disconnected_at:
+            ongoing_pause_secs = max(0, (now - to_utc(attempt.last_disconnected_at)).total_seconds())
+        
+        total_pause_secs = (attempt.paused_seconds or 0) + ongoing_pause_secs
+        bounded_pause_secs = min(3600, total_pause_secs)
+        
+        elapsed = (now - start_t).total_seconds() - bounded_pause_secs
         time_remaining = max(0, int(attempt.duration_seconds - elapsed))
         is_expired = time_remaining <= 0
         

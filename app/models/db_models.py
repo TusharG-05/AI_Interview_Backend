@@ -273,6 +273,8 @@ class InterviewSession(SQLModel, table=True):
     max_questions: int = Field(default=0)   # 0 = use all questions
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    paused_seconds: int = Field(default=0)
+    last_disconnected_at: Optional[datetime] = None
 
     # State
     status: InterviewStatus = Field(default=InterviewStatus.SCHEDULED)
@@ -374,6 +376,8 @@ class QuestionAttempt(SQLModel, table=True):
     question_type: str = Field(default="theory") # "theory" or "coding"
     start_time: datetime = Field(default_factory=datetime.utcnow)
     duration_seconds: int = Field(default=300)
+    paused_seconds: int = Field(default=0)
+    last_disconnected_at: Optional[datetime] = None
     status: str = Field(default="active")  # active | submitted | expired
     is_completed: bool = Field(default=False)
     submitted_at: Optional[datetime] = None
